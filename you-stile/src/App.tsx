@@ -231,7 +231,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
   const [step, setStep] = useState<"choose" | "pay">("choose");
   const [selectedTier, setSelectedTier] = useState<Tier>(initialTier || "standard");
   const [promoCode, setPromoCode] = useState("");
-  const [promoStatus, setPromoStatus] = useState<"idle" | "checking" | "valid" | "invalid">("idle");
+  const [promoStatus, setPromoStatus] = useState<"idle" | "checking" | "valid" | "invalid" | "used">("idle");
   const [showPayment, setShowPayment] = useState(false);
 
   useEffect(() => {
@@ -270,6 +270,8 @@ const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
       if (data.valid) {
         setPromoStatus("valid");
         setTimeout(() => { onPaid(selectedTier); onClose(); }, 800);
+      } else if (data.reason === "used") {
+        setPromoStatus("used");
       } else {
         setPromoStatus("invalid");
       }
@@ -362,6 +364,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
                   </button>
                 </div>
                 {promoStatus === "valid" && <p className="text-green-600 text-xs mt-1">✓ Промокод принят — доступ открыт бесплатно!</p>}
+                {promoStatus === "used" && <p className="text-red-500 text-xs mt-1">Промокод уже был использован</p>}
                 {promoStatus === "invalid" && <p className="text-red-500 text-xs mt-1">Промокод не найден</p>}
               </div>
 

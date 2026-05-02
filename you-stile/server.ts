@@ -266,6 +266,7 @@ async function startServer() {
       .map(c => c.trim().toUpperCase())
       .filter(Boolean)
   );
+  const usedPromoCodes = new Set<string>();
 
   app.use(cors());
   app.use(express.json());
@@ -273,7 +274,11 @@ async function startServer() {
   app.post("/api/check-promo", (req: Request, res: Response) => {
     const code = (req.body.code || "").toString().trim().toUpperCase();
     if (!code) return res.json({ valid: false });
-    if (PROMO_CODES.has(code)) return res.json({ valid: true, type: "free" });
+    if (PROMO_CODES.has(code)) {
+      if (usedPromoCodes.has(code)) return res.json({ valid: false, reason: "used" });
+      usedPromoCodes.add(code);
+      return res.json({ valid: true, type: "free" });
+    }
     return res.json({ valid: false });
   });
 
