@@ -266,7 +266,7 @@ async function startServer() {
       .filter(Boolean)
   );
 
-  app.use(cors({ origin: "http://localhost:5173" }));
+  app.use(cors());
   app.use(express.json());
 
   app.post("/api/check-promo", (req: Request, res: Response) => {
