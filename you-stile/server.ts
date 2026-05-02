@@ -266,7 +266,20 @@ async function startServer() {
       .map(c => c.trim().toUpperCase())
       .filter(Boolean)
   );
-  const usedPromoCodes = new Set<string>();
+
+  const USED_CODES_FILE = path.join(PROJECT_ROOT, "used-promo-codes.json");
+  const loadUsedCodes = (): Set<string> => {
+    try {
+      if (fs.existsSync(USED_CODES_FILE)) {
+        return new Set(JSON.parse(fs.readFileSync(USED_CODES_FILE, "utf-8")));
+      }
+    } catch {}
+    return new Set();
+  };
+  const saveUsedCodes = (codes: Set<string>) => {
+    try { fs.writeFileSync(USED_CODES_FILE, JSON.stringify([...codes])); } catch {}
+  };
+  const usedPromoCodes = loadUsedCodes();
 
   app.use(cors());
   app.use(express.json());
@@ -277,6 +290,7 @@ async function startServer() {
     if (PROMO_CODES.has(code)) {
       if (usedPromoCodes.has(code)) return res.json({ valid: false, reason: "used" });
       usedPromoCodes.add(code);
+      saveUsedCodes(usedPromoCodes);
       return res.json({ valid: true, type: "free" });
     }
     return res.json({ valid: false });
