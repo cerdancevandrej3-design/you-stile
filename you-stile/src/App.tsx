@@ -142,15 +142,111 @@ const MagicMirror = () => {
 // --- Pricing & Payment Modal ---
 type Tier = "standard" | "premium";
 
-const PricingModal = ({ isOpen, onClose, onPaid }: {
+const PaymentModal = ({ isOpen, tier, onPaid, onClose }: {
+  isOpen: boolean;
+  tier: Tier;
+  onPaid: () => void;
+  onClose: () => void;
+}) => {
+  const price = tier === "premium" ? 200 : 100;
+  const [paymentId, setPaymentId] = useState<string | null>(null);
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) { setQrCode(null); setPaymentId(null); return; }
+    setLoading(true);
+    fetch("/api/create-payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tier }),
+    })
+      .then(r => r.json())
+      .then(d => { setQrCode(d.qrCode); setPaymentId(d.paymentId); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [isOpen, tier]);
+
+  const handleCheckPayment = () => {
+    if (!paymentId) return;
+    setChecking(true);
+    fetch("/api/check-payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paymentId }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.status === "succeeded") { onPaid(); onClose(); }
+        else alert("Платёж ещё не поступил, попробуйте через минуту");
+      })
+      .catch(() => alert("Ошибка проверки платежа"))
+      .finally(() => setChecking(false));
+  };
+
+  if (!isOpen) return null;
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-charcoal/80 backdrop-blur-sm"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <motion.div
+          initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
+          className="bg-ivory w-full max-w-sm rounded-3xl shadow-2xl p-8 relative"
+        >
+          <button onClick={onClose} className="absolute top-5 right-5 p-2 bg-charcoal/5 rounded-full hover:bg-charcoal/10">
+            <X className="w-5 h-5 text-charcoal" />
+          </button>
+          <p className="font-serif text-gold text-xs tracking-[0.3em] uppercase mb-2">Оплата</p>
+          <h2 className="text-2xl font-serif text-charcoal mb-2">{price} ₽</h2>
+          <p className="text-sm text-charcoal/60 mb-6">Тариф {tier === "premium" ? "Премиум" : "Стандарт"}</p>
+          {loading ? (
+            <div className="flex justify-center items-center h-48 text-charcoal/40">Загрузка QR...</div>
+          ) : qrCode ? (
+            <img src={qrCode} alt="QR для оплаты" className="w-48 h-48 mx-auto mb-6 rounded-xl" />
+          ) : null}
+          <p className="text-xs text-charcoal/50 text-center mb-4">Отсканируйте QR и оплатите, затем нажмите кнопку ниже</p>
+          <button
+            onClick={handleCheckPayment}
+            disabled={checking || !paymentId}
+            className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors disabled:opacity-50"
+          >
+            {checking ? "Проверяем..." : "Я оплатил ✓"}
+          </button>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
+const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
   isOpen: boolean;
   onClose: () => void;
   onPaid: (tier: Tier) => void;
+  initialTier?: Tier;
 }) => {
   const [step, setStep] = useState<"choose" | "pay">("choose");
-  const [selectedTier, setSelectedTier] = useState<Tier>("standard");
+  const [selectedTier, setSelectedTier] = useState<Tier>(initialTier || "standard");
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState<"idle" | "checking" | "valid" | "invalid">("idle");
+  const [showPayment, setShowPayment] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setPromoCode("");
+      setPromoStatus("idle");
+      setShowPayment(false);
+      if (initialTier) {
+        setSelectedTier(initialTier);
+        setStep("pay");
+      } else {
+        setStep("choose");
+      }
+    }
+  }, [isOpen, initialTier]);
 
   const price = selectedTier === "standard" ? 100 : 200;
 
@@ -271,10 +367,9 @@ const PricingModal = ({ isOpen, onClose, onPaid }: {
 
               <div className="border-t border-charcoal/10 pt-6">
                 <p className="text-sm text-charcoal/50 mb-4 text-center">Оплата картой или QR-кодом</p>
-                {/* ЮKassa заглушка */}
                 <button
                   className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold text-base hover:bg-gold/90 transition-colors flex items-center justify-center gap-2"
-                  onClick={() => alert("Оплата через ЮKassa будет подключена после получения ключей")}
+                  onClick={() => setShowPayment(true)}
                 >
                   Оплатить {price} ₽
                 </button>
@@ -284,6 +379,12 @@ const PricingModal = ({ isOpen, onClose, onPaid }: {
           )}
         </motion.div>
       </motion.div>
+      <PaymentModal
+        isOpen={showPayment}
+        tier={selectedTier}
+        onPaid={() => { onPaid(selectedTier); onClose(); }}
+        onClose={() => setShowPayment(false)}
+      />
     </AnimatePresence>
   );
 };
@@ -1026,15 +1127,39 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => !getSavedName());
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const openModal = () => {
+  const openModal = (tier?: Tier) => {
+    if (tier) {
+      setSelectedPricingTier(tier);
+    }
     setIsPricingOpen(true);
   };
+
+  const [selectedPricingTier, setSelectedPricingTier] = useState<Tier>("standard");
 
   const handlePaid = (tier: Tier) => {
     setCurrentTier(tier);
     setModalKey(k => k + 1);
     setIsModalOpen(true);
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (!token) return;
+    fetch("/api/use-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.valid) {
+          window.history.replaceState({}, "", "/");
+          handlePaid(data.tier as Tier);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleNameSubmit = (name: string) => {
     saveName(name);
@@ -1047,7 +1172,7 @@ export default function App() {
       <AnimatePresence>
         {showWelcome && <WelcomeScreen key="welcome" onSubmit={handleNameSubmit} />}
       </AnimatePresence>
-      <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} />
+      <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} initialTier={selectedPricingTier} />
       <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} />
 
       {/* 1. Header */}
@@ -1072,7 +1197,7 @@ export default function App() {
               <a href="#pricing" className="hover:text-charcoal transition-colors">Тарифы</a>
             </nav>
             <button
-              onClick={openModal}
+              onClick={() => openModal()}
               className="bg-charcoal text-ivory px-6 py-2.5 rounded-full text-sm font-medium hover:bg-charcoal/90 transition-colors"
             >
               Создать образ
@@ -1139,7 +1264,7 @@ export default function App() {
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <button
-                onClick={openModal}
+                onClick={() => openModal()}
                 className="bg-gold text-charcoal px-10 py-4 rounded-full text-base font-semibold hover:bg-gold/90 transition-all flex items-center justify-center gap-2 group"
               >
                 Начать преображение
@@ -1349,7 +1474,10 @@ export default function App() {
                   ))}
                 </ul>
                 
-                <button className={`w-full py-4 rounded-full text-sm font-medium transition-colors ${plan.highlighted ? 'bg-gold text-charcoal hover:bg-gold-light' : 'bg-white/10 text-white hover:bg-white/20'}`}>
+                <button
+                  onClick={() => openModal(plan.highlighted ? "premium" : "standard")}
+                  className={`w-full py-4 rounded-full text-sm font-medium transition-colors ${plan.highlighted ? 'bg-gold text-charcoal hover:bg-gold/90' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                >
                   Выбрать тариф
                 </button>
               </motion.div>
@@ -1363,7 +1491,7 @@ export default function App() {
             className="text-center"
           >
             <button 
-              onClick={openModal}
+              onClick={() => openModal()}
               className="bg-ivory text-charcoal px-10 py-5 rounded-full text-lg font-medium hover:bg-white transition-all hover:scale-105 flex items-center justify-center gap-2 mx-auto group"
             >
               Начать преображение

@@ -6,6 +6,7 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
+import QRCode from "qrcode";
 
 type MulterFile = Express.Multer.File;
 
@@ -276,12 +277,65 @@ async function startServer() {
     return res.json({ valid: false });
   });
 
+  // One-time access links for testing
+  const accessTokens = new Map<string, { tier: "standard" | "premium"; used: boolean }>();
+
+  app.post("/api/create-link", (req: Request, res: Response) => {
+    const secret = req.headers["x-admin-secret"] || req.body.secret;
+    if (secret !== (process.env.ADMIN_SECRET || "admin")) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    const tier = req.body.tier === "premium" ? "premium" : "standard";
+    const token = crypto.randomUUID();
+    accessTokens.set(token, { tier, used: false });
+    res.json({ token, url: `/?token=${token}` });
+  });
+
+  app.post("/api/use-link", (req: Request, res: Response) => {
+    const token = (req.body.token || "").toString().trim();
+    if (!token) return res.json({ valid: false });
+    const entry = accessTokens.get(token);
+    if (!entry) return res.json({ valid: false, reason: "not_found" });
+    if (entry.used) return res.json({ valid: false, reason: "already_used" });
+    entry.used = true;
+    res.json({ valid: true, tier: entry.tier });
+  });
+
   app.get("/api/test-key", (req: Request, res: Response) => {
     res.json({
       POLZA_API_KEY: POLZA_API_KEY ? "configured" : "missing",
       ANALYSIS_MODEL,
       IMAGE_MODEL,
     });
+  });
+
+  // Payment endpoints
+  const PAYMENT_MODE = process.env.PAYMENT_MODE || "test";
+
+  app.post("/api/create-payment", async (req: Request, res: Response) => {
+    try {
+      const { tier } = req.body;
+      const amount = tier === "premium" ? 200 : 100;
+      const paymentId = `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      let qrData = "";
+      if (PAYMENT_MODE === "test") {
+        qrData = await QRCode.toDataURL(`https://qr.nspk.ru/test-payment-${paymentId}?sum=${amount}`);
+      } else {
+        qrData = await QRCode.toDataURL(`https://yookassa.ru/payment/${paymentId}`);
+      }
+      res.json({ paymentId, qrCode: qrData, amount });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/check-payment", (req: Request, res: Response) => {
+    const { paymentId } = req.body;
+    if (!paymentId) return res.json({ status: "pending" });
+    if (PAYMENT_MODE === "test") {
+      return res.json({ status: "succeeded" });
+    }
+    return res.json({ status: "pending" });
   });
 
   app.post("/api/stylize", upload.array("images", 3), async (req: Request, res: Response) => {
