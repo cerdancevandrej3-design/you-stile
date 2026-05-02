@@ -703,7 +703,7 @@ loadList();
     // SPA fallback: any non-API request gets index.html.
     // Using middleware (not "*" route) to be compatible with Express 5 / path-to-regexp v8.
     app.use((req: Request, res: Response, next: NextFunction) => {
-      if (req.method !== "GET" || req.path.startsWith("/api/")) return next();
+      if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.startsWith("/admin")) return next();
       res.sendFile(path.join(distPath, "index.html"));
     });
   } else {
