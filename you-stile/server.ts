@@ -257,7 +257,7 @@ async function generateImageWithFlux(prompt: string, referenceImageBase64?: stri
 
 async function startServer() {
   const app = express();
-  const PORT = 3001;
+  const PORT = parseInt(process.env.PORT || '3001', 10);
 
   const PROMO_CODES = new Set(
     (process.env.PROMO_CODES || "")
