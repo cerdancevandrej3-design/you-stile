@@ -7,3 +7,4 @@ coverage/
 .env*
 !.env.example
 used-promo-codes.json
+promo-codes.json

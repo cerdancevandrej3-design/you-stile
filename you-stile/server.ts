@@ -260,26 +260,34 @@ async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || '3001', 10);
 
-  const PROMO_CODES = new Set(
-    (process.env.PROMO_CODES || "")
-      .split(",")
-      .map(c => c.trim().toUpperCase())
-      .filter(Boolean)
-  );
+  const PROMO_FILE = path.join(PROJECT_ROOT, "promo-codes.json");
 
-  const USED_CODES_FILE = path.join(PROJECT_ROOT, "used-promo-codes.json");
-  const loadUsedCodes = (): Set<string> => {
+  type PromoEntry = { used: boolean; tier: "standard" | "premium"; createdAt: string };
+  type PromoStore = Record<string, PromoEntry>;
+
+  const loadPromos = (): PromoStore => {
     try {
-      if (fs.existsSync(USED_CODES_FILE)) {
-        return new Set(JSON.parse(fs.readFileSync(USED_CODES_FILE, "utf-8")));
-      }
+      if (fs.existsSync(PROMO_FILE)) return JSON.parse(fs.readFileSync(PROMO_FILE, "utf-8"));
     } catch {}
-    return new Set();
+    return {};
   };
-  const saveUsedCodes = (codes: Set<string>) => {
-    try { fs.writeFileSync(USED_CODES_FILE, JSON.stringify([...codes])); } catch {}
+  const savePromos = (store: PromoStore) => {
+    try { fs.writeFileSync(PROMO_FILE, JSON.stringify(store, null, 2)); } catch {}
   };
-  const usedPromoCodes = loadUsedCodes();
+
+  const promos = loadPromos();
+
+  const generateCode = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let code = "";
+    for (let i = 0; i < 8; i++) {
+      if (i === 4) code += "-";
+      code += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return code;
+  };
+
+  const ADMIN_SECRET = process.env.ADMIN_SECRET || "admin";
 
   app.use(cors());
   app.use(express.json());
@@ -287,37 +295,131 @@ async function startServer() {
   app.post("/api/check-promo", (req: Request, res: Response) => {
     const code = (req.body.code || "").toString().trim().toUpperCase();
     if (!code) return res.json({ valid: false });
-    if (PROMO_CODES.has(code)) {
-      if (usedPromoCodes.has(code)) return res.json({ valid: false, reason: "used" });
-      usedPromoCodes.add(code);
-      saveUsedCodes(usedPromoCodes);
-      return res.json({ valid: true, type: "free" });
-    }
-    return res.json({ valid: false });
-  });
-
-  // One-time access links for testing
-  const accessTokens = new Map<string, { tier: "standard" | "premium"; used: boolean }>();
-
-  app.post("/api/create-link", (req: Request, res: Response) => {
-    const secret = req.headers["x-admin-secret"] || req.body.secret;
-    if (secret !== (process.env.ADMIN_SECRET || "admin")) {
-      return res.status(403).json({ error: "forbidden" });
-    }
-    const tier = req.body.tier === "premium" ? "premium" : "standard";
-    const token = crypto.randomUUID();
-    accessTokens.set(token, { tier, used: false });
-    res.json({ token, url: `/?token=${token}` });
-  });
-
-  app.post("/api/use-link", (req: Request, res: Response) => {
-    const token = (req.body.token || "").toString().trim();
-    if (!token) return res.json({ valid: false });
-    const entry = accessTokens.get(token);
-    if (!entry) return res.json({ valid: false, reason: "not_found" });
-    if (entry.used) return res.json({ valid: false, reason: "already_used" });
+    const entry = promos[code];
+    if (!entry) return res.json({ valid: false });
+    if (entry.used) return res.json({ valid: false, reason: "used" });
     entry.used = true;
-    res.json({ valid: true, tier: entry.tier });
+    savePromos(promos);
+    return res.json({ valid: true, tier: entry.tier });
+  });
+
+  app.post("/api/generate-promo", (req: Request, res: Response) => {
+    const secret = (req.headers["x-admin-secret"] || req.body.secret || "").toString();
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
+    const count = Math.min(parseInt(req.body.count || "10", 10), 100);
+    const tier: "standard" | "premium" = req.body.tier === "premium" ? "premium" : "standard";
+    const newCodes: string[] = [];
+    for (let i = 0; i < count; i++) {
+      let code = generateCode();
+      while (promos[code]) code = generateCode();
+      promos[code] = { used: false, tier, createdAt: new Date().toISOString() };
+      newCodes.push(code);
+    }
+    savePromos(promos);
+    res.json({ codes: newCodes, tier, count: newCodes.length });
+  });
+
+  app.get("/api/promo-list", (req: Request, res: Response) => {
+    const secret = (req.headers["x-admin-secret"] || req.query.secret || "").toString();
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
+    const list = Object.entries(promos).map(([code, e]) => ({ code, ...e }));
+    res.json({ total: list.length, unused: list.filter(e => !e.used).length, codes: list });
+  });
+
+  // Admin page
+  app.get("/admin", (req: Request, res: Response) => {
+    const secret = (req.query.secret || "").toString();
+    if (secret !== ADMIN_SECRET) {
+      return res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px">
+        <h2>Введите пароль администратора</h2>
+        <form onsubmit="location.href='/admin?secret='+encodeURIComponent(document.getElementById('s').value);return false">
+          <input id="s" type="password" placeholder="Пароль" style="padding:8px;font-size:16px;width:200px">
+          <button type="submit" style="padding:8px 16px;margin-left:8px">Войти</button>
+        </form></body></html>`);
+    }
+    res.send(`<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Промокоды — Админ</title>
+<style>
+  body{font-family:sans-serif;max-width:700px;margin:40px auto;padding:0 20px;background:#f9f7f3}
+  h1{font-size:24px;margin-bottom:24px}
+  .card{background:#fff;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  label{display:block;margin-bottom:6px;font-size:14px;color:#555}
+  select,input[type=number]{padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-right:8px}
+  button{padding:10px 20px;background:#c9a84c;color:#1a1a1a;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+  button:hover{background:#b8973b}
+  .btn-secondary{background:#1a1a1a;color:#fff}
+  .btn-secondary:hover{background:#333}
+  pre{background:#f0ece4;padding:16px;border-radius:8px;font-size:13px;line-height:1.8;white-space:pre-wrap;word-break:break-all}
+  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:600}
+  .tag-ok{background:#d4edda;color:#1a6b2a}
+  .tag-used{background:#f8d7da;color:#721c24}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;padding:8px;border-bottom:2px solid #eee;color:#888;font-weight:600}
+  td{padding:8px;border-bottom:1px solid #f0ece4}
+  .mono{font-family:monospace;letter-spacing:.05em;font-weight:700}
+</style>
+</head>
+<body>
+<h1>🎟 Промокоды</h1>
+
+<div class="card">
+  <label>Сгенерировать одноразовые коды:</label>
+  <select id="tier"><option value="standard">Стандарт (100 ₽)</option><option value="premium">Премиум (200 ₽)</option></select>
+  <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
+  <button onclick="generate()">Создать коды</button>
+  <pre id="result" style="display:none;margin-top:16px"></pre>
+  <button id="copyBtn" onclick="copyAll()" style="display:none;margin-top:8px" class="btn-secondary">Скопировать все</button>
+</div>
+
+<div class="card">
+  <label>Все коды: <span id="stats" style="color:#888"></span></label>
+  <button onclick="loadList()" class="btn-secondary" style="margin-bottom:16px">Обновить список</button>
+  <div id="list"></div>
+</div>
+
+<script>
+const secret = ${JSON.stringify(secret)};
+
+async function generate() {
+  const tier = document.getElementById('tier').value;
+  const count = document.getElementById('count').value;
+  const r = await fetch('/api/generate-promo', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({secret, tier, count})
+  });
+  const d = await r.json();
+  const pre = document.getElementById('result');
+  pre.textContent = d.codes.join('\\n');
+  pre.style.display = 'block';
+  document.getElementById('copyBtn').style.display = 'inline-block';
+  loadList();
+}
+
+let lastCodes = [];
+function copyAll() {
+  const text = document.getElementById('result').textContent;
+  navigator.clipboard.writeText(text).then(() => alert('Скопировано!'));
+}
+
+async function loadList() {
+  const r = await fetch('/api/promo-list?secret=' + encodeURIComponent(secret));
+  const d = await r.json();
+  document.getElementById('stats').textContent = d.unused + ' свободных / ' + d.total + ' всего';
+  const rows = d.codes.sort((a,b) => a.used - b.used).map(e =>
+    '<tr><td class="mono">' + e.code + '</td><td>' +
+    (e.tier === 'premium' ? 'Премиум' : 'Стандарт') + '</td><td>' +
+    (e.used ? '<span class="tag tag-used">Использован</span>' : '<span class="tag tag-ok">Свободен</span>') +
+    '</td><td style="color:#aaa">' + (e.createdAt ? e.createdAt.slice(0,10) : '') + '</td></tr>'
+  ).join('');
+  document.getElementById('list').innerHTML = '<table><tr><th>Код</th><th>Тариф</th><th>Статус</th><th>Создан</th></tr>' + rows + '</table>';
+}
+
+loadList();
+</script>
+</body></html>`);
   });
 
   app.get("/api/test-key", (req: Request, res: Response) => {
