@@ -1273,7 +1273,9 @@ export default function App() {
                 Начать преображение
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
-              <button className="border border-ivory/40 text-ivory px-10 py-4 rounded-full text-base font-medium hover:bg-ivory/10 transition-colors">
+              <button
+                onClick={() => document.getElementById('lookbook')?.scrollIntoView({ behavior: 'smooth' })}
+                className="border border-ivory/40 text-ivory px-10 py-4 rounded-full text-base font-medium hover:bg-ivory/10 transition-colors">
                 Смотреть примеры
               </button>
             </div>
@@ -1478,7 +1480,7 @@ export default function App() {
                 </ul>
                 
                 <button
-                  onClick={() => openModal(plan.highlighted ? "premium" : "standard")}
+                  onClick={() => openModal()}
                   className={`w-full py-4 rounded-full text-sm font-medium transition-colors ${plan.highlighted ? 'bg-gold text-charcoal hover:bg-gold/90' : 'bg-white/10 text-white hover:bg-white/20'}`}
                 >
                   Выбрать тариф
