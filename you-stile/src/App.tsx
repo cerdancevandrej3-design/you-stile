@@ -269,7 +269,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
       const data = await res.json();
       if (data.valid) {
         setPromoStatus("valid");
-        setTimeout(() => { onPaid(selectedTier); onClose(); }, 800);
+        setTimeout(() => { onPaid(data.tier || selectedTier); onClose(); }, 800);
       } else if (data.reason === "used") {
         setPromoStatus("used");
       } else {
