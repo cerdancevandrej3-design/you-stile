@@ -423,7 +423,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
       description: string;
       image: string | null;
       imageError?: string | null;
-      items: { name: string; description?: string; price: string; url?: string; marketplace: string; imageUrl?: string | null; productUrl?: string | null; similarity?: string | null; reason?: string | null }[];
+      items: { name: string; description?: string; price: string; url?: string; marketplace?: string; imageUrl?: string | null; productUrl?: string | null; wbUrl?: string | null; ozonUrl?: string | null; ymUrl?: string | null; similarity?: string | null; reason?: string | null }[];
     }[];
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -1079,15 +1079,18 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                               {item.reason && (
                                 <p className="text-xs text-charcoal/60 leading-relaxed">{item.reason}</p>
                               )}
-                              <div className="flex justify-between items-center mt-1">
-                                <span className="text-xs font-medium uppercase tracking-wider text-charcoal/50">{item.marketplace}</span>
-                                <a 
-                                  href={item.productUrl || item.url || "#"}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-4 py-1.5 rounded-full bg-charcoal text-white text-xs font-medium tracking-wide transition-transform hover:scale-105"
-                                >
-                                  Купить
+                              <div className="flex gap-2 flex-wrap mt-1">
+                                <a href={item.wbUrl || "#"} target="_blank" rel="noopener noreferrer"
+                                  className="px-3 py-1.5 rounded-full bg-[#CB11AB] text-white text-xs font-medium hover:opacity-90 transition-opacity">
+                                  WB
+                                </a>
+                                <a href={item.ozonUrl || "#"} target="_blank" rel="noopener noreferrer"
+                                  className="px-3 py-1.5 rounded-full bg-[#005BFF] text-white text-xs font-medium hover:opacity-90 transition-opacity">
+                                  Ozon
+                                </a>
+                                <a href={item.ymUrl || "#"} target="_blank" rel="noopener noreferrer"
+                                  className="px-3 py-1.5 rounded-full bg-[#FFCC00] text-charcoal text-xs font-medium hover:opacity-90 transition-opacity">
+                                  Яндекс
                                 </a>
                               </div>
                             </div>

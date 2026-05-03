@@ -666,11 +666,12 @@ loadList();
 
       const looksWithImagesAndUrls = looksWithImages.map((look: any) => {
         const enrichedItems = (look.items || []).map((item: any) => {
-          const query = (item.searchQuery || item.name || "").toString();
+          const query = encodeURIComponent((item.searchQuery || item.name || "").toString());
           return {
             ...item,
-            marketplace: "Google Поиск",
-            productUrl: `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(query)}`,
+            wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${query}`,
+            ozonUrl: `https://www.ozon.ru/search/?text=${query}`,
+            ymUrl: `https://market.yandex.ru/search?text=${query}`,
           };
         });
         return { ...look, items: enrichedItems };
