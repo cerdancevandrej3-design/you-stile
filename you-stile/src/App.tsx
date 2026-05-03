@@ -369,14 +369,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
               </div>
 
               <div className="border-t border-charcoal/10 pt-6">
-                <p className="text-sm text-charcoal/50 mb-4 text-center">Оплата картой или QR-кодом</p>
-                <button
-                  className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold text-base hover:bg-gold/90 transition-colors flex items-center justify-center gap-2"
-                  onClick={() => setShowPayment(true)}
-                >
-                  Оплатить {price} ₽
-                </button>
-                <p className="text-xs text-charcoal/30 text-center mt-3">Защищено ЮKassa · Visa · Mastercard · МИР</p>
+                <p className="text-sm text-charcoal/50 text-center">Введите промокод для получения доступа</p>
               </div>
             </div>
           )}
