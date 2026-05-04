@@ -1130,8 +1130,9 @@ export default function App() {
   const [selectedPricingTier, setSelectedPricingTier] = useState<Tier>("standard");
 
   const openModal = (tier?: Tier) => {
-    setSelectedPricingTier(tier || "standard");
-    setIsPricingOpen(true);
+    const t = tier || "standard";
+    setSelectedPricingTier(t);
+    setTimeout(() => setIsPricingOpen(true), 0);
   };
 
   const handlePaid = (tier: Tier) => {
@@ -1421,7 +1422,6 @@ export default function App() {
             {[
               {
                 title: "Стандарт",
-                tier: "standard" as Tier,
                 price: "100 ₽",
                 desc: "Один запрос — три готовых образа с визуализацией.",
                 features: [
@@ -1436,7 +1436,6 @@ export default function App() {
               },
               {
                 title: "Премиум",
-                tier: "premium" as Tier,
                 price: "200 ₽",
                 desc: "Персональный разбор: внешность × знак зодиака × этот месяц.",
                 features: [
