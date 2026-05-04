@@ -702,6 +702,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                       Premium
                     </span>
                   </div>
+                  <p className="text-[11px] text-charcoal/40 mb-2 leading-relaxed">
+                    Например: «Три образа для отдыха на Бали» · «Деловой стиль для конференции» · «Романтическое свидание в ресторане» · «Капсульный гардероб на лето»
+                  </p>
                   <textarea
                     value={wishes}
                     onChange={(e) => setWishes(e.target.value.slice(0, 500))}
@@ -784,9 +787,19 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                 )}
 
                 {previewUrls.length === 0 ? (
-                  <div 
+                  <>
+                  <div className="w-full max-w-md mb-4 rounded-xl p-4 text-sm text-charcoal/70" style={{background:'#fffbeb',border:'1px solid #fcd34d'}}>
+                    <p className="font-medium mb-2 text-charcoal/80">📸 Для лучшего результата:</p>
+                    <ul className="space-y-1 text-[13px]">
+                      <li>• Чёткое фото лица — без размытия и фильтров</li>
+                      <li>• Хорошее освещение — дневной свет или яркая комната</li>
+                      <li>• Нейтральный фон — белая стена или дверь</li>
+                      <li>• Уберите очки, уберите волосы с лица</li>
+                    </ul>
+                  </div>
+                  <div
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-full max-w-md aspect-[3/4] border-2 border-dashed border-charcoal/20 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all group"
+                    className="w-full max-w-md h-40 border-2 border-dashed border-charcoal/20 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all group"
                   >
                     <div className="w-16 h-16 bg-charcoal/5 rounded-full flex items-center justify-center mb-4 group-hover:bg-gold/20 transition-colors">
                       <Upload className="w-8 h-8 text-charcoal/50 group-hover:text-gold transition-colors" />
@@ -794,6 +807,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                     <span className="font-medium text-charcoal">Нажмите, чтобы загрузить фото</span>
                     <span className="text-sm text-charcoal/50 mt-2">До 3 фото (JPEG, PNG)</span>
                   </div>
+                  </>
                 ) : (
                   <div className="w-full max-w-md relative rounded-2xl overflow-hidden shadow-lg bg-charcoal/5 p-4">
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
