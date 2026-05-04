@@ -269,6 +269,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
       const data = await res.json();
       if (data.valid) {
         setPromoStatus("valid");
+        if (data.tier) setSelectedTier(data.tier);
         setTimeout(() => { onPaid(data.tier || selectedTier); onClose(); }, 800);
       } else if (data.reason === "used") {
         setPromoStatus("used");
@@ -1422,6 +1423,7 @@ export default function App() {
             {[
               {
                 title: "Стандарт",
+                tier: "standard" as Tier,
                 price: "100 ₽",
                 desc: "Один запрос — три готовых образа с визуализацией.",
                 features: [
@@ -1436,6 +1438,7 @@ export default function App() {
               },
               {
                 title: "Премиум",
+                tier: "premium" as Tier,
                 price: "200 ₽",
                 desc: "Персональный разбор: внешность × знак зодиака × этот месяц.",
                 features: [
@@ -1476,7 +1479,7 @@ export default function App() {
                 </ul>
                 
                 <button
-                  onClick={() => openModal()}
+                  onClick={() => openModal(plan.tier)}
                   className={`w-full py-4 rounded-full text-sm font-medium transition-colors ${plan.highlighted ? 'bg-gold text-charcoal hover:bg-gold/90' : 'bg-white/10 text-white hover:bg-white/20'}`}
                 >
                   Выбрать тариф
