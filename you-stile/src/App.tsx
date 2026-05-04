@@ -1127,14 +1127,12 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => !getSavedName());
   const [menuOpen, setMenuOpen] = useState(false);
 
+  const [selectedPricingTier, setSelectedPricingTier] = useState<Tier>("standard");
+
   const openModal = (tier?: Tier) => {
-    if (tier) {
-      setSelectedPricingTier(tier);
-    }
+    setSelectedPricingTier(tier || "standard");
     setIsPricingOpen(true);
   };
-
-  const [selectedPricingTier, setSelectedPricingTier] = useState<Tier>("standard");
 
   const handlePaid = (tier: Tier) => {
     setCurrentTier(tier);
