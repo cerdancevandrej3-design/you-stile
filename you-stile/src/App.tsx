@@ -798,7 +798,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                     <span className="font-medium text-charcoal">Нажмите, чтобы загрузить фото</span>
                     <span className="text-sm text-charcoal/50 mt-2">До 3 фото (JPEG, PNG)</span>
                   </div>
-                  <div className="w-full max-w-md mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-charcoal/70">
+                  <div className="w-full max-w-md mt-4 bg-gold/5 border border-gold/30 rounded-xl p-4 text-sm text-charcoal/70">
                     <p className="font-medium mb-2 text-charcoal/80">📸 Для лучшего результата:</p>
                     <ul className="space-y-1 text-[13px]">
                       <li>• Чёткое фото лица — без размытия и фильтров</li>
