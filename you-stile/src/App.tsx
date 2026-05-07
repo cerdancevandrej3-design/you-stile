@@ -799,7 +799,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                   </div>
                   <div
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-full max-w-md aspect-[3/4] border-2 border-dashed border-charcoal/20 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all group"
+                    className="w-full max-w-md h-40 border-2 border-dashed border-charcoal/20 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all group"
                   >
                     <div className="w-16 h-16 bg-charcoal/5 rounded-full flex items-center justify-center mb-4 group-hover:bg-gold/20 transition-colors">
                       <Upload className="w-8 h-8 text-charcoal/50 group-hover:text-gold transition-colors" />
