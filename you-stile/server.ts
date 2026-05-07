@@ -2,6 +2,8 @@ import express, { Request, Response, NextFunction } from "express";
 import { createServer as createViteServer } from "vite";
 import multer from "multer";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -289,8 +291,20 @@ async function startServer() {
 
   const ADMIN_SECRET = process.env.ADMIN_SECRET || "admin";
 
-  app.use(cors());
+  app.use(helmet({ contentSecurityPolicy: false }));
+
+  const allowedOrigin = process.env.CORS_ORIGIN || "*";
+  app.use(cors(allowedOrigin === "*" ? undefined : { origin: allowedOrigin }));
   app.use(express.json());
+
+  const stylizeLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 15,
+    message: { error: "Слишком много запросов. Попробуйте через час." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use("/api/stylize", stylizeLimiter);
 
   app.post("/api/check-promo", (req: Request, res: Response) => {
     const code = (req.body.code || "").toString().trim().toUpperCase();
@@ -420,14 +434,6 @@ async function loadList() {
 loadList();
 </script>
 </body></html>`);
-  });
-
-  app.get("/api/test-key", (req: Request, res: Response) => {
-    res.json({
-      POLZA_API_KEY: POLZA_API_KEY ? "configured" : "missing",
-      ANALYSIS_MODEL,
-      IMAGE_MODEL,
-    });
   });
 
   // Payment endpoints
