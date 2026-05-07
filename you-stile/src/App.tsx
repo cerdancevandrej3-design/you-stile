@@ -788,6 +788,15 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
 
                 {previewUrls.length === 0 ? (
                   <>
+                  <div className="w-full max-w-md mb-4 rounded-xl p-4 text-sm text-charcoal/70" style={{background:'#fffbeb',border:'1px solid #fcd34d'}}>
+                    <p className="font-medium mb-2 text-charcoal/80">📸 Для лучшего результата:</p>
+                    <ul className="space-y-1 text-[13px]">
+                      <li>• Чёткое фото лица — без размытия и фильтров</li>
+                      <li>• Хорошее освещение — дневной свет или яркая комната</li>
+                      <li>• Нейтральный фон — белая стена или дверь</li>
+                      <li>• Уберите очки, уберите волосы с лица</li>
+                    </ul>
+                  </div>
                   <div
                     onClick={() => fileInputRef.current?.click()}
                     className="w-full max-w-md aspect-[3/4] border-2 border-dashed border-charcoal/20 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all group"
@@ -797,15 +806,6 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                     </div>
                     <span className="font-medium text-charcoal">Нажмите, чтобы загрузить фото</span>
                     <span className="text-sm text-charcoal/50 mt-2">До 3 фото (JPEG, PNG)</span>
-                  </div>
-                  <div className="w-full max-w-md mt-4 bg-gold/5 border border-gold/30 rounded-xl p-4 text-sm text-charcoal/70">
-                    <p className="font-medium mb-2 text-charcoal/80">📸 Для лучшего результата:</p>
-                    <ul className="space-y-1 text-[13px]">
-                      <li>• Чёткое фото лица — без размытия и фильтров</li>
-                      <li>• Хорошее освещение — дневной свет или яркая комната</li>
-                      <li>• Нейтральный фон — белая стена или дверь</li>
-                      <li>• Уберите очки, уберите волосы с лица</li>
-                    </ul>
                   </div>
                   </>
                 ) : (
