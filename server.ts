@@ -263,21 +263,52 @@ async function startServer() {
   const PORT = parseInt(process.env.PORT || '3001', 10);
 
   const PROMO_FILE = path.join(PROJECT_ROOT, "promo-codes.json");
+  const PAYMENTS_FILE = path.join(PROJECT_ROOT, "payments.json");
+  const STATS_FILE = path.join(PROJECT_ROOT, "stats.json");
+  const PRICES_FILE = path.join(PROJECT_ROOT, "prices.json");
 
   type PromoEntry = { used: boolean; tier: "standard" | "premium"; createdAt: string };
   type PromoStore = Record<string, PromoEntry>;
+  type PaymentEntry = { id: string; tier: string; amount: number; status: string; createdAt: string; ip?: string };
+  type StatsData = { totalRequests: number; requestsByDay: Record<string, number>; paymentsByTier: Record<string, number> };
+  type PricesData = { standard: number; premium: number };
 
   const loadPromos = (): PromoStore => {
-    try {
-      if (fs.existsSync(PROMO_FILE)) return JSON.parse(fs.readFileSync(PROMO_FILE, "utf-8"));
-    } catch {}
+    try { if (fs.existsSync(PROMO_FILE)) return JSON.parse(fs.readFileSync(PROMO_FILE, "utf-8")); } catch {}
     return {};
   };
   const savePromos = (store: PromoStore) => {
     try { fs.writeFileSync(PROMO_FILE, JSON.stringify(store, null, 2)); } catch {}
   };
 
+  const loadPayments = (): PaymentEntry[] => {
+    try { if (fs.existsSync(PAYMENTS_FILE)) return JSON.parse(fs.readFileSync(PAYMENTS_FILE, "utf-8")); } catch {}
+    return [];
+  };
+  const savePayments = (list: PaymentEntry[]) => {
+    try { fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(list, null, 2)); } catch {}
+  };
+
+  const loadStats = (): StatsData => {
+    try { if (fs.existsSync(STATS_FILE)) return JSON.parse(fs.readFileSync(STATS_FILE, "utf-8")); } catch {}
+    return { totalRequests: 0, requestsByDay: {}, paymentsByTier: { standard: 0, premium: 0 } };
+  };
+  const saveStats = (s: StatsData) => {
+    try { fs.writeFileSync(STATS_FILE, JSON.stringify(s, null, 2)); } catch {}
+  };
+
+  const loadPrices = (): PricesData => {
+    try { if (fs.existsSync(PRICES_FILE)) return JSON.parse(fs.readFileSync(PRICES_FILE, "utf-8")); } catch {}
+    return { standard: 100, premium: 200 };
+  };
+  const savePrices = (p: PricesData) => {
+    try { fs.writeFileSync(PRICES_FILE, JSON.stringify(p, null, 2)); } catch {}
+  };
+
   const promos = loadPromos();
+  const payments = loadPayments();
+  const stats = loadStats();
+  let prices = loadPrices();
 
   const generateCode = () => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -338,6 +369,35 @@ async function startServer() {
     if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
     const list = Object.entries(promos).map(([code, e]) => ({ code, ...e }));
     res.json({ total: list.length, unused: list.filter(e => !e.used).length, codes: list });
+  });
+
+  app.get("/api/payments-log", (req: Request, res: Response) => {
+    const secret = (req.headers["x-admin-secret"] || req.query.secret || "").toString();
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
+    const list = loadPayments();
+    const total = list.reduce((sum, p) => sum + (p.status === "succeeded" ? p.amount : 0), 0);
+    res.json({ total: list.length, totalRevenue: total, payments: list.slice().reverse() });
+  });
+
+  app.get("/api/stats-data", (req: Request, res: Response) => {
+    const secret = (req.headers["x-admin-secret"] || req.query.secret || "").toString();
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
+    res.json(loadStats());
+  });
+
+  app.get("/api/get-prices", (_req: Request, res: Response) => {
+    res.json(loadPrices());
+  });
+
+  app.post("/api/set-prices", (req: Request, res: Response) => {
+    const secret = (req.headers["x-admin-secret"] || req.body.secret || "").toString();
+    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
+    const standard = parseInt(req.body.standard, 10);
+    const premium = parseInt(req.body.premium, 10);
+    if (!standard || !premium || standard < 1 || premium < 1) return res.status(400).json({ error: "Неверные цены" });
+    prices = { standard, premium };
+    savePrices(prices);
+    res.json({ ok: true, prices });
   });
 
   // Реквизиты
@@ -449,54 +509,114 @@ async function startServer() {
     res.send(`<!DOCTYPE html>
 <html lang="ru">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Промокоды — Админ</title>
+<title>Админ — Stilist AI</title>
 <style>
-  body{font-family:sans-serif;max-width:700px;margin:40px auto;padding:0 20px;background:#f9f7f3}
-  h1{font-size:24px;margin-bottom:24px}
+  *{box-sizing:border-box}
+  body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;background:#f9f7f3}
+  h1{font-size:24px;margin-bottom:8px}
+  .tabs{display:flex;gap:8px;margin-bottom:24px;border-bottom:2px solid #e0dbd0;padding-bottom:0}
+  .tab{padding:10px 18px;cursor:pointer;border-radius:8px 8px 0 0;font-size:14px;font-weight:600;color:#888;border:2px solid transparent;border-bottom:none;margin-bottom:-2px;background:#f9f7f3}
+  .tab.active{color:#1a1a1a;border-color:#e0dbd0;background:#fff}
+  .panel{display:none}.panel.active{display:block}
   .card{background:#fff;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
   label{display:block;margin-bottom:6px;font-size:14px;color:#555}
-  select,input[type=number]{padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-right:8px}
+  select,input[type=number],input[type=text]{padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-right:8px}
   button{padding:10px 20px;background:#c9a84c;color:#1a1a1a;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
   button:hover{background:#b8973b}
-  .btn-secondary{background:#1a1a1a;color:#fff}
-  .btn-secondary:hover{background:#333}
+  .btn-sm{padding:6px 14px;font-size:13px}
+  .btn-secondary{background:#1a1a1a;color:#fff}.btn-secondary:hover{background:#333}
   pre{background:#f0ece4;padding:16px;border-radius:8px;font-size:13px;line-height:1.8;white-space:pre-wrap;word-break:break-all}
   .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:600}
-  .tag-ok{background:#d4edda;color:#1a6b2a}
-  .tag-used{background:#f8d7da;color:#721c24}
+  .tag-ok{background:#d4edda;color:#1a6b2a}.tag-used{background:#f8d7da;color:#721c24}
+  .tag-blue{background:#cce5ff;color:#004085}.tag-gray{background:#e2e3e5;color:#383d41}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th{text-align:left;padding:8px;border-bottom:2px solid #eee;color:#888;font-weight:600}
   td{padding:8px;border-bottom:1px solid #f0ece4}
   .mono{font-family:monospace;letter-spacing:.05em;font-weight:700}
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:16px}
+  .stat-box{background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);text-align:center}
+  .stat-box .num{font-size:2rem;font-weight:700;color:#c9a84c}
+  .stat-box .lbl{font-size:12px;color:#888;margin-top:4px}
 </style>
 </head>
 <body>
-<h1>🎟 Промокоды</h1>
+<h1>⚙️ Панель администратора</h1>
 
-<div class="card">
-  <label>Сгенерировать одноразовые коды:</label>
-  <select id="tier"><option value="standard">Стандарт (100 ₽)</option><option value="premium">Премиум (200 ₽)</option></select>
-  <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
-  <button onclick="generate()">Создать коды</button>
-  <pre id="result" style="display:none;margin-top:16px"></pre>
-  <button id="copyBtn" onclick="copyAll()" style="display:none;margin-top:8px" class="btn-secondary">Скопировать все</button>
+<div class="tabs">
+  <div class="tab active" onclick="showTab('promo')">🎟 Промокоды</div>
+  <div class="tab" onclick="showTab('payments')">💳 Платежи</div>
+  <div class="tab" onclick="showTab('stats')">📊 Статистика</div>
+  <div class="tab" onclick="showTab('prices')">💰 Цены</div>
 </div>
 
-<div class="card">
-  <label>Все коды: <span id="stats" style="color:#888"></span></label>
-  <button onclick="loadList()" class="btn-secondary" style="margin-bottom:16px">Обновить список</button>
-  <div id="list"></div>
+<!-- ПРОМОКОДЫ -->
+<div id="tab-promo" class="panel active">
+  <div class="card">
+    <label>Сгенерировать одноразовые коды:</label>
+    <select id="tier"><option value="standard">Стандарт</option><option value="premium">Премиум</option></select>
+    <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
+    <button onclick="generate()">Создать коды</button>
+    <pre id="result" style="display:none;margin-top:16px"></pre>
+    <button id="copyBtn" onclick="copyAll()" style="display:none;margin-top:8px" class="btn-secondary">Скопировать все</button>
+  </div>
+  <div class="card">
+    <label>Все коды: <span id="stats" style="color:#888"></span></label>
+    <button onclick="loadList()" class="btn-secondary btn-sm" style="margin-bottom:16px">Обновить</button>
+    <div id="list"></div>
+  </div>
+</div>
+
+<!-- ПЛАТЕЖИ -->
+<div id="tab-payments" class="panel">
+  <div class="card">
+    <label>История платежей: <span id="pay-stats" style="color:#888"></span></label>
+    <button onclick="loadPayments()" class="btn-secondary btn-sm" style="margin-bottom:16px">Обновить</button>
+    <div id="pay-list"></div>
+  </div>
+</div>
+
+<!-- СТАТИСТИКА -->
+<div id="tab-stats" class="panel">
+  <div class="stat-grid" id="stat-grid"></div>
+  <div class="card">
+    <label>Запросов по дням:</label>
+    <div id="days-table"></div>
+  </div>
+</div>
+
+<!-- ЦЕНЫ -->
+<div id="tab-prices" class="panel">
+  <div class="card">
+    <label>Тариф Стандарт (₽):</label>
+    <input type="number" id="price-std" min="1" style="width:120px">
+    <br><br>
+    <label>Тариф Премиум (₽):</label>
+    <input type="number" id="price-prem" min="1" style="width:120px">
+    <br><br>
+    <button onclick="savePrices()">Сохранить цены</button>
+    <span id="price-msg" style="margin-left:12px;color:#1a6b2a;font-weight:600"></span>
+  </div>
 </div>
 
 <script>
 const secret = ${JSON.stringify(secret)};
 
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'payments') loadPayments();
+  if (name === 'stats') loadStats();
+  if (name === 'prices') loadPrices();
+}
+
+// ПРОМОКОДЫ
 async function generate() {
   const tier = document.getElementById('tier').value;
   const count = document.getElementById('count').value;
   const r = await fetch('/api/generate-promo', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
+    method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({secret, tier, count})
   });
   const d = await r.json();
@@ -506,13 +626,9 @@ async function generate() {
   document.getElementById('copyBtn').style.display = 'inline-block';
   loadList();
 }
-
-let lastCodes = [];
 function copyAll() {
-  const text = document.getElementById('result').textContent;
-  navigator.clipboard.writeText(text).then(() => alert('Скопировано!'));
+  navigator.clipboard.writeText(document.getElementById('result').textContent).then(() => alert('Скопировано!'));
 }
-
 async function loadList() {
   const r = await fetch('/api/promo-list?secret=' + encodeURIComponent(secret));
   const d = await r.json();
@@ -526,6 +642,57 @@ async function loadList() {
   document.getElementById('list').innerHTML = '<table><tr><th>Код</th><th>Тариф</th><th>Статус</th><th>Создан</th></tr>' + rows + '</table>';
 }
 
+// ПЛАТЕЖИ
+async function loadPayments() {
+  const r = await fetch('/api/payments-log?secret=' + encodeURIComponent(secret));
+  const d = await r.json();
+  document.getElementById('pay-stats').textContent = d.total + ' платежей, выручка: ' + d.totalRevenue + ' ₽';
+  if (!d.payments.length) { document.getElementById('pay-list').innerHTML = '<p style="color:#aaa">Платежей пока нет</p>'; return; }
+  const rows = d.payments.map(p =>
+    '<tr><td class="mono" style="font-size:11px">' + p.id + '</td><td>' +
+    (p.tier === 'premium' ? 'Премиум' : 'Стандарт') + '</td><td>' + p.amount + ' ₽</td><td>' +
+    (p.status === 'succeeded' ? '<span class="tag tag-ok">Оплачен</span>' : '<span class="tag tag-gray">' + p.status + '</span>') +
+    '</td><td style="color:#aaa">' + (p.createdAt ? p.createdAt.slice(0,16).replace('T',' ') : '') + '</td></tr>'
+  ).join('');
+  document.getElementById('pay-list').innerHTML = '<table><tr><th>ID</th><th>Тариф</th><th>Сумма</th><th>Статус</th><th>Дата</th></tr>' + rows + '</table>';
+}
+
+// СТАТИСТИКА
+async function loadStats() {
+  const r = await fetch('/api/stats-data?secret=' + encodeURIComponent(secret));
+  const d = await r.json();
+  document.getElementById('stat-grid').innerHTML =
+    '<div class="stat-box"><div class="num">' + (d.totalRequests||0) + '</div><div class="lbl">Всего запросов</div></div>' +
+    '<div class="stat-box"><div class="num">' + (d.paymentsByTier?.standard||0) + '</div><div class="lbl">Оплат Стандарт</div></div>' +
+    '<div class="stat-box"><div class="num">' + (d.paymentsByTier?.premium||0) + '</div><div class="lbl">Оплат Премиум</div></div>';
+  const days = Object.entries(d.requestsByDay||{}).sort((a,b) => b[0].localeCompare(a[0])).slice(0,14);
+  if (days.length) {
+    const rows = days.map(([day,cnt]) => '<tr><td>' + day + '</td><td>' + cnt + ' запросов</td></tr>').join('');
+    document.getElementById('days-table').innerHTML = '<table><tr><th>Дата</th><th>Запросов</th></tr>' + rows + '</table>';
+  } else {
+    document.getElementById('days-table').innerHTML = '<p style="color:#aaa">Данных пока нет</p>';
+  }
+}
+
+// ЦЕНЫ
+async function loadPrices() {
+  const r = await fetch('/api/get-prices');
+  const d = await r.json();
+  document.getElementById('price-std').value = d.standard;
+  document.getElementById('price-prem').value = d.premium;
+}
+async function savePrices() {
+  const standard = document.getElementById('price-std').value;
+  const premium = document.getElementById('price-prem').value;
+  const r = await fetch('/api/set-prices', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({secret, standard, premium})
+  });
+  const d = await r.json();
+  document.getElementById('price-msg').textContent = d.ok ? '✓ Сохранено' : (d.error || 'Ошибка');
+  setTimeout(() => document.getElementById('price-msg').textContent = '', 3000);
+}
+
 loadList();
 </script>
 </body></html>`);
@@ -537,7 +704,8 @@ loadList();
   app.post("/api/create-payment", async (req: Request, res: Response) => {
     try {
       const { tier } = req.body;
-      const amount = tier === "premium" ? 200 : 100;
+      const currentPrices = loadPrices();
+      const amount = tier === "premium" ? currentPrices.premium : currentPrices.standard;
       const paymentId = `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       let qrData = "";
       if (PAYMENT_MODE === "test") {
@@ -545,6 +713,10 @@ loadList();
       } else {
         qrData = await QRCode.toDataURL(`https://yookassa.ru/payment/${paymentId}`);
       }
+      // Log payment
+      const paymentsList = loadPayments();
+      paymentsList.push({ id: paymentId, tier: tier || "standard", amount, status: "created", createdAt: new Date().toISOString(), ip: (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").toString().split(",")[0].trim() });
+      savePayments(paymentsList);
       res.json({ paymentId, qrCode: qrData, amount });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -555,6 +727,16 @@ loadList();
     const { paymentId } = req.body;
     if (!paymentId) return res.json({ status: "pending" });
     if (PAYMENT_MODE === "test") {
+      // Update payment status to succeeded
+      const paymentsList = loadPayments();
+      const p = paymentsList.find(x => x.id === paymentId);
+      if (p && p.status !== "succeeded") {
+        p.status = "succeeded";
+        savePayments(paymentsList);
+        const s = loadStats();
+        s.paymentsByTier[p.tier] = (s.paymentsByTier[p.tier] || 0) + 1;
+        saveStats(s);
+      }
       return res.json({ status: "succeeded" });
     }
     return res.json({ status: "pending" });
@@ -570,6 +752,13 @@ loadList();
 
     try {
       res.write(JSON.stringify({ type: "progress", step: 0.8, text: "Фотографии получены сервером..." }) + "\n");
+
+      // Track request stats
+      const s = loadStats();
+      s.totalRequests = (s.totalRequests || 0) + 1;
+      const today = new Date().toISOString().slice(0, 10);
+      s.requestsByDay[today] = (s.requestsByDay[today] || 0) + 1;
+      saveStats(s);
 
       const files = req.files as MulterFile[];
       if (!files || files.length === 0) {
