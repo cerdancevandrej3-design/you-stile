@@ -501,8 +501,8 @@ async function startServer() {
     if (secret !== ADMIN_SECRET) {
       return res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px">
         <h2>Введите пароль администратора</h2>
-        <form onsubmit="location.href='/api/admin?secret='+encodeURIComponent(document.getElementById('s').value);return false">
-          <input id="s" type="password" placeholder="Пароль" style="padding:8px;font-size:16px;width:200px">
+        <form method="GET" action="/api/admin">
+          <input name="secret" type="password" placeholder="Пароль" style="padding:8px;font-size:16px;width:200px">
           <button type="submit" style="padding:8px 16px;margin-left:8px">Войти</button>
         </form></body></html>`);
     }
