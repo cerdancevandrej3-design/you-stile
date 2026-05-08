@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ivory: #F9F8F6;
+  --color-charcoal: #1A1A1A;
+  --color-gold: #D4AF37;
+  --color-gold-light: #E5C865;
+  
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", ui-serif, Georgia, serif;
+}
+
+@layer base {
+  body {
+    @apply bg-ivory text-charcoal font-sans antialiased selection:bg-gold/30 selection:text-charcoal;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-serif tracking-tight;
+  }
+}

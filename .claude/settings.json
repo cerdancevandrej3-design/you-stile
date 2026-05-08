@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(curl https://polza.ai/*)",
+      "Bash(curl -s https://polza.ai/*)",
+      "Bash(curl -X POST https://polza.ai/*)",
+      "Bash(curl -s -X POST https://polza.ai/*)",
+      "Bash(curl -s -w * https://polza.ai/*)",
+      "Bash(curl -s -o /dev/null -w * http://localhost:*)",
+      "Bash(curl -s http://localhost:*)",
+      "Bash(npm run dev)",
+      "Bash(npm run build)",
+      "Bash(npm run lint)",
+      "Bash(npm run clean)",
+      "Bash(taskkill //PID *)",
+      "Bash(taskkill /PID *)"
+    ]
+  }
+}
