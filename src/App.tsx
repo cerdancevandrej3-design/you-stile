@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, ChangeEvent, MouseEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download } from 'lucide-react';
+import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download, Lock } from 'lucide-react';
 
 // --- localStorage helpers ---
 function getSavedName(): string { return localStorage.getItem("you-stile-user-name") || ""; }
@@ -396,6 +396,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
   const [birthDay, setBirthDay] = useState("");
   const [birthMonth, setBirthMonth] = useState("");
   const [birthYear, setBirthYear] = useState("");
+  const [birthRegion, setBirthRegion] = useState(""); // для гороскопа
+  const [birthCity, setBirthCity] = useState(""); // для гороскопа
+  const [birthTime, setBirthTime] = useState(""); // для гороскопа
   const [looksCount, setLooksCount] = useState(3);
   const [loadingState, setLoadingState] = useState<{ step: number; text: string } | null>(null);
 
@@ -410,6 +413,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
       setBirthDay("");
       setBirthMonth("");
       setBirthYear("");
+      setBirthRegion("");
+      setBirthCity("");
+      setBirthTime("");
       setResult(null);
       setErrorMsg(null);
       setLoadingState(null);
@@ -504,6 +510,13 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
       if (birthDay && birthMonth && birthYear) {
         formData.append("birthDate", `${birthDay}.${birthMonth}.${birthYear}`);
       }
+      if (birthRegion) formData.append("birthRegion", birthRegion);
+      if (birthCity) formData.append("birthCity", birthCity);
+      if (birthTime) formData.append("birthTime", birthTime);
+
+      // Для разнообразия образов при повторных обращениях
+      const userId = localStorage.getItem("you-stile-user-id");
+      if (userId) formData.append("userId", userId);
 
       const response = await fetch("/api/stylize", {
         method: "POST",
@@ -532,46 +545,30 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
 
         for (const line of lines) {
           if (!line.trim()) continue;
-          
-          let data;
           try {
-            data = JSON.parse(line);
-          } catch (e: any) {
-            // If it's a chunk issue, just continue to wait for more data
-            continue;
-          }
-
-          if (data.type === "progress") {
-            setLoadingState({ step: data.step, text: data.text });
-          } else if (data.type === "partial_result") {
-            // Show greeting + looks with images immediately
-            setResult({
-              greetingAndAnalysis: data.greetingAndAnalysis,
-              bodyTypeSummary: data.bodyTypeSummary,
-              astroReading: data.astroReading || null,
-              looks: data.looks
-            });
-            setTimeout(() => {
-              document.getElementById('modal-scroll-container')?.scrollTo({ top: 0, behavior: 'smooth' });
-            }, 100);
-          } else if (data.type === "result") {
-            setLoadingState({ step: 5, text: "Готово!" });
-            // Update with enriched items (real products)
-            setResult({
-              greetingAndAnalysis: data.greetingAndAnalysis,
-              bodyTypeSummary: data.bodyTypeSummary,
-              astroReading: data.astroReading || null,
-              looks: data.looks
-            });
-          } else if (data.type === "error") {
-            throw new Error(data.error);
-          }
+            const data = JSON.parse(line);
+            if (data.type === "progress") setLoadingState({ step: data.step, text: data.text });
+            else if (data.type === "result") {
+              setLoadingState({ step: 1, text: "Готово!" });
+              setResult({ greetingAndAnalysis: data.greetingAndAnalysis, looks: data.looks });
+            } else if (data.type === "error") throw new Error(data.error);
+          } catch { /* incomplete line, wait for more */ }
         }
       }
 
+      // Flush any remaining data in buffer
+      if (buffer.trim()) {
+        try {
+          const data = JSON.parse(buffer.trim());
+          if (data.type === "result") {
+            setLoadingState({ step: 1, text: "Готово!" });
+            setResult({ greetingAndAnalysis: data.greetingAndAnalysis, looks: data.looks });
+          } else if (data.type === "error") throw new Error(data.error);
+        } catch { /* ignore */ }
+      }
     } catch (error: any) {
       console.error("Full error:", error);
-      setErrorMsg(`Упс, произошла ошибка: ${error?.message || JSON.stringify(error)}`);
+      setErrorMsg(`Ошибка: ${error?.message || "Неизвестная ошибка"}`);
     } finally {
       setLoadingState(null);
     }
@@ -784,6 +781,46 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                       />
                     </div>
                   </div>
+                )}
+
+                {/* Birth location & time — premium astro feature */}
+                {tier === "premium" && (birthDay || birthMonth || birthYear) && (
+                <div className="w-full max-w-md mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-medium text-charcoal/70">
+                        Место и время рождения
+                      </label>
+                      <span className="text-[10px] uppercase tracking-widest font-bold text-gold bg-gold/10 px-2 py-0.5 rounded-full">
+                        Астро
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-charcoal/40 mb-2">
+                      Для точного астрологического разбора укажите область, город и время рождения
+                    </p>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      <input
+                        type="text"
+                        value={birthRegion}
+                        onChange={(e) => setBirthRegion(e.target.value)}
+                        placeholder="Область"
+                        className="flex-1 min-w-[120px] px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
+                      />
+                      <input
+                        type="text"
+                        value={birthCity}
+                        onChange={(e) => setBirthCity(e.target.value)}
+                        placeholder="Город"
+                        className="flex-1 min-w-[120px] px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
+                      />
+                    </div>
+                    <input
+                      type="time"
+                      value={birthTime}
+                      onChange={(e) => setBirthTime(e.target.value)}
+                      placeholder="Время рождения (если known)"
+                      className="w-full px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
+                    />
+                </div>
                 )}
 
                 {previewUrls.length === 0 ? (
@@ -1131,10 +1168,182 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
   );
 };
 
+// --- Trial Modal: бесплатный анализ без картинок ---
+const TrialModalContent = ({ isOpen, onClose, userName, onUnlock }: {
+  isOpen: boolean;
+  onClose: () => void;
+  userName: string;
+  onUnlock: () => void;
+}) => {
+  const [step, setStep] = useState<'form' | 'loading' | 'result'>('form');
+  const [height, setHeight] = useState("");
+  const [weight, setWeight] = useState("");
+  const [preview, setPreview] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<any>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Сброс при закрытии
+  useEffect(() => {
+    if (!isOpen) {
+      setStep('form');
+      setPreview(null);
+      setFile(null);
+      setResult(null);
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+  };
+
+  const handleSubmit = async (e?: MouseEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+    if (!file || !height || !weight) return;
+    setStep('loading');
+
+    const formData = new FormData();
+    formData.append("images", file);
+    formData.append("height", height);
+    formData.append("weight", weight);
+    formData.append("userName", userName);
+
+    try {
+      const res = await fetch("/api/stylize-trial", { method: "POST", body: formData });
+      const text = await res.text();
+      console.log("Trial response:", text.slice(0, 200));
+
+      const lines = text.split("\n").filter(l => l.trim());
+      let data = null;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          data = JSON.parse(lines[i]);
+          if (data.type === 'result' || data.greetingAndAnalysis) break;
+        } catch {}
+      }
+
+      if (!data) {
+        throw new Error("Не удалось распознать ответ");
+      }
+
+      setResult(data);
+      setStep('result');
+    } catch (err: any) {
+      console.error("Trial error:", err);
+      alert("Ошибка: " + (err?.message || "Попробуйте ещё раз"));
+      setStep('form');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-16 bg-charcoal/80 backdrop-blur-sm overflow-y-auto">
+      <div className="bg-ivory w-full max-w-xl rounded-3xl shadow-2xl overflow-hidden p-6 relative">
+        <button type="button" onClick={onClose} className="absolute top-4 right-4 p-2 bg-charcoal/5 rounded-full">
+          <X className="w-5 h-5 text-charcoal" />
+        </button>
+
+        {step === 'form' && (
+          <>
+            <p className="font-serif text-gold text-xs tracking-widest uppercase mb-1">Бесплатный анализ</p>
+            <h2 className="text-2xl font-serif text-charcoal mb-4">Узнайте свой стиль</h2>
+            <p className="text-sm text-charcoal/60 mb-4">Чёткое портретное фото при хорошем освещении — для максимального сходства в генерациях</p>
+
+            <div className="flex gap-3 mb-3">
+              <input type="number" value={height} onChange={e => setHeight(e.target.value)} placeholder="Рост (см)"
+                className="flex-1 px-3 py-2 rounded-lg border border-charcoal/20 text-sm" />
+              <input type="number" value={weight} onChange={e => setWeight(e.target.value)} placeholder="Вес (кг)"
+                className="flex-1 px-3 py-2 rounded-lg border border-charcoal/20 text-sm" />
+            </div>
+
+            {preview ? (
+              <div className="relative mb-3 rounded-xl overflow-hidden aspect-[3/4] max-h-48">
+                <img src={preview} alt="" className="w-full h-full object-cover" />
+                <button onClick={() => { setPreview(null); setFile(null); }} className="absolute top-2 right-2 p-1 bg-black/50 rounded-full">
+                  <X className="w-4 h-4 text-white" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <div onClick={() => fileRef.current?.click()}
+                  className="border-2 border-dashed border-charcoal/20 rounded-xl p-6 text-center cursor-pointer hover:border-gold mb-2">
+                  <Upload className="w-8 h-8 text-charcoal/40 mx-auto mb-2" />
+                  <p className="text-sm text-charcoal">Загрузить фото</p>
+                </div>
+                <p className="text-xs text-charcoal/50 text-center mb-3">Чёткое фото лица, взгляд в камеру, хорошее освещение</p>
+              </>
+            )}
+
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+
+            <button type="button" onClick={(e) => { e.preventDefault(); handleSubmit(); }} disabled={!file || !height || !weight}
+              className="w-full py-3 rounded-full bg-charcoal text-ivory text-sm font-medium disabled:opacity-50">
+              Получить бесплатный анализ
+            </button>
+          </>
+        )}
+
+        {step === 'loading' && (
+          <div className="text-center py-12">
+            <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-charcoal/60">Анализируем ваш стиль...</p>
+          </div>
+        )}
+
+        {step === 'result' && result && (
+          <div className="space-y-4">
+            <p className="text-sm text-charcoal/75 whitespace-pre-wrap">{result.greetingAndAnalysis || ""}</p>
+
+            {(result.looks || []).map((look: any, idx: number) => (
+              <div key={idx} className="border-t border-charcoal/10 pt-4">
+                <p className="font-medium text-charcoal mb-2">{look.lookName || `Образ ${idx + 1}`}</p>
+                <p className="text-sm text-charcoal/70 mb-3">{look.description || ""}</p>
+                {/* Blurred preview placeholder */}
+                <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden mb-3">
+                  {/* User's blurred photo as background */}
+                  {preview && (
+                    <img src={preview} alt="" className="absolute inset-0 w-full h-full object-cover blur-xl scale-105" />
+                  )}
+                  {!preview && (
+                    <div className="absolute inset-0 bg-gradient-to-br from-gray-300 via-gray-200 to-gray-400" />
+                  )}
+                  {/* Dark overlay for readability */}
+                  <div className="absolute inset-0 bg-black/30" />
+                  {/* Lock icon with glass effect */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <div className="w-14 h-14 rounded-full bg-white/90 backdrop-blur-md shadow-xl flex items-center justify-center mb-3">
+                      <span className="text-2xl">🔒</span>
+                    </div>
+                    <p className="text-xs text-white font-medium">Визуализация готова!</p>
+                  </div>
+                </div>
+                <p className="text-center text-sm text-charcoal/60">Разблокируйте полный результат</p>
+              </div>
+            ))}
+
+            <button onClick={onUnlock} className="w-full py-3 rounded-2xl bg-gold text-charcoal font-semibold">
+              Получить 3 образа со ссылками на покупки всего за 99 ₽
+            </button>
+            <button onClick={onClose} className="w-full py-2 text-sm text-charcoal/50">
+              Попробовать позже
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // --- Main Landing Page ---
 export default function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPricingOpen, setIsPricingOpen] = useState(false);
+  const [isTrialOpen, setIsTrialOpen] = useState(false);
   const [modalKey, setModalKey] = useState(0);
   const [currentTier, setCurrentTier] = useState<Tier>("standard");
   const [userName, setUserName] = useState(getSavedName);
@@ -1187,6 +1396,18 @@ export default function App() {
       </AnimatePresence>
       <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} initialTier={selectedPricingTier} />
       <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} />
+
+      {/* TrialModal */}
+      {isTrialOpen && <TrialModalContent
+        isOpen={isTrialOpen}
+        onClose={() => setIsTrialOpen(false)}
+        userName={userName}
+        onUnlock={() => {
+          setIsTrialOpen(false);
+          setSelectedPricingTier("standard");
+          setIsPricingOpen(true);
+        }}
+      />}
 
       {/* 1. Header */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-ivory/70 backdrop-blur-lg border-b border-charcoal/5 transition-all">
@@ -1289,6 +1510,12 @@ export default function App() {
                 Смотреть примеры
               </button>
             </div>
+            <button
+              onClick={() => setIsTrialOpen(true)}
+              className="mt-4 border border-ivory/30 text-ivory/70 px-8 py-2.5 rounded-full text-sm font-light hover:border-ivory/60 hover:text-ivory transition-colors"
+            >
+              Попробовать бесплатно
+            </button>
           </motion.div>
         </div>
       </section>
@@ -1310,7 +1537,7 @@ export default function App() {
 
           <div className="grid md:grid-cols-3 gap-4 md:gap-8 mb-16 md:mb-20">
             {[
-              { icon: Smartphone, title: "Загрузите фото", desc: "Сделайте селфи в полный рост в простой, облегающей одежде." },
+              { icon: Smartphone, title: "Загрузите фото", desc: "Чёткое портретное фото лица при хорошем освещении — это гарантирует максимальное сходство ИИ." },
               { icon: Sparkles, title: "Нейросеть анализирует", desc: "Nano Banana учитывает ваш рост, вес, цветотип и особенности фигуры." },
               { icon: Shirt, title: "Получите капсулу", desc: "3 готовых образа с подробным разбором одежды, обуви и аксессуаров." }
             ].map((step, idx) => (

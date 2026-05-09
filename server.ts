@@ -270,7 +270,7 @@ async function startServer() {
   type PromoEntry = { used: boolean; tier: "standard" | "premium"; createdAt: string };
   type PromoStore = Record<string, PromoEntry>;
   type PaymentEntry = { id: string; tier: string; amount: number; status: string; createdAt: string; ip?: string };
-  type StatsData = { totalRequests: number; requestsByDay: Record<string, number>; paymentsByTier: Record<string, number> };
+  type StatsData = { totalRequests: number; requestsByDay: Record<string, number>; paymentsByTier: Record<string, number>; userRequests?: Record<string, number> };
   type PricesData = { standard: number; premium: number };
 
   const loadPromos = (): PromoStore => {
@@ -309,6 +309,16 @@ async function startServer() {
   const payments = loadPayments();
   const stats = loadStats();
   let prices = loadPrices();
+
+  // Инициализация промокодов из .env (если ещё не созданы)
+  const envPromoCodes = (process.env.PROMO_CODES || "").split(",").filter(Boolean);
+  for (const code of envPromoCodes) {
+    const upperCode = code.trim().toUpperCase();
+    if (!promos[upperCode]) {
+      promos[upperCode] = { used: false, tier: "standard", createdAt: new Date().toISOString() };
+    }
+  }
+  if (envPromoCodes.length > 0) savePromos(promos);
 
   const generateCode = () => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -753,11 +763,19 @@ loadList();
     try {
       res.write(JSON.stringify({ type: "progress", step: 0.8, text: "Фотографии получены сервером..." }) + "\n");
 
-      // Track request stats
+      // Track request stats and user diversity
       const s = loadStats();
       s.totalRequests = (s.totalRequests || 0) + 1;
       const today = new Date().toISOString().slice(0, 10);
       s.requestsByDay[today] = (s.requestsByDay[today] || 0) + 1;
+
+      // Для разнообразия образов при повторных обращениях
+      const userId = (req.body.userId || "").toString().trim();
+      const userRequestCount = userId ? ((s.userRequests || {})[userId] || 0) + 1 : 1;
+      if (userId) {
+        s.userRequests = s.userRequests || {};
+        s.userRequests[userId] = userRequestCount;
+      }
       saveStats(s);
 
       const files = req.files as MulterFile[];
@@ -776,8 +794,9 @@ loadList();
 
       // Astro block — parse birth date and compute zodiac sign
       const birthDateRaw = (req.body.birthDate || "").toString().trim();
-      console.log("[Astro] birthDateRaw received:", JSON.stringify(birthDateRaw));
-      console.log("[Astro] req.body keys:", Object.keys(req.body));
+      const birthRegion = (req.body.birthRegion || "").toString().trim();
+      const birthCity = (req.body.birthCity || "").toString().trim();
+      const birthTime = (req.body.birthTime || "").toString().trim();
       let zodiacBlock = "";
       if (birthDateRaw) {
         const [d, m] = birthDateRaw.split(".").map(Number);
@@ -786,7 +805,9 @@ loadList();
           const now = new Date();
           const monthName = now.toLocaleString("ru-RU", { month: "long" });
           const year = now.getFullYear();
-          zodiacBlock = `\n\n♦ АСТРО-ДАННЫЕ ПОЛЬЗОВАТЕЛЯ:\nДата рождения: ${birthDateRaw}\nЗнак зодиака: ${sign}\nТекущий месяц: ${monthName} ${year}\n\n⭐ ЗАДАЧА ПЕРСОНАЛЬНОГО ПРЕДСКАЗАНИЯ:\nПосле основного анализа добавь поле astroReading — живое персональное предсказание на ${monthName}. ВАЖНО: описывай внешность и характер ТОЛЬКО по оригинальной загруженной фотографии, не по сгенерированным образам. Формат — поток предсказания, не сухие категории:\n\n1. ПОРТРЕТ: Назови 2-3 черты личности ${sign} и найди их отражение в реальной внешности человека на фото (взгляд, черты лица, энергетика). Конкретно.\n\n2. ГЛАВНАЯ ТЕМА ${monthName.toUpperCase()}: Что несёт этот период — ключевой посыл судьбы для ${sign} прямо сейчас. 2-3 предложения.\n\n3. ВОЗМОЖНОСТИ: Что важно не упустить, какие двери открываются, счастливые моменты месяца. Интригующе и конкретно.\n\n4. ПРЕДУПРЕЖДЕНИЯ: Чего избегать, скрытые риски, что может пойти не так — честно и без прикрас.\n\n5. К ЧЕМУ ГОТОВИТЬСЯ: Что придёт в жизнь в ближайшее время — событие, встреча, перемена. Добавь интригу.\n\n6. ИНТУИЦИЯ ЗВЁЗД: Личный совет именно этому человеку — исходя из его внешности и энергетики ${sign}. Мистично и точно.\n\n7. ОБЯЗАТЕЛЬНО завершить фразой-крючком — загадочной и интригующей, намекающей что в следующем месяце звёзды раскроют нечто важное. Заканчивай словами: "Возвращайтесь — прогноз обновляется каждый месяц 🌙"\n\nВАЖНО: только ${monthName}, не год. Пиши как настоящий астролог — живо, лично, с интригой. Никаких скучных перечислений.`;
+          zodiacBlock = zodiacBlock.replace("Текущий месяц: ${monthName} ${year}", `Текущий месяц: ${monthName} ${year}
+${birthRegion || birthCity || birthTime ? `Место рождения: ${birthRegion || ""}${birthCity ? (birthRegion ? ", " : "") + birthCity : ""}${birthTime ? ", время: " + birthTime : ""}` : ""}
+${birthRegion && birthCity && birthTime ? "✅ Все данные для точного гороскопа получены!" : "⚠️ Для полного гороскопа нужны: область, город и время рождения."}`);
         }
       }
 
@@ -812,7 +833,7 @@ loadList();
         {
           role: "user",
           content: [
-            { type: "text", text: `${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.\n\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${wishesBlock}${zodiacBlock}` },
+            { type: "text", text: `${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.${userRequestCount > 1 ? `\n\n⚠️ IMPORTANT: This is user request #${userRequestCount}. To ensure variety, GENERATE COMPLETELY DIFFERENT STYLES from previous requests. Vary: silhouettes, color palettes, moods, occasions, formality levels. NO repeating similar looks from previous sessions.` : ""}\n\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${wishesBlock}${zodiacBlock}` },
             { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
           ],
         },
@@ -981,6 +1002,127 @@ loadList();
     } catch (error) {
       clearInterval(heartbeat);
       console.error("Error processing image in /api/stylize:", error);
+      res.write(JSON.stringify({ type: "error", error: (error as Error).message }) + "\n");
+      res.end();
+    }
+  });
+
+  // --- TRIAL: бесплатный анализ без картинок ---
+  app.post("/api/stylize-trial", upload.array("images", 1), async (req: Request, res: Response) => {
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+
+    try {
+      res.write(JSON.stringify({ type: "progress", step: 0.5, text: "Фотография получена..." }) + "\n");
+
+      const s = loadStats();
+      s.totalRequests = (s.totalRequests || 0) + 1;
+      const today = new Date().toISOString().slice(0, 10);
+      s.requestsByDay[today] = (s.requestsByDay[today] || 0) + 1;
+      saveStats(s);
+
+      const files = req.files as MulterFile[];
+      if (!files || files.length === 0) {
+        res.write(JSON.stringify({ type: "error", error: "Загрузите фото" }) + "\n");
+        return res.end();
+      }
+
+      const height = req.body.height || "не указан";
+      const weight = req.body.weight || "не указан";
+      const userName = (req.body.userName || "").toString().trim().slice(0, 50);
+      const nameInstruction = userName
+        ? `Обращайся к пользователю по имени "${userName}" в приветствии. `
+        : "";
+
+      if (!POLZA_API_KEY) {
+        res.write(JSON.stringify({ type: "error", error: "API ключ не настроен" }) + "\n");
+        return res.end();
+      }
+
+      heartbeat = setInterval(() => {
+        res.write(JSON.stringify({ type: "heartbeat" }) + "\n");
+      }, 15000);
+
+      res.write(JSON.stringify({ type: "progress", step: 0.8, text: "Анализ фото и подбор образа..." }) + "\n");
+
+      const referenceImage = files[0];
+      const referenceImageBase64 = referenceImage.buffer.toString("base64");
+      const mimeType = referenceImage.mimetype;
+
+      const messages = [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `${nameInstruction}User's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide EXACTLY 1 fashion look in the "looks" array — no more, no less. Use the 2026 fashion trends from the knowledge base. Generate a single best look for this person.`,
+            },
+            { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
+          ],
+        },
+      ];
+
+      let analysisData: any;
+      try {
+        const analysisText = await callPolzaChat({
+          model: ANALYSIS_MODEL,
+          systemPrompt,
+          messages,
+          temperature: 0.85,
+          maxTokens: 8192,
+        });
+
+        if (typeof analysisText === "string") {
+          analysisData = safeJsonParse(analysisText);
+        } else {
+          analysisData = analysisText;
+        }
+      } catch (e: any) {
+        clearInterval(heartbeat);
+        let msg = e.message;
+        if (msg.includes("Quota") || msg.includes("429")) {
+          msg = "Превышен лимит. Попробуйте через минуту.";
+        }
+        res.write(JSON.stringify({ type: "error", error: "Ошибка AI: " + msg }) + "\n");
+        return res.end();
+      }
+
+      const { greetingAndAnalysis, looks } = analysisData;
+
+      if (!looks || !Array.isArray(looks) || looks.length === 0) {
+        clearInterval(heartbeat);
+        res.write(JSON.stringify({ type: "error", error: "AI не смог сгенерировать образ. Попробуйте ещё раз." }) + "\n");
+        return res.end();
+      }
+
+      res.write(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ готов!" }) + "\n");
+
+      // Убираем картинки из образов (trial — без генерации)
+      const trialLooks = looks.slice(0, 1).map((look: any) => {
+        const { image: _img, imageUrl: _imgUrl, editPrompt: _ep, ...lookWithoutImage } = look;
+        const items = (look.items || []).map((item: any) => {
+          const { imageUrl: _iu, productUrl: _pu, ...itemWithoutImage } = item;
+          return {
+            ...itemWithoutImage,
+            wbUrl: item.wbUrl || `https://www.wildberries.ru/catalog/0/search.aspx?search=${encodeURIComponent(item.searchQuery || item.name || "")}`,
+            ozonUrl: item.ozonUrl || `https://www.ozon.ru/search/?text=${encodeURIComponent(item.searchQuery || item.name || "")}`,
+            ymUrl: item.ymUrl || `https://market.yandex.ru/search?text=${encodeURIComponent(item.searchQuery || item.name || "")}`,
+          };
+        });
+        return { ...lookWithoutImage, image: null, items };
+      });
+
+      res.write(JSON.stringify({ type: "result", greetingAndAnalysis, looks: trialLooks }) + "\n");
+      clearInterval(heartbeat);
+      res.end();
+
+    } catch (error) {
+      clearInterval(heartbeat);
+      console.error("Error in /api/stylize-trial:", error);
       res.write(JSON.stringify({ type: "error", error: (error as Error).message }) + "\n");
       res.end();
     }
