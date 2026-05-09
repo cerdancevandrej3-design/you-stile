@@ -43,7 +43,7 @@ if (!POLZA_API_KEY) {
 }
 const POLZA_BASE_URL = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
 
-const ANALYSIS_MODEL = "google/gemini-3.1-flash-lite-preview";
+const ANALYSIS_MODEL = "google/gemini-3.1-flash-lite";
 // Nano Banana 2 — генерация изображений с лицом пользователя
 const IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
 
