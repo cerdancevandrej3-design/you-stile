@@ -69,14 +69,14 @@ const MagicMirror = () => {
   };
 
   useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
+    const onMouseMove = (e: Event) => {
       if (!isDragging) return;
-      handleMove(e.clientX);
+      handleMove((e as unknown as MouseEvent).clientX);
     };
     const onMouseUp = () => setIsDragging(false);
-    const onTouchMove = (e: TouchEvent) => {
+    const onTouchMove = (e: Event) => {
       if (!isDragging) return;
-      handleMove(e.touches[0].clientX);
+      handleMove((e as unknown as TouchEvent).touches[0].clientX);
     };
     const onTouchEnd = () => setIsDragging(false);
 
@@ -1303,6 +1303,51 @@ const TrialModalContent = ({ isOpen, onClose, userName, onUnlock }: {
               <div key={idx} className="border-t border-charcoal/10 pt-4">
                 <p className="font-medium text-charcoal mb-2">{look.lookName || `Образ ${idx + 1}`}</p>
                 <p className="text-sm text-charcoal/70 mb-3">{look.description || ""}</p>
+
+                {/* Items list with marketplace links */}
+                {look.items && look.items.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-xs font-medium text-charcoal/50 uppercase tracking-wider mb-2 flex items-center gap-1">
+                      <span>🛍</span> Рекомендуемые вещи:
+                    </p>
+                    <div className="space-y-2">
+                      {look.items.slice(0, 5).map((item: any, itemIdx: number) => (
+                        <div key={itemIdx} className="flex justify-between items-start gap-2 p-2 bg-charcoal/5 rounded-lg">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-charcoal font-medium truncate">{item.name || ""}</p>
+                            {item.price && <p className="text-xs text-gold">{item.price}</p>}
+                          </div>
+                          <div className="flex gap-1 flex-shrink-0">
+                            {item.wbUrl && (
+                              <a href={item.wbUrl} target="_blank" rel="noopener noreferrer"
+                                className="px-2 py-1 bg-[#CB11AB] text-white text-[10px] font-medium rounded hover:opacity-80 transition-opacity">
+                                WB
+                              </a>
+                            )}
+                            {item.ozonUrl && (
+                              <a href={item.ozonUrl} target="_blank" rel="noopener noreferrer"
+                                className="px-2 py-1 bg-[#005BFF] text-white text-[10px] font-medium rounded hover:opacity-80 transition-opacity">
+                                Ozon
+                              </a>
+                            )}
+                            {item.ymUrl && (
+                              <a href={item.ymUrl} target="_blank" rel="noopener noreferrer"
+                                className="px-2 py-1 bg-[#FFCC00] text-charcoal text-[10px] font-medium rounded hover:opacity-80 transition-opacity">
+                                Яндекс
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      {look.items.length > 5 && (
+                        <p className="text-xs text-charcoal/50 text-center">
+                          + ещё {look.items.length - 5} вещей в полной версии
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Blurred preview placeholder */}
                 <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden mb-3">
                   {/* User's blurred photo as background */}
@@ -1326,12 +1371,14 @@ const TrialModalContent = ({ isOpen, onClose, userName, onUnlock }: {
               </div>
             ))}
 
-            <button onClick={onUnlock} className="w-full py-3 rounded-2xl bg-gold text-charcoal font-semibold">
-              Получить 3 образа со ссылками на покупки всего за 99 ₽
-            </button>
-            <button onClick={onClose} className="w-full py-2 text-sm text-charcoal/50">
-              Попробовать позже
-            </button>
+            <div className="border-t border-charcoal/10 pt-4 mt-4">
+              <button onClick={onUnlock} className="w-full py-3 rounded-2xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors">
+                Получить 3 образа со ссылками на покупки за 100 ₽
+              </button>
+              <button onClick={onClose} className="w-full py-2 text-sm text-charcoal/50 mt-2">
+                Попробовать позже
+              </button>
+            </div>
           </div>
         )}
       </div>
