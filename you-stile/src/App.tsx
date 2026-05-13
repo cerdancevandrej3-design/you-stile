@@ -337,23 +337,22 @@ const TrialModal = ({ isOpen, onClose }: {
               {trialPreviewUrls.length === 0 ? (
                 <div
                   onClick={() => trialFileInputRef.current?.click()}
-                  className="border-2 border-dashed border-charcoal/20 rounded-2xl p-8 flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all mb-6"
+                  className="border-2 border-dashed border-charcoal/20 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all mb-6"
                 >
-                  <Camera className="w-8 h-8 text-charcoal/30 mb-2" />
-                  <p className="text-sm text-charcoal/50">Загрузить фото</p>
-                  <p className="text-xs text-charcoal/30 mt-1">Чёткое фото лица, взгляд в камеру, хорошее освещение</p>
+                  <Camera className="w-6 h-6 text-charcoal/30 mb-1" />
+                  <p className="text-xs text-charcoal/50">Загрузить фото</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-2 mb-6">
+                <div className="flex gap-2 mb-6">
                   {trialPreviewUrls.map((url, idx) => (
-                    <div key={idx} className="aspect-square rounded-xl overflow-hidden relative">
+                    <div key={idx} className="w-16 h-16 rounded-lg overflow-hidden relative">
                       <img src={url} alt="" className="w-full h-full object-cover" />
                       <button
                         onClick={() => {
                           setTrialFiles(files => files.filter((_, i) => i !== idx));
                           setTrialPreviewUrls(urls => urls.filter((_, i) => i !== idx));
                         }}
-                        className="absolute top-1 right-1 bg-charcoal/60 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
+                        className="absolute top-0.5 right-0.5 bg-charcoal/60 text-white rounded-full w-4 h-4 flex items-center justify-center text-xs"
                       >
                         ×
                       </button>
