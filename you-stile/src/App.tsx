@@ -234,6 +234,7 @@ const TrialModal = ({ isOpen, onClose }: {
   const [trialResult, setTrialResult] = useState<{ greetingAndAnalysis: string } | null>(null);
   const [trialLoading, setTrialLoading] = useState(false);
   const [trialError, setTrialError] = useState<string | null>(null);
+  const [trialStep, setTrialStep] = useState(0);
   const trialFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -245,6 +246,7 @@ const TrialModal = ({ isOpen, onClose }: {
       setTrialResult(null);
       setTrialError(null);
       setTrialLoading(false);
+      setTrialStep(0);
     }
   }, [isOpen]);
 
@@ -260,6 +262,7 @@ const TrialModal = ({ isOpen, onClose }: {
     if (trialFiles.length === 0 || !trialHeight || !trialWeight) return;
     setTrialLoading(true);
     setTrialError(null);
+    setTrialStep(1);
 
     const formData = new FormData();
     trialFiles.forEach(file => formData.append("photos", file));
@@ -267,10 +270,13 @@ const TrialModal = ({ isOpen, onClose }: {
     formData.append("weight", trialWeight);
     formData.append("trial", "true");
 
+    setTrialStep(2);
+
     try {
       const response = await fetch("/api/trial", { method: "POST", body: formData });
       if (!response.ok) throw new Error("Ошибка сервера");
       const data = await response.json();
+      setTrialStep(3);
       setTrialResult(data);
     } catch (err: any) {
       setTrialError(err.message || "Что-то пошло не так");
@@ -376,6 +382,22 @@ const TrialModal = ({ isOpen, onClose }: {
               >
                 {trialLoading ? "Анализируем..." : "Получить бесплатный анализ"}
               </button>
+
+              {trialLoading && (
+                <div className="mt-4">
+                  <div className="w-full bg-charcoal/10 rounded-full h-2 overflow-hidden">
+                    <motion.div
+                      className="h-full bg-gold rounded-full"
+                      initial={{ width: "0%" }}
+                      animate={{ width: trialStep === 1 ? "33%" : trialStep === 2 ? "66%" : "100%" }}
+                      transition={{ duration: 0.5 }}
+                    />
+                  </div>
+                  <p className="text-xs text-charcoal/50 mt-2 text-center">
+                    {trialStep === 1 ? "Отправка данных..." : trialStep === 2 ? "Анализ фото..." : "Загрузка..."}
+                  </p>
+                </div>
+              )}
             </>
           ) : (
             <div className="text-center">
@@ -383,7 +405,13 @@ const TrialModal = ({ isOpen, onClose }: {
                 <Sparkles className="w-8 h-8 text-gold" />
               </div>
               <h3 className="text-xl font-serif text-charcoal mb-4">Анализ готов!</h3>
-              <p className="text-sm text-charcoal/70 whitespace-pre-wrap">{trialResult.greetingAndAnalysis}</p>
+              <div className="bg-gold/5 rounded-2xl p-4 text-left max-h-64 overflow-y-auto">
+                <p className="text-sm text-charcoal/80 whitespace-pre-wrap leading-relaxed">
+                  {typeof trialResult?.greetingAndAnalysis === 'string'
+                    ? trialResult?.greetingAndAnalysis
+                    : JSON.stringify(trialResult, null, 2)}
+                </p>
+              </div>
               <button
                 onClick={onClose}
                 className="mt-6 w-full py-4 rounded-2xl bg-charcoal text-ivory font-semibold hover:bg-charcoal/90 transition-colors"
