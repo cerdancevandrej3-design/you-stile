@@ -723,6 +723,55 @@ loadList();
     }
   });
 
+  // Trial endpoint — бесплатный текстовый анализ без генерации картинок
+  app.post("/api/trial", upload.array("photos", 3), async (req: Request, res: Response) => {
+    try {
+      const files = req.files as MulterFile[];
+      const height = req.body.height || "не указан";
+      const weight = req.body.weight || "не указан";
+
+      if (!files || files.length === 0) {
+        return res.status(400).json({ error: "Нужно загрузить фото" });
+      }
+
+      const referenceImage = files[0];
+      const referenceImageBase64 = referenceImage.buffer.toString("base64");
+      const mimeType = referenceImage.mimetype;
+
+      const messages = [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `Проанализируй внешность человека по фото и дай краткий анализ его стиля. Рост: ${height} см, вес: ${weight} кг. Ответь на русском языке, дай рекомендации по стилю одежды.` },
+            { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
+          ],
+        },
+      ];
+
+      const analysisText = await callPolzaChat({
+        model: ANALYSIS_MODEL,
+        systemPrompt: systemPrompt,
+        messages,
+        temperature: 0.7,
+        maxTokens: 2048,
+      });
+
+      let analysisData: any;
+      if (typeof analysisText === "string") {
+        try { analysisData = JSON.parse(analysisText); } catch { analysisData = { greetingAndAnalysis: analysisText }; }
+      } else {
+        analysisData = analysisText;
+      }
+
+      const greetingAndAnalysis = analysisData?.greetingAndAnalysis || analysisText || "Анализ готов!";
+
+      res.json({ greetingAndAnalysis });
+    } catch (error) {
+      console.error("Error in /api/trial:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
   // Serve production build if available, otherwise use Vite dev middleware
   const distIndexPath = path.join(__dirname, "dist", "index.html");
   if (fs.existsSync(distIndexPath)) {

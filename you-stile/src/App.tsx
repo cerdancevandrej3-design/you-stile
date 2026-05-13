@@ -222,6 +222,182 @@ const PaymentModal = ({ isOpen, tier, onPaid, onClose }: {
   );
 };
 
+// --- Trial Modal — бесплатный анализ ---
+const TrialModal = ({ isOpen, onClose }: {
+  isOpen: boolean;
+  onClose: () => void;
+}) => {
+  const [trialFiles, setTrialFiles] = useState<File[]>([]);
+  const [trialPreviewUrls, setTrialPreviewUrls] = useState<string[]>([]);
+  const [trialHeight, setTrialHeight] = useState("");
+  const [trialWeight, setTrialWeight] = useState("");
+  const [trialResult, setTrialResult] = useState<{ greetingAndAnalysis: string } | null>(null);
+  const [trialLoading, setTrialLoading] = useState(false);
+  const [trialError, setTrialError] = useState<string | null>(null);
+  const trialFileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setTrialFiles([]);
+      setTrialPreviewUrls([]);
+      setTrialHeight("");
+      setTrialWeight("");
+      setTrialResult(null);
+      setTrialError(null);
+      setTrialLoading(false);
+    }
+  }, [isOpen]);
+
+  const handleTrialFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files);
+      setTrialFiles(newFiles.slice(0, 3));
+      setTrialPreviewUrls(newFiles.slice(0, 3).map(file => URL.createObjectURL(file)));
+    }
+  };
+
+  const handleTrialSubmit = async () => {
+    if (trialFiles.length === 0 || !trialHeight || !trialWeight) return;
+    setTrialLoading(true);
+    setTrialError(null);
+
+    const formData = new FormData();
+    trialFiles.forEach(file => formData.append("photos", file));
+    formData.append("height", trialHeight);
+    formData.append("weight", trialWeight);
+    formData.append("trial", "true");
+
+    try {
+      const response = await fetch("/api/trial", { method: "POST", body: formData });
+      if (!response.ok) throw new Error("Ошибка сервера");
+      const data = await response.json();
+      setTrialResult(data);
+    } catch (err: any) {
+      setTrialError(err.message || "Что-то пошло не так");
+    } finally {
+      setTrialLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-charcoal/80 backdrop-blur-sm"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <motion.div
+          initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
+          className="bg-ivory w-full max-w-md rounded-3xl shadow-2xl p-8 relative overflow-auto max-h-[90vh]"
+        >
+          <button onClick={onClose} className="absolute top-5 right-5 p-2 bg-charcoal/5 rounded-full hover:bg-charcoal/10">
+            <X className="w-5 h-5 text-charcoal" />
+          </button>
+
+          <p className="font-serif text-gold text-xs tracking-[0.3em] uppercase mb-2">Бесплатный анализ</p>
+          <h2 className="text-2xl font-serif text-charcoal mb-6">Узнайте свой стиль</h2>
+
+          {!trialResult ? (
+            <>
+              <p className="text-sm text-charcoal/60 mb-6">
+                Чёткое фото лица при хорошем освещении — для максимального сходства в генерациях
+              </p>
+
+              <div className="flex gap-3 mb-6">
+                <div className="flex-1">
+                  <label className="text-xs text-charcoal/60 mb-1 block">Рост (см)</label>
+                  <input
+                    type="number"
+                    value={trialHeight}
+                    onChange={(e) => setTrialHeight(e.target.value)}
+                    placeholder="Например, 175"
+                    className="w-full px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-charcoal/60 mb-1 block">Вес (кг)</label>
+                  <input
+                    type="number"
+                    value={trialWeight}
+                    onChange={(e) => setTrialWeight(e.target.value)}
+                    placeholder="Например, 65"
+                    className="w-full px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold"
+                  />
+                </div>
+              </div>
+
+              {trialPreviewUrls.length === 0 ? (
+                <div
+                  onClick={() => trialFileInputRef.current?.click()}
+                  className="border-2 border-dashed border-charcoal/20 rounded-2xl p-8 flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all mb-6"
+                >
+                  <Camera className="w-8 h-8 text-charcoal/30 mb-2" />
+                  <p className="text-sm text-charcoal/50">Загрузить фото</p>
+                  <p className="text-xs text-charcoal/30 mt-1">Чёткое фото лица, взгляд в камеру, хорошее освещение</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-2 mb-6">
+                  {trialPreviewUrls.map((url, idx) => (
+                    <div key={idx} className="aspect-square rounded-xl overflow-hidden relative">
+                      <img src={url} alt="" className="w-full h-full object-cover" />
+                      <button
+                        onClick={() => {
+                          setTrialFiles(files => files.filter((_, i) => i !== idx));
+                          setTrialPreviewUrls(urls => urls.filter((_, i) => i !== idx));
+                        }}
+                        className="absolute top-1 right-1 bg-charcoal/60 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <input
+                ref={trialFileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleTrialFileSelect}
+                className="hidden"
+              />
+
+              {trialError && (
+                <p className="text-red-500 text-sm mb-4">{trialError}</p>
+              )}
+
+              <button
+                onClick={handleTrialSubmit}
+                disabled={trialLoading || trialFiles.length === 0 || !trialHeight || !trialWeight}
+                className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors disabled:opacity-50"
+              >
+                {trialLoading ? "Анализируем..." : "Получить бесплатный анализ"}
+              </button>
+            </>
+          ) : (
+            <div className="text-center">
+              <div className="w-16 h-16 rounded-full bg-gold/20 flex items-center justify-center mx-auto mb-4">
+                <Sparkles className="w-8 h-8 text-gold" />
+              </div>
+              <h3 className="text-xl font-serif text-charcoal mb-4">Анализ готов!</h3>
+              <p className="text-sm text-charcoal/70 whitespace-pre-wrap">{trialResult.greetingAndAnalysis}</p>
+              <button
+                onClick={onClose}
+                className="mt-6 w-full py-4 rounded-2xl bg-charcoal text-ivory font-semibold hover:bg-charcoal/90 transition-colors"
+              >
+                Закрыть
+              </button>
+            </div>
+          )}
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
 const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
   isOpen: boolean;
   onClose: () => void;
@@ -396,6 +572,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
   const [birthDay, setBirthDay] = useState("");
   const [birthMonth, setBirthMonth] = useState("");
   const [birthYear, setBirthYear] = useState("");
+  const [birthRegion, setBirthRegion] = useState(""); // для гороскопа
+  const [birthCity, setBirthCity] = useState(""); // для гороскопа
+  const [birthTime, setBirthTime] = useState(""); // для гороскопа
   const [looksCount, setLooksCount] = useState(3);
   const [loadingState, setLoadingState] = useState<{ step: number; text: string } | null>(null);
 
@@ -410,6 +589,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
       setBirthDay("");
       setBirthMonth("");
       setBirthYear("");
+      setBirthRegion("");
+      setBirthCity("");
+      setBirthTime("");
       setResult(null);
       setErrorMsg(null);
       setLoadingState(null);
@@ -503,6 +685,15 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
       formData.append("userName", userName);
       if (birthDay && birthMonth && birthYear) {
         formData.append("birthDate", `${birthDay}.${birthMonth}.${birthYear}`);
+      }
+      if (birthRegion) {
+        formData.append("birthRegion", birthRegion);
+      }
+      if (birthCity) {
+        formData.append("birthCity", birthCity);
+      }
+      if (birthTime) {
+        formData.append("birthTime", birthTime);
       }
 
       const response = await fetch("/api/stylize", {
@@ -778,6 +969,46 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                         onChange={(e) => setBirthYear(e.target.value)}
                         placeholder="ГГГГ"
                         className="w-24 px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm text-center"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Birth place and time — premium astro feature */}
+                {tier === "premium" && (
+                <div className="w-full max-w-md mb-6">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-medium text-charcoal/70">
+                        Место и время рождения
+                      </label>
+                      <span className="text-[10px] uppercase tracking-widest font-bold text-gold bg-gold/10 px-2 py-0.5 rounded-full">
+                        Астро
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-charcoal/40 mb-2">
+                      Для точного астрологического разбора укажите город и время рождения
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        type="text"
+                        value={birthRegion}
+                        onChange={(e) => setBirthRegion(e.target.value)}
+                        placeholder="Область"
+                        className="w-32 px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
+                      />
+                      <input
+                        type="text"
+                        value={birthCity}
+                        onChange={(e) => setBirthCity(e.target.value)}
+                        placeholder="Город"
+                        className="w-32 px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
+                      />
+                      <input
+                        type="time"
+                        value={birthTime}
+                        onChange={(e) => setBirthTime(e.target.value)}
+                        placeholder="Время"
+                        className="w-28 px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
                       />
                     </div>
                   </div>
@@ -1121,6 +1352,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
 export default function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPricingOpen, setIsPricingOpen] = useState(false);
+  const [isTrialModalOpen, setIsTrialModalOpen] = useState(false);
   const [modalKey, setModalKey] = useState(0);
   const [currentTier, setCurrentTier] = useState<Tier>("standard");
   const [userName, setUserName] = useState(getSavedName);
@@ -1133,6 +1365,10 @@ export default function App() {
     const t = tier || "standard";
     setSelectedPricingTier(t);
     setTimeout(() => setIsPricingOpen(true), 0);
+  };
+
+  const openTrialModal = () => {
+    setIsTrialModalOpen(true);
   };
 
   const handlePaid = (tier: Tier) => {
@@ -1172,6 +1408,7 @@ export default function App() {
         {showWelcome && <WelcomeScreen key="welcome" onSubmit={handleNameSubmit} />}
       </AnimatePresence>
       <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} initialTier={selectedPricingTier} />
+      <TrialModal isOpen={isTrialModalOpen} onClose={() => setIsTrialModalOpen(false)} />
       <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} />
 
       {/* 1. Header */}
@@ -1273,6 +1510,11 @@ export default function App() {
                 onClick={() => document.getElementById('lookbook')?.scrollIntoView({ behavior: 'smooth' })}
                 className="border border-ivory/40 text-ivory px-10 py-4 rounded-full text-base font-medium hover:bg-ivory/10 transition-colors">
                 Смотреть примеры
+              </button>
+              <button
+                onClick={() => openTrialModal()}
+                className="border border-gold/40 text-gold px-10 py-4 rounded-full text-base font-medium hover:bg-gold/10 transition-colors">
+                Попробовать бесплатно
               </button>
             </div>
           </motion.div>
