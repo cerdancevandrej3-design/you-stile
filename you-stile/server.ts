@@ -774,11 +774,20 @@ loadList();
         maxTokens: 2048,
       });
 
-      // Очищаем ответ от возможных ```json ``` блоков
-      let cleanText = analysisText;
-      if (typeof cleanText === 'string') {
-        cleanText = cleanText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
-      }
+      // Очищаем ответ от markdown
+      let cleanText = typeof analysisText === 'string' ? analysisText : String(analysisText);
+      // Убираем все markdown блоки ```...```
+      cleanText = cleanText.replace(/```[\w]*\s*/gi, '');
+      cleanText = cleanText.replace(/```/gi, '');
+      // Убираем **жирный**, *курсив*, # заголовки
+      cleanText = cleanText.replace(/\*\*([^*]+)\*\*/g, '$1');
+      cleanText = cleanText.replace(/\*([^*]+)\*/g, '$1');
+      cleanText = cleanText.replace(/^#{1,6}\s+/gm, '');
+      // Убираем списки - и *
+      cleanText = cleanText.replace(/^[\s]*[-*]\s+/gm, '• ');
+      // Убираем нумерованные списки
+      cleanText = cleanText.replace(/^[\s]*\d+\.\s+/gm, '');
+      cleanText = cleanText.trim();
 
       res.json({ greetingAndAnalysis: cleanText || "Спасибо за фото! Ваш стиль уникален — обратитесь к нашим образам для персонализированных рекомендаций." });
     } catch (error) {

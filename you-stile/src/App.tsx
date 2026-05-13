@@ -296,7 +296,7 @@ const TrialModal = ({ isOpen, onClose }: {
       >
         <motion.div
           initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
-          className="bg-ivory w-full max-w-2xl rounded-3xl shadow-2xl p-8 relative overflow-auto max-h-[90vh]"
+          className="bg-ivory w-full max-w-4xl rounded-3xl shadow-2xl p-8 relative overflow-auto max-h-[90vh]"
         >
           <button onClick={onClose} className="absolute top-5 right-5 p-2 bg-charcoal/5 rounded-full hover:bg-charcoal/10">
             <X className="w-5 h-5 text-charcoal" />
