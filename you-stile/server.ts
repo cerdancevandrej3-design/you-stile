@@ -768,10 +768,11 @@ loadList();
 
       const analysisText = await callPolzaChat({
         model: ANALYSIS_MODEL,
-        systemPrompt: "Ты дружелюбный стилист-консультант. Отвечай ТОЛЬКО текстом, без JSON, без кодовых блоков, без markdown разметки.",
+        systemPrompt: "Ты дружелюбный стилист-консультант. Отвечай ТОЛЬКО обычным текстом на русском языке, без JSON, без кодовых блоков, без звёздочек и заголовков.",
         messages,
         temperature: 0.7,
         maxTokens: 2048,
+        useJsonFormat: false, // Отключаем JSON формат
       });
 
       // Очищаем ответ от markdown
