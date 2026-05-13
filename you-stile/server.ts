@@ -577,8 +577,9 @@ loadList();
       }
 
       let analysisData: any;
+      let analysisText = "";
       try {
-        const analysisText = await callPolzaChat({
+        analysisText = await callPolzaChat({
           model: ANALYSIS_MODEL,
           systemPrompt,
           messages,
@@ -603,7 +604,20 @@ loadList();
         return res.end();
       }
 
-      const { greetingAndAnalysis, bodyTypeSummary, astroReading, looks } = analysisData;
+      let { greetingAndAnalysis, bodyTypeSummary, looks } = analysisData;
+      let astroReading = analysisData?.astroReading;
+
+      // Fallback: искать astroReading в raw-тексте между маркерами
+      if (!astroReading && analysisText) {
+        const match = analysisText.match(/⭐ ЗАДАЧА ПЕРСОНАЛЬНОГО ПРЕДСКАЗАНИЯ:([\s\S]*?)(?=\n\n[🎯🌈🌞]|$)/i);
+        if (match && match[1]) {
+          astroReading = match[1].trim();
+          console.log("[Astro] Found astroReading via fallback parsing");
+        }
+      }
+
+      console.log("[Astro] Final astroReading:", astroReading ? "present (" + astroReading.length + " chars)" : "MISSING");
+      console.log("[Astro] analysisData keys:", Object.keys(analysisData));
 
       if (!looks || !Array.isArray(looks) || looks.length === 0) {
         clearInterval(heartbeat);
@@ -616,7 +630,11 @@ loadList();
       // Step 2: Generate images with Nano Banana 2 — IN PARALLEL
       res.write(JSON.stringify({ type: "progress", step: 2.0, text: `Визуализация ${looks.length} образов параллельно...` }) + "\n");
 
-      const looksWithImages = await Promise.all(looks.map(async (look: any) => {
+      // Track completed images for progress updates
+      let completedImages = 0;
+      const totalImages = looks.length;
+
+      const looksWithImages = await Promise.all(looks.map(async (look: any, idx: number) => {
         let generatedImageBase64 = null;
         let imageGenerationError = null;
 
@@ -647,6 +665,15 @@ loadList();
         } else {
           imageGenerationError = "No editPrompt provided for this look.";
         }
+
+        // Progress update after each image completes
+        completedImages++;
+        const progressStep = 2.0 + (completedImages / totalImages) * 1.5;
+        res.write(JSON.stringify({
+          type: "progress",
+          step: progressStep,
+          text: `Сгенерировано ${completedImages}/${totalImages} образов...`
+        }) + "\n");
 
         return { ...look, image: generatedImageBase64, imageError: imageGenerationError };
       }));

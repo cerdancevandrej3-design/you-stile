@@ -632,7 +632,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                       className="absolute top-0 left-0 h-full bg-gradient-to-r from-gold/50 via-gold to-gold/50"
                       initial={{ width: "0%" }}
                       animate={{ width: `${(loadingState.step / 5) * 100}%` }}
-                      transition={{ duration: 0.8, ease: "easeInOut" }}
+                      transition={{ duration: 0.3, ease: "easeOut" }}
                     />
                   </div>
                   
