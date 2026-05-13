@@ -738,11 +738,29 @@ loadList();
       const referenceImageBase64 = referenceImage.buffer.toString("base64");
       const mimeType = referenceImage.mimetype;
 
+      const trialPrompt = `Ты — опытный стилист-эксперт. По фотографии человека дай краткий персональный анализ его внешности и стиля.
+
+ПРОФИЛЬ ВНЕШНОСТИ:
+- Определи примерный возраст, тип лица, черты
+- Оцени цветотип (времена года)
+- Отметь сильные стороны внешности
+
+СТИЛИСТИЧЕСКИЕ РЕКОМЕНДАЦИИ:
+- Какие цвета и оттенки тебе подходят больше всего
+- Какие фасоны и силуэты подчеркнут достоинства
+- Какие ткани и материалы предпочтительны
+- 2-3 ключевых совета по гардеробу
+
+РОСТ: ${height} см
+ВЕС: ${weight} кг
+
+Ответь ТОЛЬКО текстом на русском языке, без JSON, без списков в квадратных скобках, 3-5 абзацев. Будь конкретным и полезным.`;
+
       const messages = [
         {
           role: "user",
           content: [
-            { type: "text", text: `Проанализируй внешность человека по фото и дай краткий анализ его стиля. Рост: ${height} см, вес: ${weight} кг. Ответь на русском языке, дай рекомендации по стилю одежды.` },
+            { type: "text", text: trialPrompt },
             { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
           ],
         },
@@ -750,22 +768,19 @@ loadList();
 
       const analysisText = await callPolzaChat({
         model: ANALYSIS_MODEL,
-        systemPrompt: systemPrompt,
+        systemPrompt: "Ты дружелюбный стилист-консультант. Отвечай ТОЛЬКО текстом, без JSON, без кодовых блоков, без markdown разметки.",
         messages,
         temperature: 0.7,
         maxTokens: 2048,
       });
 
-      let analysisData: any;
-      if (typeof analysisText === "string") {
-        try { analysisData = JSON.parse(analysisText); } catch { analysisData = { greetingAndAnalysis: analysisText }; }
-      } else {
-        analysisData = analysisText;
+      // Очищаем ответ от возможных ```json ``` блоков
+      let cleanText = analysisText;
+      if (typeof cleanText === 'string') {
+        cleanText = cleanText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
       }
 
-      const greetingAndAnalysis = analysisData?.greetingAndAnalysis || analysisText || "Анализ готов!";
-
-      res.json({ greetingAndAnalysis });
+      res.json({ greetingAndAnalysis: cleanText || "Спасибо за фото! Ваш стиль уникален — обратитесь к нашим образам для персонализированных рекомендаций." });
     } catch (error) {
       console.error("Error in /api/trial:", error);
       res.status(500).json({ error: (error as Error).message });
