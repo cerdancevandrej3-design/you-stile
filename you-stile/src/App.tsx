@@ -338,10 +338,10 @@ const TrialModal = ({ isOpen, onClose, onUpgrade }: {
               {trialPreviewUrls.length === 0 ? (
                 <div
                   onClick={() => trialFileInputRef.current?.click()}
-                  className="border-2 border-dashed border-charcoal/20 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all mb-6"
+                  className="w-32 h-24 border-2 border-dashed border-charcoal/20 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all mb-6"
                 >
-                  <Camera className="w-6 h-6 text-charcoal/30 mb-1" />
-                  <p className="text-xs text-charcoal/50">Загрузить фото</p>
+                  <Camera className="w-5 h-5 text-charcoal/30 mb-1" />
+                  <p className="text-[10px] text-charcoal/50">Загрузить фото</p>
                 </div>
               ) : (
                 <div className="flex gap-2 mb-6">
