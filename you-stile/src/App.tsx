@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download } from 'lucide-react';
+import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download, Lock } from 'lucide-react';
 
 // --- localStorage helpers ---
 function getSavedName(): string { return localStorage.getItem("you-stile-user-name") || ""; }
@@ -223,29 +223,30 @@ const PaymentModal = ({ isOpen, tier, onPaid, onClose }: {
 };
 
 // --- Trial Modal — бесплатный анализ ---
-const TrialModal = ({ isOpen, onClose }: {
+const TrialModal = ({ isOpen, onClose, onUpgrade }: {
   isOpen: boolean;
   onClose: () => void;
+  onUpgrade: () => void;
 }) => {
   const [trialFiles, setTrialFiles] = useState<File[]>([]);
   const [trialPreviewUrls, setTrialPreviewUrls] = useState<string[]>([]);
   const [trialHeight, setTrialHeight] = useState("");
   const [trialWeight, setTrialWeight] = useState("");
   const [trialResult, setTrialResult] = useState<{ greetingAndAnalysis: string } | null>(null);
-  const [trialLoading, setTrialLoading] = useState(false);
   const [trialError, setTrialError] = useState<string | null>(null);
   const [trialStep, setTrialStep] = useState(0);
+  const [trialPreviewUrl, setTrialPreviewUrl] = useState<string | null>(null);
   const trialFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isOpen) {
       setTrialFiles([]);
       setTrialPreviewUrls([]);
+      setTrialPreviewUrl(null);
       setTrialHeight("");
       setTrialWeight("");
       setTrialResult(null);
       setTrialError(null);
-      setTrialLoading(false);
       setTrialStep(0);
     }
   }, [isOpen]);
@@ -253,14 +254,16 @@ const TrialModal = ({ isOpen, onClose }: {
   const handleTrialFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const newFiles = Array.from(e.target.files);
-      setTrialFiles(newFiles.slice(0, 3));
-      setTrialPreviewUrls(newFiles.slice(0, 3).map(file => URL.createObjectURL(file)));
+      const files = newFiles.slice(0, 3);
+      const urls = files.map(file => URL.createObjectURL(file));
+      setTrialFiles(files);
+      setTrialPreviewUrls(urls);
+      setTrialPreviewUrl(urls[0] || null);
     }
   };
 
   const handleTrialSubmit = async () => {
     if (trialFiles.length === 0 || !trialHeight || !trialWeight) return;
-    setTrialLoading(true);
     setTrialError(null);
     setTrialStep(1);
 
@@ -280,8 +283,6 @@ const TrialModal = ({ isOpen, onClose }: {
       setTrialResult(data);
     } catch (err: any) {
       setTrialError(err.message || "Что-то пошло не так");
-    } finally {
-      setTrialLoading(false);
     }
   };
 
@@ -376,13 +377,13 @@ const TrialModal = ({ isOpen, onClose }: {
 
               <button
                 onClick={handleTrialSubmit}
-                disabled={trialLoading || trialFiles.length === 0 || !trialHeight || !trialWeight}
+                disabled={trialStep > 0 || trialFiles.length === 0 || !trialHeight || !trialWeight}
                 className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors disabled:opacity-50"
               >
-                {trialLoading ? "Анализируем..." : "Получить бесплатный анализ"}
+                {trialStep > 0 ? "Анализируем..." : "Получить бесплатный анализ"}
               </button>
 
-              {trialLoading && (
+              {trialStep > 0 && (
                 <div className="mt-4">
                   <div className="w-full bg-charcoal/10 rounded-full h-2 overflow-hidden">
                     <motion.div
@@ -399,24 +400,66 @@ const TrialModal = ({ isOpen, onClose }: {
               )}
             </>
           ) : (
-            <div className="text-center">
-              <div className="w-16 h-16 rounded-full bg-gold/20 flex items-center justify-center mx-auto mb-4">
-                <Sparkles className="w-8 h-8 text-gold" />
+            <div>
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 rounded-full bg-gold/20 flex items-center justify-center">
+                  <Sparkles className="w-6 h-6 text-gold" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-serif text-charcoal">Анализ готов!</h3>
+                  <p className="text-sm text-charcoal/60">Ваш персональный стиль</p>
+                </div>
               </div>
-              <h3 className="text-xl font-serif text-charcoal mb-4">Анализ готов!</h3>
-              <div className="bg-gold/5 rounded-2xl p-4 text-left max-h-64 overflow-y-auto">
+
+              {/* Blurred Photo + Lock */}
+              {trialPreviewUrl && (
+                <div className="relative rounded-2xl overflow-hidden mb-6">
+                  <img
+                    src={trialPreviewUrl}
+                    alt=""
+                    className="w-full max-w-sm mx-auto h-80 object-cover filter blur-lg brightness-50"
+                  />
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <div className="w-16 h-16 rounded-full bg-charcoal/80 flex items-center justify-center mb-3">
+                      <Lock className="w-8 h-8 text-white" />
+                    </div>
+                    <p className="text-white/80 text-sm font-medium">Разблокируйте полный доступ</p>
+                    <p className="text-white/60 text-xs mt-1">Получите 3 готовых образа</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Analysis Text */}
+              <div className="bg-white rounded-2xl p-6 mb-6">
+                <h4 className="text-sm font-medium text-charcoal/60 mb-3 flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-gold" />
+                  Анализ вашего стиля
+                </h4>
                 <p className="text-sm text-charcoal/80 whitespace-pre-wrap leading-relaxed">
                   {typeof trialResult?.greetingAndAnalysis === 'string'
                     ? trialResult?.greetingAndAnalysis
                     : JSON.stringify(trialResult, null, 2)}
                 </p>
               </div>
-              <button
-                onClick={onClose}
-                className="mt-6 w-full py-4 rounded-2xl bg-charcoal text-ivory font-semibold hover:bg-charcoal/90 transition-colors"
-              >
-                Закрыть
-              </button>
+
+              {/* CTA Buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={onClose}
+                  className="flex-1 py-3 rounded-xl border border-charcoal/20 text-charcoal font-medium hover:bg-charcoal/5 transition-colors text-sm"
+                >
+                  Закрыть
+                </button>
+                <button
+                  onClick={() => {
+                    onClose();
+                    onUpgrade();
+                  }}
+                  className="flex-1 py-3 rounded-xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors text-sm"
+                >
+                  Получить 3 образа
+                </button>
+              </div>
             </div>
           )}
         </motion.div>
@@ -1435,7 +1478,7 @@ export default function App() {
         {showWelcome && <WelcomeScreen key="welcome" onSubmit={handleNameSubmit} />}
       </AnimatePresence>
       <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} initialTier={selectedPricingTier} />
-      <TrialModal isOpen={isTrialModalOpen} onClose={() => setIsTrialModalOpen(false)} />
+      <TrialModal isOpen={isTrialModalOpen} onClose={() => setIsTrialModalOpen(false)} onUpgrade={() => setIsPricingOpen(true)} />
       <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} />
 
       {/* 1. Header */}
