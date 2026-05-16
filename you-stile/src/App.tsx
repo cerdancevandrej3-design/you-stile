@@ -104,14 +104,14 @@ const MagicMirror = () => {
     >
       {/* Before Image (Bottom) */}
       <img 
-        src="/after.jpg" 
+        src="/after.png" 
         alt="Before: Casual Home Clothes" 
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
       />
       
       {/* After Image (Top, Clipped) */}
       <img 
-        src="/before.jpg" 
+        src="/before.png" 
         alt="After: Premium Styled Look" 
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
         style={{ clipPath: `inset(0 0 0 ${sliderPosition}%)` }}
@@ -1899,7 +1899,7 @@ export default function App() {
         {/* Background image */}
         <div
           className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{ backgroundImage: "url('/gucci.jpg')" }}
+          style={{ backgroundImage: "url('/gucci.png')" }}
         />
         {/* Overlay — центр тёмнее для читаемости, края прозрачнее */}
         <div className="absolute inset-0 bg-gradient-to-b from-charcoal/60 via-charcoal/50 to-charcoal/70" />
