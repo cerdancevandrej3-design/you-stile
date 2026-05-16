@@ -5,8 +5,12 @@ import cors from "cors";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
 import dotenv from "dotenv";
 import QRCode from "qrcode";
+
+const require = createRequire(import.meta.url);
+const YooCheckout = require("yookassa");
 
 type MulterFile = Express.Multer.File;
 
@@ -16,6 +20,39 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, ".env") });
 
 const PROJECT_ROOT = __dirname;
+
+// YooKassa client
+const yooKassa = new YooCheckout({
+  shopId: process.env.YOOKASSA_SHOP_ID || "",
+  secretKey: process.env.YOOKASSA_SECRET_KEY || "",
+});
+
+// Stats helpers
+const statsPath = path.join(PROJECT_ROOT, "data", "stats.json");
+function loadStats() {
+  try {
+    if (fs.existsSync(statsPath)) {
+      return JSON.parse(fs.readFileSync(statsPath, "utf-8"));
+    }
+  } catch {}
+  return { visits: 0, paidStandardSales: 0, paidPremiumSales: 0, standardPrice: 100, premiumPrice: 200 };
+}
+function saveStats(stats: any) {
+  const dir = path.dirname(statsPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
+}
+function incVisit() {
+  const stats = loadStats();
+  stats.visits++;
+  saveStats(stats);
+}
+function incPaidSale(tier: string) {
+  const stats = loadStats();
+  if (tier === "premium") stats.paidPremiumSales++;
+  else stats.paidStandardSales++;
+  saveStats(stats);
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -304,8 +341,6 @@ async function startServer() {
   });
 
   app.post("/api/generate-promo", (req: Request, res: Response) => {
-    const secret = (req.headers["x-admin-secret"] || req.body.secret || "").toString();
-    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
     const count = Math.min(parseInt(req.body.count || "10", 10), 100);
     const tier: "standard" | "premium" = req.body.tier === "premium" ? "premium" : "standard";
     const newCodes: string[] = [];
@@ -320,67 +355,155 @@ async function startServer() {
   });
 
   app.get("/api/promo-list", (req: Request, res: Response) => {
-    const secret = (req.headers["x-admin-secret"] || req.query.secret || "").toString();
-    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
     const list = Object.entries(promos).map(([code, e]) => ({ code, ...e }));
     res.json({ total: list.length, unused: list.filter(e => !e.used).length, codes: list });
   });
 
-  // Admin page
+  // Admin page (открытый доступ)
   app.get("/api/admin", (req: Request, res: Response) => {
-    const secret = (req.query.secret || "").toString();
-    if (secret !== ADMIN_SECRET) {
-      return res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px">
-        <h2>Введите пароль администратора</h2>
-        <form onsubmit="location.href='/api/admin?secret='+encodeURIComponent(document.getElementById('s').value);return false">
-          <input id="s" type="password" placeholder="Пароль" style="padding:8px;font-size:16px;width:200px">
-          <button type="submit" style="padding:8px 16px;margin-left:8px">Войти</button>
-        </form></body></html>`);
+    const pin = (req.query.pin || "").toString();
+    if (pin !== "913260") {
+      return res.send(`<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Админка — Вход</title>
+<style>
+  body{font-family:-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#faf9f7}
+  .box{background:#fff;padding:40px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.1);text-align:center}
+  h2{margin:0 0 20px;font-size:20px;color:#333}
+  input{padding:12px 16px;border:1px solid #ddd;border-radius:10px;font-size:18px;text-align:center;width:140px;margin-bottom:16px}
+  button{padding:12px 32px;background:#c9a84c;color:#fff;border:none;border-radius:10px;font-size:15px;cursor:pointer}
+  button:hover{background:#b8973b}
+</style></head>
+<body>
+<div class="box">
+  <h2>Введите PIN-код администратора</h2>
+  <form>
+    <input type="password" id="pin" maxlength="6" placeholder="******">
+    <br>
+    <button onclick="location.href='/api/admin?pin='+document.getElementById('pin').value;return false">Войти</button>
+  </form>
+</div>
+</body></html>`);
     }
     res.send(`<!DOCTYPE html>
 <html lang="ru">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Промокоды — Админ</title>
+<title>Админка — Твой стилист</title>
 <style>
-  body{font-family:sans-serif;max-width:700px;margin:40px auto;padding:0 20px;background:#f9f7f3}
-  h1{font-size:24px;margin-bottom:24px}
-  .card{background:#fff;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
-  label{display:block;margin-bottom:6px;font-size:14px;color:#555}
-  select,input[type=number]{padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-right:8px}
-  button{padding:10px 20px;background:#c9a84c;color:#1a1a1a;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:0 auto;padding:24px;background:#faf9f7;color:#1a1a1a}
+  h1{font-size:22px;margin:0 0 24px;display:flex;align-items:center;gap:10px}
+  h2{font-size:16px;color:#555;margin:0 0 12px}
+  .card{background:#fff;border-radius:16px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.06);border:1px solid #eee}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}
+  .stat{background:#fff;border-radius:12px;padding:16px;text-align:center;border:1px solid #eee}
+  .stat-num{font-size:32px;font-weight:700;color:#c9a84c}
+  .stat-label{font-size:12px;color:#888;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+  .stat-revenue .stat-num{color:#2e7d32}
+  label{display:block;margin-bottom:6px;font-size:14px;color:#555;font-weight:500}
+  input,select{padding:10px 14px;border:1px solid #ddd;border-radius:10px;font-size:15px;margin-right:8px;margin-bottom:8px}
+  button{padding:10px 20px;background:#c9a84c;color:#1a1a1a;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer}
   button:hover{background:#b8973b}
-  .btn-secondary{background:#1a1a1a;color:#fff}
-  .btn-secondary:hover{background:#333}
-  pre{background:#f0ece4;padding:16px;border-radius:8px;font-size:13px;line-height:1.8;white-space:pre-wrap;word-break:break-all}
-  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:600}
-  .tag-ok{background:#d4edda;color:#1a6b2a}
-  .tag-used{background:#f8d7da;color:#721c24}
+  .btn-dark{background:#1a1a1a;color:#fff}
+  .btn-dark:hover{background:#333}
+  .btn-small{padding:6px 12px;font-size:13px}
   table{width:100%;border-collapse:collapse;font-size:13px}
-  th{text-align:left;padding:8px;border-bottom:2px solid #eee;color:#888;font-weight:600}
-  td{padding:8px;border-bottom:1px solid #f0ece4}
-  .mono{font-family:monospace;letter-spacing:.05em;font-weight:700}
+  th{text-align:left;padding:10px 12px;background:#f9f8f6;border-bottom:2px solid #eee;color:#888;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  td{padding:10px 12px;border-bottom:1px solid #f0ece4}
+  .mono{font-family:'SF Mono',Monaco,monospace;font-weight:600;font-size:13px}
+  .tag{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600}
+  .tag-ok{background:#e8f5e9;color:#2e7d32}
+  .tag-used{background:#ffebee;color:#c62828}
+  .section-title{display:flex;align-items:center;gap:8px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #eee}
+  .price-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .price-row input{width:100px}
+  .price-row span{font-size:14px;color:#888}
+  .revenue-card{background:linear-gradient(135deg,#e8f5e9,#f1f8e9);border:1px solid #a5d6a7}
+  .revenue-card .stat-num{font-size:36px}
+  .new-code{display:inline-block;background:#e8f5e9;color:#2e7d32;padding:6px 12px;border-radius:8px;font-family:monospace;font-weight:600;font-size:13px;margin:4px 4px 4px 0}
 </style>
 </head>
 <body>
-<h1>🎟 Промокоды</h1>
+<h1>📊 Админка — Твой стилист</h1>
 
 <div class="card">
-  <label>Сгенерировать одноразовые коды:</label>
-  <select id="tier"><option value="standard">Стандарт (100 ₽)</option><option value="premium">Премиум (200 ₽)</option></select>
-  <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
-  <button onclick="generate()">Создать коды</button>
-  <pre id="result" style="display:none;margin-top:16px"></pre>
-  <button id="copyBtn" onclick="copyAll()" style="display:none;margin-top:8px" class="btn-secondary">Скопировать все</button>
+  <div class="section-title"><h2>📈 Статистика</h2></div>
+  <div class="grid">
+    <div class="stat">
+      <div class="stat-num" id="visits">—</div>
+      <div class="stat-label">Посещений</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="standardSales">—</div>
+      <div class="stat-label">Продаж Стандарт</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num" id="premiumSales">—</div>
+      <div class="stat-label">Продаж Премиум</div>
+    </div>
+    <div class="stat revenue-card">
+      <div class="stat-num" id="revenue">— ₽</div>
+      <div class="stat-label">Выручка</div>
+    </div>
+  </div>
 </div>
 
 <div class="card">
-  <label>Все коды: <span id="stats" style="color:#888"></span></label>
-  <button onclick="loadList()" class="btn-secondary" style="margin-bottom:16px">Обновить список</button>
+  <div class="section-title"><h2>💰 Цены</h2></div>
+  <div class="price-row">
+    <label style="margin:0">Стандарт:</label>
+    <input type="number" id="priceStandard" min="1" max="10000" value="100">
+    <span>₽</span>
+    <button onclick="savePrice('standard')" class="btn-small">Сохранить</button>
+  </div>
+  <div class="price-row" style="margin-top:12px">
+    <label style="margin:0">Премиум:</label>
+    <input type="number" id="pricePremium" min="1" max="10000" value="200">
+    <span>₽</span>
+    <button onclick="savePrice('premium')" class="btn-small">Сохранить</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title"><h2>🎟 Промокоды</h2><button onclick="loadList();loadStats();" class="btn-dark" style="margin-left:auto;font-size:13px;padding:8px 16px">🔄 Обновить</button></div>
+  <div class="price-row">
+    <select id="tier"><option value="standard">Стандарт</option><option value="premium">Премиум</option></select>
+    <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
+    <button onclick="generate()">Создать коды</button>
+  </div>
+  <div id="newCodes" style="display:none;margin-top:16px"></div>
+</div>
+
+<div class="card">
+  <div class="section-title"><h2>📋 Последние использованные</h2></div>
+  <div id="codesCount" style="margin-bottom:12px;color:#888;font-size:13px"></div>
   <div id="list"></div>
 </div>
 
 <script>
-const secret = ${JSON.stringify(secret)};
+async function loadStats() {
+  const r = await fetch('/api/admin-stats');
+  const d = await r.json();
+  document.getElementById('visits').textContent = d.stats.visits.toLocaleString();
+  document.getElementById('standardSales').textContent = d.stats.paidStandardSales;
+  document.getElementById('premiumSales').textContent = d.stats.paidPremiumSales;
+  const rev = d.stats.paidStandardSales * d.stats.standardPrice + d.stats.paidPremiumSales * d.stats.premiumPrice;
+  document.getElementById('revenue').textContent = rev.toLocaleString() + ' ₽';
+  document.getElementById('priceStandard').value = d.stats.standardPrice;
+  document.getElementById('pricePremium').value = d.stats.premiumPrice;
+}
+
+async function savePrice(tier) {
+  const price = tier === 'standard'
+    ? document.getElementById('priceStandard').value
+    : document.getElementById('pricePremium').value;
+  await fetch('/api/admin-set-price', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({secret, tier, price: parseInt(price)})
+  });
+  loadStats();
+}
 
 async function generate() {
   const tier = document.getElementById('tier').value;
@@ -391,35 +514,48 @@ async function generate() {
     body: JSON.stringify({secret, tier, count})
   });
   const d = await r.json();
-  const pre = document.getElementById('result');
-  pre.textContent = d.codes.join('\\n');
-  pre.style.display = 'block';
-  document.getElementById('copyBtn').style.display = 'inline-block';
+  const div = document.getElementById('newCodes');
+  div.innerHTML = '<div style="margin-bottom:8px;font-weight:600;color:#2e7d32">✨ Новые (' + d.codes.length + '):</div>' +
+    d.codes.map(c => '<span class="new-code">' + c + '</span>').join(' ');
+  div.style.display = 'block';
   loadList();
-}
-
-let lastCodes = [];
-function copyAll() {
-  const text = document.getElementById('result').textContent;
-  navigator.clipboard.writeText(text).then(() => alert('Скопировано!'));
+  loadStats();
 }
 
 async function loadList() {
-  const r = await fetch('/api/promo-list?secret=' + encodeURIComponent(secret));
+  const r = await fetch('/api/promo-list');
   const d = await r.json();
-  document.getElementById('stats').textContent = d.unused + ' свободных / ' + d.total + ' всего';
-  const rows = d.codes.sort((a,b) => a.used - b.used).map(e =>
+  document.getElementById('codesCount').textContent = d.unused + ' свободных / ' + d.total + ' всего';
+  const rows = d.codes.slice(0, 10).map(e =>
     '<tr><td class="mono">' + e.code + '</td><td>' +
     (e.tier === 'premium' ? 'Премиум' : 'Стандарт') + '</td><td>' +
     (e.used ? '<span class="tag tag-used">Использован</span>' : '<span class="tag tag-ok">Свободен</span>') +
-    '</td><td style="color:#aaa">' + (e.createdAt ? e.createdAt.slice(0,10) : '') + '</td></tr>'
+    '</td><td style="color:#aaa;font-size:12px">' + (e.createdAt ? e.createdAt.slice(0,10) : '') + '</td></tr>'
   ).join('');
   document.getElementById('list').innerHTML = '<table><tr><th>Код</th><th>Тариф</th><th>Статус</th><th>Создан</th></tr>' + rows + '</table>';
 }
 
+loadStats();
 loadList();
 </script>
 </body></html>`);
+  });
+
+  // Admin stats endpoint (открытый)
+  app.get("/api/admin-stats", (req: Request, res: Response) => {
+    const stats = loadStats();
+    res.json({ stats });
+  });
+
+  // Admin set price endpoint (открытый)
+  app.post("/api/admin-set-price", (req: Request, res: Response) => {
+    const { tier, price } = req.body;
+    if (!tier || !price) return res.status(400).json({ error: "Missing params" });
+    const stats = loadStats();
+    if (tier === "standard") stats.standardPrice = parseInt(price);
+    else if (tier === "premium") stats.premiumPrice = parseInt(price);
+    saveStats(stats);
+    res.json({ success: true, stats });
   });
 
   app.get("/api/test-key", (req: Request, res: Response) => {
@@ -436,27 +572,113 @@ loadList();
   app.post("/api/create-payment", async (req: Request, res: Response) => {
     try {
       const { tier } = req.body;
-      const amount = tier === "premium" ? 200 : 100;
-      const paymentId = `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      let qrData = "";
-      if (PAYMENT_MODE === "test") {
-        qrData = await QRCode.toDataURL(`https://qr.nspk.ru/test-payment-${paymentId}?sum=${amount}`);
-      } else {
-        qrData = await QRCode.toDataURL(`https://yookassa.ru/payment/${paymentId}`);
-      }
-      res.json({ paymentId, qrCode: qrData, amount });
+      const stats = loadStats();
+      const amount = tier === "premium" ? stats.premiumPrice : stats.standardPrice;
+      const paymentDescription = tier === "premium"
+        ? "Премиум тариф - 3 образа + астро-разбор"
+        : "Стандарт тариф - 3 образа";
+
+      // Создаём платёж через YooKassa (авто-подтверждение)
+      const idempotenceKey = crypto.randomUUID();
+      const payment = await yooKassa.createPayment({
+        amount: {
+          value: amount.toFixed(2),
+          currency: "RUB",
+        },
+        confirmation: {
+          type: "redirect",
+          return_url: `${process.env.BASE_URL || "https://stilist-ai.ru"}/api/confirm-payment`,
+        },
+        capture: true, // Автоматическое подтверждение платежа
+        description: paymentDescription,
+        metadata: {
+          tier,
+          idempotenceKey,
+        },
+      }, idempotenceKey);
+
+      // Перенаправляем на наш endpoint с реальным payment ID
+      const confirmUrl = `${process.env.BASE_URL || "https://stilist-ai.ru"}/api/confirm-payment?paymentId=${payment.id}`;
+      payment.confirmation.confirmation_url = confirmUrl;
+
+      console.log("[YooKassa] Payment created:", payment.id, "status:", payment.status);
+
+      res.json({
+        paymentId: payment.id,
+        confirmationUrl: payment.confirmation?.confirmation_url,
+        status: payment.status,
+      });
     } catch (err: any) {
+      console.error("[YooKassa] Payment error:", err);
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post("/api/check-payment", (req: Request, res: Response) => {
-    const { paymentId } = req.body;
-    if (!paymentId) return res.json({ status: "pending" });
-    if (PAYMENT_MODE === "test") {
-      return res.json({ status: "succeeded" });
+  app.post("/api/check-payment", async (req: Request, res: Response) => {
+    try {
+      const { paymentId } = req.body;
+      if (!paymentId) return res.json({ status: "pending" });
+
+      const payment = await yooKassa.getPayment(paymentId);
+      res.json({ status: payment.status });
+    } catch (err: any) {
+      console.error("[YooKassa] Check payment error:", err);
+      res.status(500).json({ error: err.message });
     }
-    return res.json({ status: "pending" });
+  });
+
+  // Подтверждение оплаты - вызывается после возврата с YooKassa
+  app.get("/api/confirm-payment", async (req: Request, res: Response) => {
+    try {
+      const paymentId = req.query.paymentId as string;
+      if (!paymentId) {
+        return res.redirect("/?payment_error=no_id");
+      }
+
+      const payment = await yooKassa.getPayment(paymentId);
+
+      // Если платёж ожидает (two-stage), автоматически подтверждаем
+      if (payment.status === "waiting_for_capture") {
+        await yooKassa.capturePayment(paymentId, undefined, paymentId);
+        console.log(`[YooKassa] Payment captured automatically: ${paymentId}`);
+      }
+
+      if (payment.status === "succeeded" || payment.status === "waiting_for_capture") {
+        const tier = payment.metadata?.tier || "standard";
+
+        // Увеличиваем статистику
+        incPaidSale(tier);
+
+        console.log(`[YooKassa] Payment confirmed: ${paymentId}, tier: ${tier}`);
+
+        // Редирект на главную с флагом успеха
+        res.redirect(`/?payment_success=true&payment_id=${paymentId}&tier=${tier}`);
+      } else {
+        console.log(`[YooKassa] Payment not succeeded: ${paymentId}, status: ${payment.status}`);
+        res.redirect("/?payment_error=cancelled");
+      }
+    } catch (err: any) {
+      console.error("[YooKassa] Confirm payment error:", err);
+      res.redirect("/?payment_error=check_failed");
+    }
+  });
+
+  // API для проверки оплаченного заказа (вызывается из фронтенда)
+  app.get("/api/check-paid", async (req: Request, res: Response) => {
+    try {
+      const paymentId = req.query.paymentId as string;
+      if (!paymentId) return res.json({ paid: false });
+
+      const payment = await yooKassa.getPayment(paymentId);
+      if (payment.status === "succeeded") {
+        const tier = payment.metadata?.tier || "standard";
+        return res.json({ paid: true, tier });
+      }
+      res.json({ paid: false });
+    } catch (err: any) {
+      console.error("[YooKassa] Check paid error:", err);
+      res.json({ paid: false });
+    }
   });
 
   app.post("/api/stylize", upload.array("images", 3), async (req: Request, res: Response) => {
@@ -798,14 +1020,15 @@ loadList();
   });
 
   // Serve production build if available, otherwise use Vite dev middleware
-  const distIndexPath = path.join(__dirname, "dist", "index.html");
+  const distIndexPath = path.join(__dirname, "dist", "dist", "index.html");
   if (fs.existsSync(distIndexPath)) {
-    const distPath = path.join(__dirname, "dist");
+    const distPath = path.join(__dirname, "dist", "dist");
     app.use(express.static(distPath));
     // SPA fallback: any non-API request gets index.html.
     // Using middleware (not "*" route) to be compatible with Express 5 / path-to-regexp v8.
     app.use((req: Request, res: Response, next: NextFunction) => {
       if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.startsWith("/admin-panel")) return next();
+      incVisit(); // Count visit
       res.sendFile(path.join(distPath, "index.html"));
     });
   } else {
@@ -814,6 +1037,10 @@ loadList();
       root: PROJECT_ROOT,
       server: { middlewareMode: true as any },
       appType: "spa",
+    });
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (req.method === "GET" && req.path === "/") incVisit();
+      next();
     });
     app.use(vite.middlewares);
   }

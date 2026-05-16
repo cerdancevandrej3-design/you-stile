@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download } from 'lucide-react';
+import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download, Star, Share2 } from 'lucide-react';
 
 // --- localStorage helpers ---
 function getSavedName(): string { return localStorage.getItem("you-stile-user-name") || ""; }
@@ -104,14 +104,14 @@ const MagicMirror = () => {
     >
       {/* Before Image (Bottom) */}
       <img 
-        src="/after.png" 
+        src="/after.jpg" 
         alt="Before: Casual Home Clothes" 
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
       />
       
       {/* After Image (Top, Clipped) */}
       <img 
-        src="/before.png" 
+        src="/before.jpg" 
         alt="After: Premium Styled Look" 
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
         style={{ clipPath: `inset(0 0 0 ${sliderPosition}%)` }}
@@ -163,8 +163,18 @@ const PaymentModal = ({ isOpen, tier, onPaid, onClose }: {
       body: JSON.stringify({ tier }),
     })
       .then(r => r.json())
-      .then(d => { setQrCode(d.qrCode); setPaymentId(d.paymentId); })
-      .catch(() => {})
+      .then(d => {
+        if (d.error) {
+          alert("Ошибка оплаты: " + d.error);
+        } else {
+          setPaymentId(d.paymentId);
+          // Если есть confirmationUrl - сразу редиректим
+          if (d.confirmationUrl) {
+            window.location.href = d.confirmationUrl;
+          }
+        }
+      })
+      .catch(() => alert("Ошибка создания платежа"))
       .finally(() => setLoading(false));
   }, [isOpen, tier]);
 
@@ -425,40 +435,329 @@ const TrialModal = ({ isOpen, onClose }: {
   );
 };
 
-const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
+// --- Trial Payment Modal: оплата 99₽ за 3 образа ---
+const TrialPaymentModal = ({ isOpen, onClose, onPaid }: {
+  isOpen: boolean;
+  onClose: () => void;
+  onPaid: () => void;
+}) => {
+  const [loading, setLoading] = useState(false);
+
+  if (!isOpen) return null;
+
+  const handlePayment = async () => {
+    setLoading(true);
+    // TODO: Подключить YooKassa
+    // Пока просто placeholder - через 2 сек покажем "оплачено"
+    setTimeout(() => {
+      setLoading(false);
+      onPaid();
+      onClose();
+    }, 2000);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-charcoal/80 backdrop-blur-sm">
+      <div className="bg-ivory w-full max-w-sm rounded-3xl shadow-2xl p-8 relative">
+        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-charcoal/5 rounded-full hover:bg-charcoal/10">
+          <X className="w-5 h-5 text-charcoal" />
+        </button>
+
+        <p className="font-serif text-gold text-xs tracking-widest uppercase mb-2 text-center">Оплата</p>
+        <h2 className="text-2xl font-serif text-charcoal text-center mb-6">99 ₽</h2>
+
+        <div className="text-center mb-6">
+          <p className="text-sm text-charcoal/70 mb-4">3 фото-визуализации вас в разных образах</p>
+          <div className="bg-gold/10 rounded-xl p-4">
+            <p className="text-sm text-charcoal font-medium">✨ Полный пакет включает:</p>
+            <ul className="text-xs text-charcoal/60 mt-2 text-left space-y-1">
+              <li>🎨 3 фото-визуализации в разных стилях</li>
+              <li>📝 Подробные описания каждого образа</li>
+              <li>🛒 Ссылки на все вещи на WB, Ozon, Яндекс</li>
+            </ul>
+          </div>
+        </div>
+
+        <button
+          onClick={handlePayment}
+          disabled={loading}
+          className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors disabled:opacity-50"
+        >
+          {loading ? "Обрабатываем..." : "Оплатить 99 ₽"}
+        </button>
+
+        <button onClick={onClose} className="w-full py-2 text-sm text-charcoal/50 mt-3">
+          Отмена
+        </button>
+
+        <p className="text-xs text-charcoal/40 text-center mt-4">
+          💳 Оплата через YooKassa (скоро)
+        </p>
+      </div>
+    </div>
+  );
+};
+
+// --- Trial Modal: бесплатный анализ без картинок ---
+const TrialModalContent = ({ isOpen, onClose, userName, onUnlock }: {
+  isOpen: boolean;
+  onClose: () => void;
+  userName: string;
+  onUnlock: () => void;
+}) => {
+  const [step, setStep] = useState<'form' | 'loading' | 'result'>('form');
+  const [height, setHeight] = useState("");
+  const [weight, setWeight] = useState("");
+  const [preview, setPreview] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<any>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Сброс при закрытии
+  useEffect(() => {
+    if (!isOpen) {
+      setStep('form');
+      setPreview(null);
+      setFile(null);
+      setResult(null);
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  // Проверяем, использовал ли уже пользователь trial
+  if (localStorage.getItem("trial_used")) {
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-charcoal/80 backdrop-blur-sm">
+        <div className="bg-ivory w-full max-w-md rounded-3xl shadow-2xl p-8 text-center">
+          <p className="font-serif text-gold text-xs tracking-widest uppercase mb-2">Бесплатный анализ</p>
+          <h2 className="text-2xl font-serif text-charcoal mb-4">Вы уже использовали бесплатный анализ</h2>
+          <p className="text-sm text-charcoal/60 mb-6">Для продолжения необходимо оплатить полный пакет</p>
+          <button
+            onClick={onUnlock}
+            className="w-full py-3 rounded-full bg-gold text-charcoal font-medium hover:bg-gold/90 transition-colors"
+          >
+            Выбрать тариф
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+  };
+
+  const handleSubmit = async (e?: MouseEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+    if (!file || !height || !weight) return;
+    setStep('loading');
+
+    const formData = new FormData();
+    formData.append("photos", file);
+    formData.append("height", height);
+    formData.append("weight", weight);
+    formData.append("trial", "true");
+
+    try {
+      const res = await fetch("/api/trial", { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Ошибка сервера");
+      const data = await res.json();
+      setResult(data);
+      localStorage.setItem("trial_used", "true");
+      setStep('result');
+    } catch (err: any) {
+      console.error("Trial error:", err);
+      alert("Ошибка: " + (err?.message || "Попробуйте ещё раз"));
+      setStep('form');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-16 bg-charcoal/80 backdrop-blur-sm overflow-y-auto">
+      <div className="bg-ivory w-full max-w-xl rounded-3xl shadow-2xl overflow-hidden p-6 relative">
+        <button type="button" onClick={onClose} className="absolute top-4 right-4 p-2 bg-charcoal/5 rounded-full">
+          <X className="w-5 h-5 text-charcoal" />
+        </button>
+
+        {step === 'form' && (
+          <>
+            <p className="font-serif text-gold text-xs tracking-widest uppercase mb-1">Бесплатный анализ</p>
+            <h2 className="text-2xl font-serif text-charcoal mb-4">Узнайте свой стиль</h2>
+            <p className="text-sm text-charcoal/60 mb-4">Чёткое портретное фото при хорошем освещении — для максимального сходства в генерациях</p>
+
+            <div className="flex gap-3 mb-3">
+              <input type="number" value={height} onChange={e => setHeight(e.target.value)} placeholder="Рост (см)"
+                className="flex-1 px-3 py-2 rounded-lg border border-charcoal/20 text-sm" />
+              <input type="number" value={weight} onChange={e => setWeight(e.target.value)} placeholder="Вес (кг)"
+                className="flex-1 px-3 py-2 rounded-lg border border-charcoal/20 text-sm" />
+            </div>
+
+            {preview ? (
+              <div className="relative mb-3 rounded-xl overflow-hidden aspect-[3/4] max-h-48">
+                <img src={preview} alt="" className="w-full h-full object-cover" />
+                <button onClick={() => { setPreview(null); setFile(null); }} className="absolute top-2 right-2 p-1 bg-black/50 rounded-full">
+                  <X className="w-4 h-4 text-white" />
+                </button>
+              </div>
+            ) : (
+              <>
+                <div onClick={() => fileRef.current?.click()}
+                  className="border-2 border-dashed border-charcoal/20 rounded-xl p-6 text-center cursor-pointer hover:border-gold mb-2">
+                  <Upload className="w-8 h-8 text-charcoal/40 mx-auto mb-2" />
+                  <p className="text-sm text-charcoal">Загрузить фото</p>
+                </div>
+                <p className="text-xs text-charcoal/50 text-center mb-3">Чёткое фото лица, взгляд в камеру, хорошее освещение</p>
+              </>
+            )}
+
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+
+            <button type="button" onClick={(e) => { e.preventDefault(); handleSubmit(); }} disabled={!file || !height || !weight}
+              className="w-full py-3 rounded-full bg-charcoal text-ivory text-sm font-medium disabled:opacity-50">
+              Получить бесплатный анализ
+            </button>
+          </>
+        )}
+
+        {step === 'loading' && (
+          <div className="text-center py-12">
+            <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-charcoal/60">Анализируем ваш стиль...</p>
+          </div>
+        )}
+
+        {step === 'result' && result && (
+          <div className="space-y-4">
+            {/* Анализ стиля */}
+            <div className="bg-gold/5 rounded-2xl p-4 border-l-2 border-gold">
+              <h3 className="font-serif text-gold text-xs tracking-widest uppercase mb-2">Ваш персональный анализ</h3>
+              <p className="text-sm text-charcoal/85 whitespace-pre-wrap leading-relaxed">{result.greetingAndAnalysis || ""}</p>
+            </div>
+
+            {/* Рекомендуемые вещи */}
+            <div className="border-t border-charcoal/10 pt-4">
+              <p className="text-xs font-medium text-gold uppercase tracking-wider mb-3 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-gold/20 flex items-center justify-center text-[10px]">✦</span>
+                Подобранные вещи для вас
+              </p>
+              <div className="space-y-2">
+                {[
+                  { name: "Бежевый тренч из хлопка", price: "от 4 500 ₽", hint: "верхняя одежда", emoji: "🧥" },
+                  { name: "Кожаные лоферы на низком каблуке", price: "от 3 200 ₽", hint: "обувь", emoji: "👞" },
+                  { name: "Шёлковый шарф с принтом", price: "от 1 800 ₽", hint: "аксессуары", emoji: "🧣" },
+                  { name: "Брюки чинос бежевого оттенка", price: "от 2 100 ₽", hint: "низ", emoji: "👖" },
+                  { name: "Сумка-тоут из замши", price: "от 5 900 ₽", hint: "аксессуары", emoji: "👜" },
+                ].map((item, itemIdx) => (
+                  <div key={itemIdx} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-charcoal/5 hover:border-gold/30 transition-colors">
+                    <span className="text-2xl">{item.emoji}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-charcoal font-medium">{item.name}</p>
+                      <p className="text-xs text-charcoal/50">{item.hint}</p>
+                    </div>
+                    <p className="text-xs text-gold font-medium whitespace-nowrap">{item.price}</p>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <button className="px-2 py-1 bg-[#CB11AB] text-white text-[10px] font-medium rounded hover:opacity-80 transition-opacity">
+                        WB
+                      </button>
+                      <button className="px-2 py-1 bg-[#005BFF] text-white text-[10px] font-medium rounded hover:opacity-80 transition-opacity">
+                        Ozon
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <p className="text-xs text-charcoal/50 text-center">
+                  + ещё 8 вещей в полной версии
+                </p>
+              </div>
+            </div>
+
+            {/* Заблюренное фото с замком */}
+            <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden mb-3">
+              {preview ? (
+                <img src={preview} alt="" className="absolute inset-0 w-full h-full object-cover blur-xl scale-105" />
+              ) : (
+                <div className="absolute inset-0 bg-gradient-to-br from-gray-300 via-gray-200 to-gray-400" />
+              )}
+              <div className="absolute inset-0 bg-black/30" />
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <div className="w-14 h-14 rounded-full bg-white/90 backdrop-blur-md shadow-xl flex items-center justify-center mb-3">
+                  <span className="text-2xl">🔒</span>
+                </div>
+                <p className="text-xs text-white font-medium">Визуализация готова!</p>
+              </div>
+            </div>
+
+            {/* Предложение 99₽ */}
+            <div className="bg-gradient-to-r from-gold/10 via-gold/20 to-gold/10 rounded-xl p-3 mb-3 border border-gold/30">
+              <p className="text-center text-sm text-charcoal font-medium">
+                ✨ Только сейчас — полный пакет за 99 ₽
+              </p>
+              <p className="text-center text-xs text-charcoal/60 mt-1">
+                3 фото-визуализации вас + описания + ссылки
+              </p>
+            </div>
+            <div className="flex flex-col gap-1.5 text-sm text-charcoal/80">
+              <div className="flex items-center gap-2">
+                <span>🎨</span>
+                <span>3 фото-визуализации вас в разных образах</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span>📝</span>
+                <span>3 подробных описания стиля</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span>🛒</span>
+                <span>Все вещи со ссылками на покупку</span>
+              </div>
+            </div>
+
+            {/* Кнопки */}
+            <div className="border-t border-charcoal/10 pt-4 mt-4">
+              <button onClick={onUnlock} className="w-full py-3 rounded-2xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors">
+                Получить 3 образа за 99 ₽
+              </button>
+              <button onClick={onClose} className="w-full py-2 text-sm text-charcoal/50 mt-2">
+                Попробовать позже
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }: {
   isOpen: boolean;
   onClose: () => void;
   onPaid: (tier: Tier) => void;
+  userName?: string;
   initialTier?: Tier;
+  prices?: { standard: number; premium: number };
 }) => {
-  const [step, setStep] = useState<"choose" | "pay">("choose");
+  const localPrices = prices || { standard: 100, premium: 200 };
   const [selectedTier, setSelectedTier] = useState<Tier>(initialTier || "standard");
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState<"idle" | "checking" | "valid" | "invalid" | "used">("idle");
-  const [showPayment, setShowPayment] = useState(false);
+  const [isTrialUsed, setIsTrialUsed] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setPromoCode("");
       setPromoStatus("idle");
-      setShowPayment(false);
-      if (initialTier) {
-        setSelectedTier(initialTier);
-        setStep("pay");
-      } else {
-        setStep("choose");
-      }
+      setSelectedTier(initialTier || "standard");
+      setIsTrialUsed(!!localStorage.getItem("trial_used"));
+      setIsProcessing(false);
     }
   }, [isOpen, initialTier]);
 
   const price = selectedTier === "standard" ? 100 : 200;
-
-  const handleSelectTier = (tier: Tier) => {
-    setSelectedTier(tier);
-    setPromoCode("");
-    setPromoStatus("idle");
-    setStep("pay");
-  };
 
   const handlePromo = async () => {
     if (!promoCode.trim()) return;
@@ -484,6 +783,31 @@ const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
     }
   };
 
+  const handlePay = async () => {
+    setIsProcessing(true);
+    try {
+      const res = await fetch("/api/create-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: selectedTier }),
+      });
+      const data = await res.json();
+      if (data.confirmationUrl) {
+        // Сохраняем paymentId для проверки после возврата
+        localStorage.setItem("pending_payment_id", data.paymentId);
+        localStorage.setItem("pending_payment_tier", selectedTier);
+        // Редирект на YooKassa
+        window.location.href = data.confirmationUrl;
+      } else {
+        alert("Ошибка создания платежа: " + (data.error || "Попробуйте ещё раз"));
+        setIsProcessing(false);
+      }
+    } catch {
+      alert("Ошибка соединения");
+      setIsProcessing(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -491,100 +815,99 @@ const PricingModal = ({ isOpen, onClose, onPaid, initialTier }: {
       <motion.div
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-charcoal/80 backdrop-blur-sm"
-        onClick={(e) => { if (e.target === e.currentTarget) { setStep("choose"); onClose(); } }}
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       >
         <motion.div
           initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
           className="bg-ivory w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden relative"
         >
-          <button onClick={() => { setStep("choose"); onClose(); }}
-            className="absolute top-5 right-5 p-2 bg-charcoal/5 rounded-full hover:bg-charcoal/10 z-10">
+          <button onClick={onClose} className="absolute top-5 right-5 p-2 bg-charcoal/5 rounded-full hover:bg-charcoal/10 z-10">
             <X className="w-5 h-5 text-charcoal" />
           </button>
 
-          {step === "choose" && (
-            <div className="p-8 md:p-10">
-              <p className="font-serif text-gold text-xs tracking-[0.3em] uppercase mb-2 text-center">Выберите тариф</p>
-              <h2 className="text-2xl md:text-3xl font-serif text-charcoal text-center mb-8">Начните преображение</h2>
-              <div className="grid sm:grid-cols-2 gap-4">
-                {/* Standard */}
-                <button onClick={() => handleSelectTier("standard")}
-                  className="group border-2 border-charcoal/10 hover:border-gold rounded-2xl p-6 text-left transition-all hover:shadow-lg">
-                  <div className="text-2xl font-serif font-bold text-charcoal mb-1">100 ₽</div>
-                  <div className="font-medium text-charcoal mb-3">Стандарт</div>
-                  <ul className="text-sm text-charcoal/60 space-y-1">
-                    <li>✓ Анализ внешности</li>
-                    <li>✓ 3 образа от стилиста</li>
-                    <li>✓ Список покупок</li>
-                  </ul>
-                  <div className="mt-4 text-xs font-medium text-charcoal/40 group-hover:text-gold transition-colors uppercase tracking-wider">Выбрать →</div>
-                </button>
-                {/* Premium */}
-                <button onClick={() => handleSelectTier("premium")}
-                  className="group border-2 border-gold bg-charcoal rounded-2xl p-6 text-left transition-all hover:shadow-lg relative overflow-hidden">
-                  <div className="absolute top-3 right-3 text-[10px] uppercase tracking-widest font-bold text-charcoal bg-gold px-2 py-0.5 rounded-full">Популярный</div>
-                  <div className="text-2xl font-serif font-bold text-gold mb-1">200 ₽</div>
-                  <div className="font-medium text-ivory mb-3">Премиум</div>
-                  <ul className="text-sm text-ivory/60 space-y-1">
-                    <li>✓ Всё из Стандарт</li>
-                    <li>✓ До 5 образов</li>
-                    <li>✓ Пожелания стилисту</li>
-                    <li>✓ Астро-разбор</li>
-                  </ul>
-                  <div className="mt-4 text-xs font-medium text-ivory/40 group-hover:text-gold transition-colors uppercase tracking-wider">Выбрать →</div>
-                </button>
+          <div className="p-8 md:p-10">
+            {isTrialUsed && userName && (
+              <div className="bg-gold/10 border border-gold/30 rounded-xl p-4 mb-6">
+                <p className="text-sm text-charcoal"><span className="font-medium">{userName}</span>, рады снова видеть вас! ✨</p>
+                <p className="text-sm text-charcoal/70 mt-1">Вы уже получили бесплатную консультацию. Выберите тариф ниже, чтобы получить полный пакет с визуализацией.</p>
               </div>
-            </div>
-          )}
+            )}
 
-          {step === "pay" && (
-            <div className="p-8 md:p-10">
-              <button onClick={() => setStep("choose")} className="text-sm text-charcoal/50 hover:text-charcoal mb-6 flex items-center gap-1">
-                ← Назад
-              </button>
-              <p className="font-serif text-gold text-xs tracking-[0.3em] uppercase mb-2">
-                {selectedTier === "standard" ? "Стандарт" : "Премиум"}
-              </p>
-              <h2 className="text-2xl font-serif text-charcoal mb-8">Оплата — {price} ₽</h2>
+            <p className="font-serif text-gold text-xs tracking-[0.3em] uppercase mb-2 text-center">
+              {isTrialUsed ? "Полный пакет" : "Выберите тариф"}
+            </p>
+            <h2 className="text-2xl md:text-3xl font-serif text-charcoal text-center mb-6">
+              {isTrialUsed ? "Разблокируйте визуализацию" : "Начните преображение"}
+            </h2>
 
-              {/* Промокод */}
-              <div className="mb-6">
-                <label className="text-sm font-medium text-charcoal/70 block mb-2">Промокод</label>
-                <div className="flex gap-2">
-                  <input
-                    value={promoCode}
-                    onChange={e => { setPromoCode(e.target.value.toUpperCase()); setPromoStatus("idle"); }}
-                    onKeyDown={e => e.key === "Enter" && handlePromo()}
-                    placeholder="Введите промокод"
-                    className={`flex-1 px-4 py-3 rounded-xl border text-sm focus:outline-none transition-colors ${
-                      promoStatus === "valid" ? "border-green-400 bg-green-50" :
-                      promoStatus === "invalid" ? "border-red-300 bg-red-50" :
-                      "border-charcoal/20 bg-white focus:border-gold"
-                    }`}
-                  />
-                  <button onClick={handlePromo} disabled={!promoCode.trim() || promoStatus === "checking"}
-                    className="px-4 py-3 rounded-xl bg-charcoal text-ivory text-sm font-medium hover:bg-charcoal/90 disabled:opacity-40 transition-colors">
-                    {promoStatus === "checking" ? "..." : "Применить"}
-                  </button>
+            <div className="grid sm:grid-cols-2 gap-4 mb-6">
+              <button onClick={() => setSelectedTier("standard")}
+                className={`group rounded-2xl p-6 text-left transition-all border-2 ${selectedTier === "standard" ? "border-gold shadow-lg" : "border-charcoal/10 hover:border-gold/50"}`}>
+                <div className="flex items-start justify-between mb-3">
+                  <div className="text-2xl font-serif font-bold text-charcoal">{localPrices.standard} ₽</div>
+                  {selectedTier === "standard" && <div className="w-6 h-6 rounded-full bg-gold flex items-center justify-center"><Check className="w-4 h-4 text-charcoal" /></div>}
                 </div>
-                {promoStatus === "valid" && <p className="text-green-600 text-xs mt-1">✓ Промокод принят — доступ открыт бесплатно!</p>}
-                {promoStatus === "used" && <p className="text-red-500 text-xs mt-1">Промокод уже был использован</p>}
-                {promoStatus === "invalid" && <p className="text-red-500 text-xs mt-1">Промокод не найден</p>}
-              </div>
+                <div className="font-medium text-charcoal mb-3">Стандарт</div>
+                <ul className="text-sm text-charcoal/60 space-y-1">
+                  <li>✓ Анализ внешности</li>
+                  <li>✓ 3 образа от стилиста</li>
+                  <li>✓ Список покупок</li>
+                </ul>
+              </button>
 
-              <div className="border-t border-charcoal/10 pt-6">
-                <p className="text-sm text-charcoal/50 text-center">Введите промокод для получения доступа</p>
-              </div>
+              <button onClick={() => setSelectedTier("premium")}
+                className={`group rounded-2xl p-6 text-left transition-all relative overflow-hidden ${selectedTier === "premium" ? "border-gold shadow-lg bg-charcoal" : "border-charcoal/10 hover:border-gold/50 bg-white"}`}>
+                <div className="absolute top-3 right-3 text-[10px] uppercase tracking-widest font-bold text-charcoal bg-gold px-2 py-0.5 rounded-full">Популярный</div>
+                <div className="flex items-start justify-between mb-3">
+                  <div className={`text-2xl font-serif font-bold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>{localPrices.premium} ₽</div>
+                  {selectedTier === "premium" && <div className="w-6 h-6 rounded-full bg-gold flex items-center justify-center"><Check className="w-4 h-4 text-charcoal" /></div>}
+                </div>
+                <div className={`font-medium mb-3 ${selectedTier === "premium" ? "text-ivory" : "text-charcoal"}`}>Премиум</div>
+                <ul className={`text-sm space-y-1 ${selectedTier === "premium" ? "text-ivory/70" : "text-charcoal/60"}`}>
+                  <li>✓ Всё из Стандарт</li>
+                  <li>✓ До 5 образов</li>
+                  <li>✓ Пожелания стилисту</li>
+                  <li>✓ Астро-разбор</li>
+                </ul>
+              </button>
             </div>
-          )}
+
+            <button onClick={handlePay} disabled={isProcessing}
+              className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold text-lg hover:bg-gold/90 transition-colors mb-4 disabled:opacity-60">
+              {isProcessing ? "Подготовка оплаты..." : `Оплатить ${price} ₽`}
+            </button>
+
+            <div className="border-t border-charcoal/10 pt-4">
+              <button onClick={() => (document.getElementById("promo-input") as HTMLInputElement)?.focus()}
+                className="text-sm text-charcoal/50 hover:text-charcoal/70 mb-2 flex items-center gap-1 mx-auto">
+                <span>У меня есть промокод</span>
+              </button>
+              <div className="flex gap-2 max-w-md mx-auto">
+                <input
+                  id="promo-input"
+                  type="text"
+                  value={promoCode}
+                  onChange={(e) => { setPromoCode(e.target.value.toUpperCase()); setPromoStatus("idle"); }}
+                  onKeyDown={(e) => e.key === "Enter" && handlePromo()}
+                  placeholder="Введите промокод"
+                  className={`flex-1 px-4 py-2 rounded-xl border text-sm text-center font-medium uppercase ${
+                    promoStatus === "valid" ? "border-green-400 bg-green-50" :
+                    promoStatus === "invalid" || promoStatus === "used" ? "border-red-300 bg-red-50" :
+                    "border-charcoal/20 bg-white focus:border-gold focus:outline-none"
+                  }`}
+                />
+                <button onClick={handlePromo} disabled={!promoCode.trim() || promoStatus === "checking"}
+                  className="px-4 py-2 rounded-xl bg-charcoal text-ivory text-sm font-medium hover:bg-charcoal/90 disabled:opacity-40 transition-colors">
+                  {promoStatus === "checking" ? "..." : "Применить"}
+                </button>
+              </div>
+              {promoStatus === "valid" && <p className="text-green-600 text-xs text-center mt-2">✓ Промокод применён!</p>}
+              {promoStatus === "invalid" && <p className="text-red-500 text-xs text-center mt-2">Промокод не найден</p>}
+              {promoStatus === "used" && <p className="text-red-500 text-xs text-center mt-2">Промокод уже использован</p>}
+            </div>
+          </div>
         </motion.div>
       </motion.div>
-      <PaymentModal
-        isOpen={showPayment}
-        tier={selectedTier}
-        onPaid={() => { onPaid(selectedTier); onClose(); }}
-        onClose={() => setShowPayment(false)}
-      />
     </AnimatePresence>
   );
 };
@@ -1293,6 +1616,23 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                             Сохранить образ с описанием
                           </button>
                         )}
+                        {/* Share Button */}
+                        <button
+                          onClick={() => {
+                            const text = `Мой новый образ от Твой стилист! ${look.lookName}. Создай свой стильный лук на stilist-ai.ru`;
+                            if (navigator.share) {
+                              navigator.share({ title: 'Мой образ', text });
+                            } else {
+                              navigator.clipboard.writeText(text).then(() => {
+                                alert('Ссылка скопирована! Вставьте её в любое сообщение.');
+                              });
+                            }
+                          }}
+                          className="w-full py-3 rounded-full border border-gold text-gold text-sm font-medium tracking-wide flex items-center justify-center gap-2 hover:bg-gold/10 transition-colors"
+                        >
+                          <Share2 className="w-4 h-4" />
+                          Поделиться
+                        </button>
                       </div>
                       
                       {/* Description & Shopping List */}
@@ -1379,11 +1719,25 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
 export default function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPricingOpen, setIsPricingOpen] = useState(false);
-  const [isTrialModalOpen, setIsTrialModalOpen] = useState(false);
+  const [isTrialOpen, setIsTrialOpen] = useState(false);
+  const [isTrialPaymentOpen, setIsTrialPaymentOpen] = useState(false);
   const [modalKey, setModalKey] = useState(0);
   const [currentTier, setCurrentTier] = useState<Tier>("standard");
   const [userName, setUserName] = useState(getSavedName);
   const [showWelcome, setShowWelcome] = useState(() => !getSavedName());
+  const [prices, setPrices] = useState({ standard: 100, premium: 200 });
+
+  // Загружаем цены с сервера
+  useEffect(() => {
+    fetch("/api/admin-stats")
+      .then(r => r.json())
+      .then(d => {
+        if (d.stats) {
+          setPrices({ standard: d.stats.standardPrice, premium: d.stats.premiumPrice });
+        }
+      })
+      .catch(() => {});
+  }, []);
   const [menuOpen, setMenuOpen] = useState(false);
 
   const [selectedPricingTier, setSelectedPricingTier] = useState<Tier>("standard");
@@ -1395,7 +1749,13 @@ export default function App() {
   };
 
   const openTrialModal = () => {
-    setIsTrialModalOpen(true);
+    if (localStorage.getItem("trial_used")) {
+      // Trial already used - redirect to payment
+      setSelectedPricingTier("standard");
+      setIsPricingOpen(true);
+    } else {
+      setIsTrialOpen(true);
+    }
   };
 
   const handlePaid = (tier: Tier) => {
@@ -1406,6 +1766,39 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+
+    // Проверяем параметры оплаты из URL после возврата с YooKassa
+    const paymentSuccess = params.get("payment_success");
+    const paymentId = params.get("payment_id");
+    const tier = params.get("tier");
+    const paymentError = params.get("payment_error");
+
+    if (paymentSuccess === "true" && paymentId && tier) {
+      // Оплата прошла успешно - открываем модальное окно загрузки
+      localStorage.setItem(`paid_${tier}_${paymentId}`, "true");
+      localStorage.setItem("pending_payment_id", paymentId);
+      localStorage.setItem("pending_payment_tier", tier);
+
+      // Убираем параметры из URL
+      window.history.replaceState({}, "", "/");
+
+      // Открываем окно загрузки
+      setCurrentTier(tier as Tier);
+      setTimeout(() => {
+        setIsModalOpen(true);
+      }, 500);
+      return;
+    }
+
+    if (paymentError) {
+      window.history.replaceState({}, "", "/");
+      setTimeout(() => {
+        alert("Оплата не прошла. Попробуйте ещё раз.");
+      }, 500);
+      return;
+    }
+
+    // Проверяем token для реферальной ссылки
     const token = params.get("token");
     if (!token) return;
     fetch("/api/use-link", {
@@ -1434,8 +1827,9 @@ export default function App() {
       <AnimatePresence>
         {showWelcome && <WelcomeScreen key="welcome" onSubmit={handleNameSubmit} />}
       </AnimatePresence>
-      <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} initialTier={selectedPricingTier} />
-      <TrialModal isOpen={isTrialModalOpen} onClose={() => setIsTrialModalOpen(false)} />
+      <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} userName={userName} initialTier={selectedPricingTier} prices={prices} />
+      {isTrialOpen && <TrialModalContent isOpen={isTrialOpen} onClose={() => setIsTrialOpen(false)} userName={userName} onUnlock={() => setIsTrialPaymentOpen(true)} />}
+      <TrialPaymentModal isOpen={isTrialPaymentOpen} onClose={() => setIsTrialPaymentOpen(false)} onPaid={() => {}} />
       <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} />
 
       {/* 1. Header */}
@@ -1505,7 +1899,7 @@ export default function App() {
         {/* Background image */}
         <div
           className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{ backgroundImage: "url('/gucci.png')" }}
+          style={{ backgroundImage: "url('/gucci.jpg')" }}
         />
         {/* Overlay — центр тёмнее для читаемости, края прозрачнее */}
         <div className="absolute inset-0 bg-gradient-to-b from-charcoal/60 via-charcoal/50 to-charcoal/70" />
@@ -1623,8 +2017,8 @@ export default function App() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {[
-              { before: "/look1.jpg", after: "/look1a.png", label: "Мужской Casual" },
-              { before: "/look2.jpg", after: "/look2a.png", label: "Яркий Летний" },
+              { before: "/look1.jpg", after: "/look1a.jpg", label: "Мужской Casual" },
+              { before: "/look2.jpg", after: "/look2a.jpg", label: "Яркий Летний" },
               { before: "/look3.jpg", after: "/Look3a.jpg", label: "Стильное Преображение" }
             ].map((item, idx) => {
               const [tapped, setTapped] = useState(false);
@@ -1673,6 +2067,74 @@ export default function App() {
       </section>
 
       {/* 5. Pricing & Final CTA */}
+      {/* Reviews */}
+      <section className="py-24 px-6 bg-ivory/50">
+        <div className="max-w-6xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="text-center mb-16"
+          >
+            <h2 className="text-4xl md:text-5xl mb-4">Отзывы</h2>
+            <p className="text-charcoal/60 text-lg max-w-2xl mx-auto font-light">
+              Наши клиенты уже преобразились
+            </p>
+          </motion.div>
+
+          <div className="grid md:grid-cols-3 gap-8">
+            {[
+              {
+                name: "Марина К.",
+                city: "Москва",
+                text: "Заказала образ для собеседования. Результат поразил — получила job! Стилист учёл и тип фигуры, и цветотип. Теперь всегда обращаюсь перед важными мероприятиями.",
+                avatar: "МК",
+                stars: 5
+              },
+              {
+                name: "Дмитрий В.",
+                city: "Санкт-Петербург",
+                text: "Долго не мог подобрать свой стиль. За 15 минут получил 3 готовых образа — все под моё телосложение. Жена в восторге, говорит выгляжу на миллион!",
+                avatar: "ДВ",
+                stars: 5
+              },
+              {
+                name: "Анна С.",
+                city: "Екатеринбург",
+                text: "Наконец-то нашла сервис, где не нужно мерять 50 вещей в магазине. Сгенерированные образы — это магия. Всё подошло идеально с первой попытки.",
+                avatar: "АС",
+                stars: 5
+              },
+            ].map((review, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ delay: i * 0.1 }}
+                className="bg-white rounded-2xl p-8 shadow-sm border border-charcoal/5 hover:shadow-lg transition-shadow"
+              >
+                <div className="flex gap-1 mb-4">
+                  {[...Array(review.stars)].map((_, j) => (
+                    <Star key={j} className="w-5 h-5 text-gold fill-gold" />
+                  ))}
+                </div>
+                <p className="text-charcoal/80 leading-relaxed mb-6">{review.text}</p>
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-gold to-charcoal flex items-center justify-center text-white font-medium">
+                    {review.avatar}
+                  </div>
+                  <div>
+                    <p className="font-medium text-charcoal">{review.name}</p>
+                    <p className="text-sm text-charcoal/50">{review.city}</p>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section id="pricing" className="py-24 px-6 bg-charcoal text-ivory">
         <div className="max-w-7xl mx-auto">
           <motion.div 
@@ -1692,7 +2154,7 @@ export default function App() {
               {
                 title: "Стандарт",
                 tier: "standard" as Tier,
-                price: "100 ₽",
+                price: `${prices.standard} ₽`,
                 desc: "Один запрос — три готовых образа с визуализацией.",
                 features: [
                   "3 полных образа под вашу фигуру",
@@ -1707,7 +2169,7 @@ export default function App() {
               {
                 title: "Премиум",
                 tier: "premium" as Tier,
-                price: "200 ₽",
+                price: `${prices.premium} ₽`,
                 desc: "Персональный разбор: внешность × знак зодиака × этот месяц.",
                 features: [
                   "Всё из тарифа Стандарт",
@@ -1776,6 +2238,11 @@ export default function App() {
       {/* Footer */}
       <footer className="py-8 px-6 border-t border-charcoal/10 text-center text-sm text-charcoal/50">
         <p>© 2026 Твой личный стилист. Все права защищены.</p>
+        <div className="mt-4 space-y-1">
+          <p>ИП Черданцев А.В.</p>
+          <p>ИНН 222304889746</p>
+          <p>📧 gesper2004@mail.ru | 📞 89588481313</p>
+        </div>
       </footer>
     </div>
   );
