@@ -598,9 +598,8 @@ loadList();
         },
       }, idempotenceKey);
 
-      // Перенаправляем на наш endpoint с реальным payment ID
-      const confirmUrl = `${process.env.BASE_URL || "https://stilist-ai.ru"}/api/confirm-payment?paymentId=${payment.id}`;
-      payment.confirmation.confirmation_url = confirmUrl;
+      // Используем URL от YooKassa напрямую
+      const confirmUrl = payment.confirmation?.confirmation_url || `${process.env.BASE_URL || "https://stilist-ai.ru"}/api/confirm-payment?paymentId=${payment.id}`;
 
       console.log("[YooKassa] Payment created:", payment.id, "status:", payment.status);
 
