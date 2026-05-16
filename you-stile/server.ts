@@ -1036,7 +1036,10 @@ loadList();
     // Development mode — use Vite middleware
     const vite = await createViteServer({
       root: PROJECT_ROOT,
-      server: { middlewareMode: true as any },
+      server: {
+        middlewareMode: true as any,
+        allowedHosts: ['.stilist-ai.ru', 'stilist-ai.ru'],
+      },
       appType: "spa",
     });
     app.use((req: Request, res: Response, next: NextFunction) => {
