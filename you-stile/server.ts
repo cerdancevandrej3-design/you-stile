@@ -628,6 +628,30 @@ loadList();
     }
   });
 
+  // Webhook для уведомлений от YooKassa
+  app.post("/api/yookassa-webhook", async (req: Request, res: Response) => {
+    try {
+      const event = req.body;
+      console.log("[YooKassa Webhook] Received event:", event.type, event.object?.id);
+
+      if (event.type === "payment.succeeded" || event.type === "waiting_for_capture") {
+        const paymentId = event.object?.id;
+        const tier = event.object?.metadata?.tier || "standard";
+
+        if (paymentId) {
+          // Увеличиваем статистику
+          incPaidSale(tier);
+          console.log(`[YooKassa Webhook] Payment confirmed: ${paymentId}, tier: ${tier}`);
+        }
+      }
+
+      res.status(200).json({ status: "ok" });
+    } catch (err: any) {
+      console.error("[YooKassa Webhook] Error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Подтверждение оплаты - вызывается после возврата с YooKassa
   app.get("/api/confirm-payment", async (req: Request, res: Response) => {
     try {

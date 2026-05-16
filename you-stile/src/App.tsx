@@ -447,13 +447,28 @@ const TrialPaymentModal = ({ isOpen, onClose, onPaid }: {
 
   const handlePayment = async () => {
     setLoading(true);
-    // TODO: Подключить YooKassa
-    // Пока просто placeholder - через 2 сек покажем "оплачено"
-    setTimeout(() => {
+    try {
+      const response = await fetch("/api/create-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: "trial" }),
+      });
+      const data = await response.json();
+
+      if (data.error) {
+        alert("Ошибка: " + data.error);
+        setLoading(false);
+        return;
+      }
+
+      if (data.confirmationUrl) {
+        // Редирект на YooKassa
+        window.location.href = data.confirmationUrl;
+      }
+    } catch (err) {
+      alert("Ошибка создания платежа");
       setLoading(false);
-      onPaid();
-      onClose();
-    }, 2000);
+    }
   };
 
   return (
