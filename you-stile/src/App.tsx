@@ -757,7 +757,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
     }
   }, [isOpen, initialTier]);
 
-  const price = selectedTier === "standard" ? 100 : 200;
+  const price = selectedTier === "standard" ? localPrices.standard : localPrices.premium;
 
   const handlePromo = async () => {
     if (!promoCode.trim()) return;

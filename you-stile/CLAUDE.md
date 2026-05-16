@@ -54,3 +54,18 @@ This is a single-repo full-stack app — one Express server serves both the API 
 ### Vite proxy
 
 In dev mode, Vite proxies `/api` → `http://localhost:3000` (note: hardcoded in `vite.config.ts` — if server port changes, update this too). Currently the server runs on 3001 but this proxy is bypassed because Vite runs as middleware inside the same Express process.
+
+### Production deployment
+
+**CRITICAL:** After `npm run build`, server.ts looks for files in `dist/dist/`, but Vite outputs to `dist/`.
+
+On VPS after build:
+```bash
+mkdir -p dist/dist && cp -r dist/* dist/dist/
+pm2 restart stilist
+```
+
+Alternatively, fix server.ts to use `dist/` instead of `dist/dist/`:
+```typescript
+const distIndexPath = path.join(__dirname, "dist", "index.html");
+```

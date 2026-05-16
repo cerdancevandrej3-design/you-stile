@@ -481,6 +481,7 @@ async function startServer() {
 </div>
 
 <script>
+const secret = "stilist-admin-key-913260";
 async function loadStats() {
   const r = await fetch('/api/admin-stats');
   const d = await r.json();
