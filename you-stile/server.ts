@@ -431,6 +431,8 @@ async function startServer() {
   .btn-dark{background:#1a1a1a;color:#fff}
   .btn-dark:hover{background:#333}
   .btn-small{padding:6px 12px;font-size:13px}
+  .btn-green{background:#2e7d32;color:#fff}
+  .btn-green:hover{background:#1b5e20}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th{text-align:left;padding:10px 12px;background:#f9f8f6;border-bottom:2px solid #eee;color:#888;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
   td{padding:10px 12px;border-bottom:1px solid #f0ece4}
@@ -438,13 +440,18 @@ async function startServer() {
   .tag{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600}
   .tag-ok{background:#e8f5e9;color:#2e7d32}
   .tag-used{background:#ffebee;color:#c62828}
+  .new-code{display:inline-block;background:#1a1a1a;color:#c9a84c;padding:6px 12px;border-radius:8px;font-family:'SF Mono',Monaco,monospace;font-size:14px;font-weight:700;margin:4px 4px 0 0}
   .section-title{display:flex;align-items:center;gap:8px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #eee}
   .price-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .price-row input{width:100px}
   .price-row span{font-size:14px;color:#888}
-  .revenue-card{background:linear-gradient(135deg,#e8f5e9,#f1f8e9);border:1px solid #a5d6a7}
-  .revenue-card .stat-num{font-size:36px}
-  .new-code{display:inline-block;background:#e8f5e9;color:#2e7d32;padding:6px 12px;border-radius:8px;font-family:monospace;font-weight:600;font-size:13px;margin:4px 4px 4px 0}
+  .usage-bar-wrap{background:#f0ece4;border-radius:8px;height:8px;overflow:hidden;margin-top:4px}
+  .usage-bar{height:8px;background:linear-gradient(90deg,#c9a84c,#2e7d32);transition:width .3s}
+  .usage-text{font-size:12px;color:#888;margin-top:4px}
+  .chart-wrap{background:#f9f8f6;border-radius:12px;padding:16px;margin-top:16px}
+  .chart-label{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+  canvas{display:block;margin:0 auto}
+  .pagination{display:flex;align-items:center;gap:8px;margin:12px 0;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -457,6 +464,7 @@ async function startServer() {
     <button onclick="setPeriod('week')" id="btn-week" class="btn-small" style="border:1px solid #ddd">Неделя</button>
     <button onclick="setPeriod('month')" id="btn-month" class="btn-small" style="border:1px solid #ddd">Месяц</button>
     <button onclick="setPeriod('all')" id="btn-all" class="btn-small btn-dark">Всё время</button>
+    <button onclick="exportCSV()" class="btn-small btn-green" style="margin-left:auto">📥 Экспорт CSV</button>
   </div>
   <div class="grid">
     <div class="stat">
@@ -475,6 +483,14 @@ async function startServer() {
       <div class="stat-num" id="revenue">— ₽</div>
       <div class="stat-label">Выручка</div>
     </div>
+    <div class="stat">
+      <div class="stat-num" id="avgTicket">— ₽</div>
+      <div class="stat-label">Ср. чек</div>
+    </div>
+  </div>
+  <div class="chart-wrap">
+    <div class="chart-label">📊 Динамика выручки</div>
+    <canvas id="revenueChart" width="800" height="120"></canvas>
   </div>
 </div>
 
@@ -499,18 +515,23 @@ async function startServer() {
   <div class="price-row">
     <select id="tier"><option value="standard">Стандарт</option><option value="premium">Премиум</option></select>
     <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
-    <button onclick="generate()">Создать коды</button>
+    <button id="createBtn">Создать коды</button>
   </div>
   <div id="newCodes" style="display:none;margin-top:16px"></div>
 </div>
 
 <div class="card">
-  <div class="section-title"><h2>📋 Последние использованные</h2></div>
-  <div id="codesCount" style="margin-bottom:12px;color:#888;font-size:13px"></div>
+  <div class="section-title"><h2>📋 Промокоды — список</h2><span id="codesCount" style="margin-left:8px;font-size:13px;color:#888;font-weight:400"></span></div>
+  <div id="codesUsage" style="margin-bottom:12px"></div>
   <div id="list"></div>
+  <div class="pagination" id="pagination"></div>
 </div>
 
 <script>
+window.testFn = function() { alert('testFn работает!'); };
+alert('Скрипт загружен!');
+window.testGenerate = function() { alert('testGenerate работает!'); };
+document.getElementById('createBtn').onclick = function() { alert('EventListener работает!'); };
 const secret = "stilist-admin-key-913260";
 let currentPeriod = 'all';
 function setPeriod(p) {
@@ -527,9 +548,60 @@ async function loadStats() {
   document.getElementById('visits').textContent = d.stats.visits.toLocaleString();
   document.getElementById('standardSales').textContent = d.stats.paidStandardSales;
   document.getElementById('premiumSales').textContent = d.stats.paidPremiumSales;
-  document.getElementById('revenue').textContent = d.stats.revenue.toLocaleString() + ' ₽';
+  const rev = d.stats.revenue;
+  document.getElementById('revenue').textContent = (rev || 0).toLocaleString() + ' ₽';
+  const totalSales = (d.stats.paidStandardSales || 0) + (d.stats.paidPremiumSales || 0);
+  document.getElementById('avgTicket').textContent = totalSales > 0 ? Math.round(rev / totalSales).toLocaleString() + ' ₽' : '—';
   document.getElementById('priceStandard').value = d.stats.standardPrice;
   document.getElementById('pricePremium').value = d.stats.premiumPrice;
+  drawChart(d.chartData || []);
+}
+
+function drawChart(data) {
+  const canvas = document.getElementById('revenueChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!data.length) {
+    ctx.fillStyle = '#aaa';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Нет данных для отображения', w / 2, h / 2);
+    return;
+  }
+  const max = Math.max(...data.map(d => d.revenue), 1);
+  const barW = Math.min(20, (w - 40) / data.length);
+  const labels = data.map(d => d.date.slice(5));
+  data.forEach((d, i) => {
+    const bh = (d.revenue / max) * (h - 40);
+    const x = 20 + i * (barW + 2);
+    const grad = ctx.createLinearGradient(0, h - 20 - bh, 0, h - 20);
+    grad.addColorStop(0, '#c9a84c');
+    grad.addColorStop(1, '#2e7d32');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.roundRect(x, h - 20 - bh, barW, bh, 3);
+    ctx.fill();
+    ctx.fillStyle = '#aaa';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(labels[i], x + barW / 2, h - 4);
+  });
+}
+
+async function exportCSV() {
+  const r = await fetch('/api/admin-stats?period=all');
+  const d = await r.json();
+  const rows = [['Дата', 'Посещений', 'Продажи Стандарт', 'Продажи Премиум', 'Выручка']];
+  (d.chartData || []).forEach(row => {
+    rows.push([row.date, row.visits, row.standardSales, row.premiumSales, row.revenue]);
+  });
+  const csv = rows.map(r => r.join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent('﻿' + csv);
+  a.download = 'stilist-stats.csv';
+  a.click();
 }
 
 async function savePrice(tier) {
@@ -544,51 +616,130 @@ async function savePrice(tier) {
   loadStats();
 }
 
-async function generate() {
-  const tier = document.getElementById('tier').value;
-  const count = document.getElementById('count').value;
-  const r = await fetch('/api/generate-promo', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({secret, tier, count})
-  });
-  const d = await r.json();
-  const div = document.getElementById('newCodes');
-  div.innerHTML = '<div style="margin-bottom:8px;font-weight:600;color:#2e7d32">✨ Новые (' + d.codes.length + '):</div>' +
-    d.codes.map(c => '<span class="new-code">' + c + '</span>').join(' ');
-  div.style.display = 'block';
-  loadList();
-  loadStats();
+async function doGenerate() {
+  alert('doGenerate вызвана!');
+  try {
+    const tier = document.getElementById('tier').value;
+    const count = document.getElementById('count').value;
+    const r = await fetch('/api/generate-promo', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({secret, tier, count})
+    });
+    if (!r.ok) { alert('Ошибка сервера: ' + r.status); return; }
+    const d = await r.json();
+    if (!d.codes || !d.codes.length) { alert('Нет кодов: ' + JSON.stringify(d)); return; }
+    const div = document.getElementById('newCodes');
+    div.innerHTML = '<div style="margin-bottom:8px;font-weight:600;color:#2e7d32">✨ Новые (' + d.codes.length + '):</div>' +
+      d.codes.map(c => '<span class="new-code">' + c + '</span>').join(' ');
+    div.style.display = 'block';
+    loadList();
+    loadStats();
+  } catch(e) { alert('Ошибка: ' + e); }
 }
 
-async function loadList() {
-  const r = await fetch('/api/promo-list');
-  const d = await r.json();
-  document.getElementById('codesCount').textContent = d.unused + ' свободных / ' + d.total + ' всего';
-  const rows = d.codes.slice(0, 10).map(e =>
+let promoPage = 0;
+const PAGE_SIZE = 20;
+
+function renderPage(allCodes, page) {
+  const start = page * PAGE_SIZE;
+  const end = start + PAGE_SIZE;
+  const pageCodes = allCodes.slice(start, end);
+  const totalPages = Math.ceil(allCodes.length / PAGE_SIZE);
+
+  const rows = pageCodes.map(e =>
     '<tr><td class="mono">' + e.code + '</td><td>' +
     (e.tier === 'premium' ? 'Премиум' : 'Стандарт') + '</td><td>' +
     (e.used ? '<span class="tag tag-used">Использован</span>' : '<span class="tag tag-ok">Свободен</span>') +
     '</td><td style="color:#aaa;font-size:12px">' + (e.createdAt ? e.createdAt.slice(0,10) : '') + '</td></tr>'
   ).join('');
+
   document.getElementById('list').innerHTML = '<table><tr><th>Код</th><th>Тариф</th><th>Статус</th><th>Создан</th></tr>' + rows + '</table>';
+
+  let pagHtml = '';
+  if (totalPages > 1) {
+    if (page > 0) pagHtml += '<button class="page-btn" onclick="promoPage--;renderPage(allCodesForPage,promoPage)">← Назад</button>';
+    pagHtml += '<span class="page-info">Страница ' + (page + 1) + ' из ' + totalPages + '</span>';
+    if (page < totalPages - 1) pagHtml += '<button class="page-btn" onclick="promoPage++;renderPage(allCodesForPage,promoPage)">Вперёд →</button>';
+  }
+  document.getElementById('pagination').innerHTML = pagHtml;
 }
+
+let allCodesForPage = [];
+
+// Override loadList to store codes globally
+const origLoadList = loadList;
+async function loadList() {
+  const r = await fetch('/api/promo-list');
+  const d = await r.json();
+  allCodesForPage = d.codes;
+  const allCodes = d.codes;
+  const unused = allCodes.filter(c => !c.used).length;
+  document.getElementById('codesCount').textContent = unused + ' свободных / ' + allCodes.length + ' всего';
+
+  const usedPct = allCodes.length > 0 ? Math.round((allCodes.length - unused) / allCodes.length * 100) : 0;
+  document.getElementById('codesUsage').innerHTML =
+    '<div class="usage-bar-wrap"><div class="usage-bar" style="width:' + usedPct + '%"></div></div>' +
+    '<div class="usage-text">Использовано: ' + usedPct + '% (' + (allCodes.length - unused) + '/' + allCodes.length + ')</div>';
+
+  promoPage = 0;
+  renderPage(allCodes, promoPage);
+}
+
+// Expose globally
+window.renderPage = renderPage;
+window.promoPage = promoPage;
+
+function renderPage(allCodes, page) {
+  const start = page * PAGE_SIZE;
+  const end = start + PAGE_SIZE;
+  const pageCodes = allCodes.slice(start, end);
+  const totalPages = Math.ceil(allCodes.length / PAGE_SIZE);
+
+  const rows = pageCodes.map(e =>
+    '<tr><td class="mono">' + e.code + '</td><td>' +
+    (e.tier === 'premium' ? 'Премиум' : 'Стандарт') + '</td><td>' +
+    (e.used ? '<span class="tag tag-used">Использован</span>' : '<span class="tag tag-ok">Свободен</span>') +
+    '</td><td style="color:#aaa;font-size:12px">' + (e.createdAt ? e.createdAt.slice(0,10) : '') + '</td></tr>'
+  ).join('');
+
+  document.getElementById('list').innerHTML = '<table><tr><th>Код</th><th>Тариф</th><th>Статус</th><th>Создан</th></tr>' + rows + '</table>';
+
+  let pagHtml = '';
+  if (totalPages > 1) {
+    if (page > 0) pagHtml += '<button class="page-btn" onclick="promoPage--;renderPage(arguments[0],promoPage)">← Назад</button>';
+    pagHtml += '<span class="page-info">Страница ' + (page + 1) + ' из ' + totalPages + '</span>';
+    if (page < totalPages - 1) pagHtml += '<button class="page-btn" onclick="promoPage++;renderPage(arguments[0],promoPage)">Вперёд →</button>';
+  }
+  document.getElementById('pagination').innerHTML = pagHtml;
+}
+
+// Expose globally
+window.renderPage = renderPage;
 
 loadStats();
 loadList();
-</script>
-</body></html>`);
+</script>`);
   });
 
-  // Admin stats endpoint (открытый)
+  // Admin stats endpoint
   app.get("/api/admin-stats", (req: Request, res: Response) => {
     const period = (req.query.period as string) || "all";
     const stats = loadStats();
     const computed = computeStats(stats, period);
-    res.json({ stats: computed, period });
+    const chartData: { date: string; revenue: number; visits: number; standardSales: number; premiumSales: number }[] = [];
+    const days = period === "all" ? 30 : period === "month" ? 30 : period === "week" ? 7 : 1;
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const dayEvents = (stats.events || []).filter((e: any) => e.date?.startsWith(key));
+      const dayRevenue = dayEvents.reduce((sum: number, e: any) => sum + (e.tier === "premium" ? stats.premiumPrice : stats.standardPrice), 0);
+      chartData.push({ date: key, revenue: dayRevenue, visits: dayEvents.filter((e: any) => e.type === "visit").length, standardSales: dayEvents.filter((e: any) => e.tier === "standard").length, premiumSales: dayEvents.filter((e: any) => e.tier === "premium").length });
+    }
+    res.json({ stats: computed, period, chartData });
   });
 
-  // Admin set price endpoint (открытый)
+  // Admin set price endpoint
   app.post("/api/admin-set-price", (req: Request, res: Response) => {
     const { tier, price } = req.body;
     if (!tier || !price) return res.status(400).json({ error: "Missing params" });
@@ -765,6 +916,18 @@ loadList();
       const height = req.body.height || "не указан";
       const weight = req.body.weight || "не указан";
       const rawWishes = (req.body.wishes || "").toString().slice(0, 500).trim();
+      // Detect season from wishes to pass explicitly to AI
+      const wishesLower = rawWishes.toLowerCase();
+      const seasonMap: Record<string, string> = {
+        "лет": "лето", "жара": "лето", "пляж": "лето", "отпуск": "лето", "курорт": "лето",
+        "осень": "осень", "дождь": "осень",
+        "зим": "зима", "холод": "зима", "мороз": "зима",
+        "весн": "весна",
+      };
+      const detectedSeason = Object.entries(seasonMap).find(([k]) => wishesLower.includes(k))?.[1];
+      const seasonInstruction = detectedSeason
+        ? `\n🗓️ Пользователь запросил образы для сезона: ${detectedSeason}. Все 3 образа должны соответствовать этому сезону.`
+        : "";
       const wishes = sanitizeWishes(rawWishes);
       const looksCount = Math.min(5, Math.max(1, parseInt(req.body.looksCount) || 3));
       const userName = (req.body.userName || "").toString().trim().slice(0, 50);
@@ -808,7 +971,7 @@ loadList();
         {
           role: "user",
           content: [
-            { type: "text", text: `${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.\n\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${wishesBlock}${zodiacBlock}` },
+            { type: "text", text: `${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.\n\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${seasonInstruction}${wishesBlock}${zodiacBlock}` },
             { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
           ],
         },
@@ -1118,3 +1281,4 @@ loadList();
 }
 
 startServer();
+
