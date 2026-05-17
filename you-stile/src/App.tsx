@@ -127,14 +127,14 @@ const MagicMirror = () => {
     >
       {/* Before Image (Bottom) */}
       <img 
-        src="/after.png" 
+        src="/after.jpg" 
         alt="Before: Casual Home Clothes" 
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
       />
       
       {/* After Image (Top, Clipped) */}
       <img 
-        src="/before.png" 
+        src="/before.jpg" 
         alt="After: Premium Styled Look" 
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
         style={{ clipPath: `inset(0 0 0 ${sliderPosition}%)` }}
@@ -951,7 +951,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
 };
 
 // --- Stylize Modal Component ---
-const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier }) => {
+const StylizeModal = ({ isOpen, onClose, userName, tier, onToast }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier; onToast: (msg: string, type: 'success'|'error'|'info') => void }) => {
   const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [height, setHeight] = useState("");
@@ -1672,15 +1672,59 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                         )}
                         {/* Share Button */}
                         <button
-                          onClick={() => {
-                            const text = `Мой новый образ от Твой стилист! ${look.lookName}. Создай свой стильный лук на stilist-ai.ru`;
-                            if (navigator.share) {
-                              navigator.share({ title: 'Мой образ', text });
-                            } else {
-                              navigator.clipboard.writeText(text).then(() => {
-                                alert('Ссылка скопирована! Вставьте её в любое сообщение.');
-                              });
+                          onClick={async () => {
+                            const SITE_URL = 'https://stilist-ai.ru';
+                            const shareText = `Мой новый образ от Твой стилист! ${look.lookName}`;
+
+                            // 1. Web Share API with image
+                            if (navigator.share && look.image) {
+                              try {
+                                const resp = await fetch(look.image);
+                                const blob = await resp.blob();
+                                const file = new File([blob], `look-${lookIdx + 1}.jpg`, { type: 'image/jpeg' });
+                                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                                  await navigator.share({ title: 'Мой образ — Твой стилист', text: shareText, url: SITE_URL, files: [file] });
+                                  return;
+                                }
+                              } catch (err: any) {
+                                if (err.name === 'AbortError') return;
+                              }
                             }
+
+                            // 2. Web Share API without image
+                            if (navigator.share) {
+                              try {
+                                await navigator.share({ title: 'Мой образ — Твой стилист', text: shareText, url: SITE_URL });
+                                return;
+                              } catch (err: any) {
+                                if (err.name === 'AbortError') return;
+                              }
+                            }
+
+                            // 3. Clipboard fallback
+                            const clipboardText = `${shareText}\n${SITE_URL}`;
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                              try {
+                                await navigator.clipboard.writeText(clipboardText);
+                                onToast('Ссылка скопирована! Вставьте её в любое сообщение.', 'success');
+                                return;
+                              } catch {}
+                            }
+
+                            // 4. execCommand fallback
+                            const textarea = document.createElement('textarea');
+                            textarea.value = clipboardText;
+                            textarea.style.position = 'fixed';
+                            textarea.style.opacity = '0';
+                            document.body.appendChild(textarea);
+                            textarea.select();
+                            try {
+                              document.execCommand('copy');
+                              onToast('Ссылка скопирована!', 'success');
+                            } catch {
+                              onToast('Не удалось скопировать', 'error');
+                            }
+                            document.body.removeChild(textarea);
                           }}
                           className="w-full py-3 rounded-full border border-gold text-gold text-sm font-medium tracking-wide flex items-center justify-center gap-2 hover:bg-gold/10 transition-colors"
                         >
@@ -1799,6 +1843,14 @@ export default function App() {
       .catch(() => {});
   }, []);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [toast, setToast] = useState<{message: string; type: 'success'|'error'|'info'}|null>(null);
+
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [toast]);
 
   const [selectedPricingTier, setSelectedPricingTier] = useState<Tier>("standard");
 
@@ -1890,7 +1942,7 @@ export default function App() {
       <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} userName={userName} initialTier={selectedPricingTier} prices={prices} />
       {isTrialOpen && <TrialModalContent isOpen={isTrialOpen} onClose={() => setIsTrialOpen(false)} userName={userName} onUnlock={() => setIsTrialPaymentOpen(true)} />}
       <TrialPaymentModal isOpen={isTrialPaymentOpen} onClose={() => setIsTrialPaymentOpen(false)} onPaid={() => {}} />
-      <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} />
+      <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} onToast={(msg, type) => setToast({message: msg, type})} />
 
       {/* 1. Header */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-ivory/70 backdrop-blur-lg border-b border-charcoal/5 transition-all">
@@ -1959,7 +2011,7 @@ export default function App() {
         {/* Background image */}
         <div
           className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{ backgroundImage: "url('/gucci.png')" }}
+          style={{ backgroundImage: "url('/gucci.jpg')" }}
         />
         {/* Overlay — центр тёмнее для читаемости, края прозрачнее */}
         <div className="absolute inset-0 bg-gradient-to-b from-charcoal/60 via-charcoal/50 to-charcoal/70" />
@@ -2079,7 +2131,7 @@ export default function App() {
             {[
               { before: "/look1.jpg", after: "/look1a.png", label: "Мужской Casual" },
               { before: "/look2.jpg", after: "/look2a.png", label: "Яркий Летний" },
-              { before: "/look3.jpg", after: "/Look3a.jpg", label: "Стильное Преображение" }
+              { before: "/look3.jpg", after: "/look3a.jpg", label: "Стильное Преображение" }
             ].map((item, idx) => {
               const [tapped, setTapped] = useState(false);
               return (
@@ -2304,6 +2356,21 @@ export default function App() {
           <p>📧 gesper2004@mail.ru | 📞 89588481313</p>
         </div>
       </footer>
+
+      {/* Toast notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 40 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-full shadow-lg text-sm font-medium tracking-wide text-ivory"
+            style={{ backgroundColor: toast.type === 'error' ? '#c62828' : toast.type === 'success' ? '#2e7d32' : '#1a1a1a' }}
+          >
+            {toast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

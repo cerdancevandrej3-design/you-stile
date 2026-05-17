@@ -1084,9 +1084,9 @@ loadList();
   });
 
   // Serve production build if available, otherwise use Vite dev middleware
-  const distIndexPath = path.join(__dirname, "dist", "dist", "index.html");
+  const distIndexPath = path.join(__dirname, "dist", "index.html");
   if (fs.existsSync(distIndexPath)) {
-    const distPath = path.join(__dirname, "dist", "dist");
+    const distPath = path.join(__dirname, "dist");
     app.use(express.static(distPath));
     // SPA fallback: any non-API request gets index.html.
     // Using middleware (not "*" route) to be compatible with Express 5 / path-to-regexp v8.
