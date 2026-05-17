@@ -515,7 +515,7 @@ async function startServer() {
   <div class="price-row">
     <select id="tier"><option value="standard">Стандарт</option><option value="premium">Премиум</option></select>
     <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
-    <button id="createBtn">Создать коды</button>
+    <button id="createBtn" onclick="var s='stilist-admin-key-913260';var t=document.getElementById('tier').value;var c=document.getElementById('count').value;fetch('/api/generate-promo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({secret:s,tier:t,count:c})}).then(function(r){return r.json()}).then(function(d){document.getElementById('newCodes').innerHTML='<b>Результат:</b> '+JSON.stringify(d);document.getElementById('newCodes').style.display='block';loadList();loadStats()}).catch(function(e){alert('Ошибка: '+e)})">Создать коды</button>
   </div>
   <div id="newCodes" style="display:none;margin-top:16px"></div>
 </div>
