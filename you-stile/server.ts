@@ -27,31 +27,55 @@ const yooKassa = new YooCheckout({
   secretKey: process.env.YOOKASSA_SECRET_KEY || "",
 });
 
-// Stats helpers
+// Stats helpers — event-based with timestamps
+interface StatsEvent { type: "visit" | "paid_standard" | "paid_premium"; ts: string }
+interface StatsData { events: StatsEvent[]; standardPrice: number; premiumPrice: number }
+
 const statsPath = path.join(PROJECT_ROOT, "data", "stats.json");
-function loadStats() {
+function loadStats(): StatsData {
   try {
     if (fs.existsSync(statsPath)) {
-      return JSON.parse(fs.readFileSync(statsPath, "utf-8"));
+      const raw = JSON.parse(fs.readFileSync(statsPath, "utf-8"));
+      if (raw.events) return raw;
+      // Migrate old format { visits, standardSales/paidStandardSales, ... }
+      const events: StatsEvent[] = [];
+      for (let i = 0; i < (raw.visits || 0); i++) events.push({ type: "visit", ts: new Date().toISOString() });
+      for (let i = 0; i < (raw.paidStandardSales || raw.standardSales || 0); i++) events.push({ type: "paid_standard", ts: new Date().toISOString() });
+      for (let i = 0; i < (raw.paidPremiumSales || raw.premiumSales || 0); i++) events.push({ type: "paid_premium", ts: new Date().toISOString() });
+      return { events, standardPrice: raw.standardPrice || 100, premiumPrice: raw.premiumPrice || 200 };
     }
   } catch {}
-  return { visits: 0, paidStandardSales: 0, paidPremiumSales: 0, standardPrice: 100, premiumPrice: 200 };
+  return { events: [], standardPrice: 100, premiumPrice: 200 };
 }
-function saveStats(stats: any) {
+function saveStats(stats: StatsData) {
   const dir = path.dirname(statsPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  // Prune events older than 1 year
+  const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+  stats.events = stats.events.filter(e => new Date(e.ts) >= cutoff);
   fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
 }
 function incVisit() {
   const stats = loadStats();
-  stats.visits++;
+  stats.events.push({ type: "visit", ts: new Date().toISOString() });
   saveStats(stats);
 }
 function incPaidSale(tier: string) {
   const stats = loadStats();
-  if (tier === "premium") stats.paidPremiumSales++;
-  else stats.paidStandardSales++;
+  stats.events.push({ type: tier === "premium" ? "paid_premium" : "paid_standard", ts: new Date().toISOString() });
   saveStats(stats);
+}
+function computeStats(stats: StatsData, period?: string) {
+  let cutoff: Date | null = null;
+  const now = new Date();
+  if (period === "today") cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  else if (period === "week") cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  else if (period === "month") cutoff = new Date(now.getFullYear(), now.getMonth(), 1);
+  const filtered = cutoff ? stats.events.filter(e => new Date(e.ts) >= cutoff) : stats.events;
+  const visits = filtered.filter(e => e.type === "visit").length;
+  const paidStandardSales = filtered.filter(e => e.type === "paid_standard").length;
+  const paidPremiumSales = filtered.filter(e => e.type === "paid_premium").length;
+  return { visits, paidStandardSales, paidPremiumSales, standardPrice: stats.standardPrice, premiumPrice: stats.premiumPrice, revenue: paidStandardSales * stats.standardPrice + paidPremiumSales * stats.premiumPrice };
 }
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -428,6 +452,12 @@ async function startServer() {
 
 <div class="card">
   <div class="section-title"><h2>📈 Статистика</h2></div>
+  <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+    <button onclick="setPeriod('today')" id="btn-today" class="btn-small" style="border:1px solid #ddd">Сегодня</button>
+    <button onclick="setPeriod('week')" id="btn-week" class="btn-small" style="border:1px solid #ddd">Неделя</button>
+    <button onclick="setPeriod('month')" id="btn-month" class="btn-small" style="border:1px solid #ddd">Месяц</button>
+    <button onclick="setPeriod('all')" id="btn-all" class="btn-small btn-dark">Всё время</button>
+  </div>
   <div class="grid">
     <div class="stat">
       <div class="stat-num" id="visits">—</div>
@@ -482,14 +512,22 @@ async function startServer() {
 
 <script>
 const secret = "stilist-admin-key-913260";
+let currentPeriod = 'all';
+function setPeriod(p) {
+  currentPeriod = p;
+  ['today','week','month','all'].forEach(k => {
+    const btn = document.getElementById('btn-' + k);
+    btn.className = k === p ? 'btn-small btn-dark' : 'btn-small';
+  });
+  loadStats();
+}
 async function loadStats() {
-  const r = await fetch('/api/admin-stats');
+  const r = await fetch('/api/admin-stats?period=' + currentPeriod);
   const d = await r.json();
   document.getElementById('visits').textContent = d.stats.visits.toLocaleString();
   document.getElementById('standardSales').textContent = d.stats.paidStandardSales;
   document.getElementById('premiumSales').textContent = d.stats.paidPremiumSales;
-  const rev = d.stats.paidStandardSales * d.stats.standardPrice + d.stats.paidPremiumSales * d.stats.premiumPrice;
-  document.getElementById('revenue').textContent = rev.toLocaleString() + ' ₽';
+  document.getElementById('revenue').textContent = d.stats.revenue.toLocaleString() + ' ₽';
   document.getElementById('priceStandard').value = d.stats.standardPrice;
   document.getElementById('pricePremium').value = d.stats.premiumPrice;
 }
@@ -544,8 +582,10 @@ loadList();
 
   // Admin stats endpoint (открытый)
   app.get("/api/admin-stats", (req: Request, res: Response) => {
+    const period = (req.query.period as string) || "all";
     const stats = loadStats();
-    res.json({ stats });
+    const computed = computeStats(stats, period);
+    res.json({ stats: computed, period });
   });
 
   // Admin set price endpoint (открытый)

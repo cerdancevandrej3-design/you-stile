@@ -7,6 +7,29 @@ import { useState, useRef, useEffect, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download, Star, Share2 } from 'lucide-react';
 
+// --- Category emoji mapping ---
+const CATEGORY_EMOJI: Record<string, string> = {
+  "верх": "👕", "верхняя одежда": "🧥", "низ": "👖",
+  "обувь": "👟", "сумка": "👜", "украшения": "💍",
+  "аксессуары": "🧣", "головной убор": "🧢",
+};
+
+// --- Progress stages ---
+const PROGRESS_STAGES = [
+  { step: 0.5, label: "Оптимизация фото" },
+  { step: 1.0, label: "Анализ типа фигуры" },
+  { step: 1.5, label: "Подбор образов" },
+  { step: 2.0, label: "Генерация визуализации" },
+  { step: 4.0, label: "Поиск товаров" },
+  { step: 5.0, label: "Готово!" },
+];
+function getActiveStageIndex(s: number): number {
+  for (let i = PROGRESS_STAGES.length - 1; i >= 0; i--) {
+    if (s >= PROGRESS_STAGES[i].step) return i;
+  }
+  return 0;
+}
+
 // --- localStorage helpers ---
 function getSavedName(): string { return localStorage.getItem("you-stile-user-name") || ""; }
 function saveName(name: string) {
@@ -971,7 +994,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
       description: string;
       image: string | null;
       imageError?: string | null;
-      items: { name: string; description?: string; price: string; url?: string; marketplace?: string; imageUrl?: string | null; productUrl?: string | null; wbUrl?: string | null; ozonUrl?: string | null; ymUrl?: string | null; similarity?: string | null; reason?: string | null }[];
+      items: { name: string; category?: string; description?: string; price: string; url?: string; marketplace?: string; imageUrl?: string | null; productUrl?: string | null; wbUrl?: string | null; ozonUrl?: string | null; ymUrl?: string | null; similarity?: string | null; reason?: string | null }[];
     }[];
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -1192,19 +1215,35 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                     />
                   </div>
                   
-                  <div className="h-12 flex items-center justify-center">
-                    <AnimatePresence mode="wait">
-                      <motion.p 
-                        key={loadingState.text}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -10 }}
-                        transition={{ duration: 0.3 }}
-                        className="text-white/90 text-center px-8 font-light tracking-wide text-lg"
-                      >
-                        {loadingState.text}
-                      </motion.p>
-                    </AnimatePresence>
+                  <div className="w-72 space-y-2 mt-2">
+                    {PROGRESS_STAGES.map((stage, i) => {
+                      const activeIndex = getActiveStageIndex(loadingState.step);
+                      const isCompleted = i < activeIndex;
+                      const isActive = i === activeIndex;
+                      return (
+                        <div key={i} className={`flex items-center gap-3 transition-all duration-300 ${
+                          isActive ? 'text-white' : isCompleted ? 'text-white/60' : 'text-white/30'
+                        }`}>
+                          <span className="w-5 h-5 flex items-center justify-center flex-shrink-0">
+                            {isCompleted ? (
+                              <Check className="w-4 h-4 text-gold" />
+                            ) : isActive ? (
+                              <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}>
+                                <Sparkles className="w-4 h-4 text-gold" />
+                              </motion.div>
+                            ) : (
+                              <div className="w-1.5 h-1.5 rounded-full bg-white/20" />
+                            )}
+                          </span>
+                          <div>
+                            <span className={`text-sm ${isActive ? 'font-medium' : 'font-light'}`}>{stage.label}</span>
+                            {isActive && loadingState.text && stage.label !== loadingState.text && (
+                              <p className="text-xs text-white/40 mt-0.5">{loadingState.text}</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </motion.div>
               )}
@@ -1674,9 +1713,15 @@ const StylizeModal = ({ isOpen, onClose, userName, tier }: { isOpen: boolean; on
                                 </div>
                               )}
                               <div className="flex justify-between items-start gap-3">
-                                <h4 className="font-medium text-charcoal text-sm leading-tight">{item.name}</h4>
+                                <div className="flex items-center gap-2 min-w-0">
+                                  {item.category && <span className="text-lg flex-shrink-0">{CATEGORY_EMOJI[item.category.toLowerCase()] || "✨"}</span>}
+                                  <h4 className="font-medium text-charcoal text-sm leading-tight">{item.name}</h4>
+                                </div>
                                 <span className="font-serif text-gold text-sm whitespace-nowrap">{item.price}</span>
                               </div>
+                              {item.category && (
+                                <p className="text-xs text-charcoal/50">{item.category}</p>
+                              )}
                               {/* Description — почему именно эта вещь */}
                               {item.description && (
                                 <p className="text-xs text-charcoal/60 leading-relaxed">{item.description}</p>
