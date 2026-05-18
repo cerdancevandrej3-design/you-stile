@@ -515,7 +515,7 @@ async function startServer() {
   <div class="price-row">
     <select id="tier"><option value="standard">Стандарт</option><option value="premium">Премиум</option></select>
     <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
-    <button id="createBtn" onclick="var s='stilist-admin-key-913260';var t=document.getElementById('tier').value;var c=document.getElementById('count').value;fetch('/api/generate-promo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({secret:s,tier:t,count:c})}).then(function(r){return r.json()}).then(function(d){document.getElementById('newCodes').innerHTML='<b>Новые коды:</b> '+d.codes.join(' ');document.getElementById('newCodes').style.display='block'}).catch(function(e){alert('Ошибка: '+e)})">Создать коды</button>
+    <button id="createBtn" class="btn-small" onclick="doGenerate()">Создать коды</button>
   </div>
   <div id="newCodes" style="display:none;margin-top:16px"></div>
 </div>
@@ -528,10 +528,6 @@ async function startServer() {
 </div>
 
 <script>
-window.testFn = function() { alert('testFn работает!'); };
-alert('Скрипт загружен!');
-window.testGenerate = function() { alert('testGenerate работает!'); };
-document.getElementById('createBtn').onclick = function() { alert('EventListener работает!'); };
 const secret = "stilist-admin-key-913260";
 let currentPeriod = 'all';
 function setPeriod(p) {
@@ -617,7 +613,6 @@ async function savePrice(tier) {
 }
 
 async function doGenerate() {
-  alert('doGenerate вызвана!');
   try {
     const tier = document.getElementById('tier').value;
     const count = document.getElementById('count').value;
@@ -631,9 +626,8 @@ async function doGenerate() {
     if (!d.codes || !d.codes.length) { alert('Нет кодов: ' + JSON.stringify(d)); return; }
     const div = document.getElementById('newCodes');
     div.innerHTML = '<div style="margin-bottom:8px;font-weight:600;color:#2e7d32">✨ Новые (' + d.codes.length + '):</div>' +
-      d.codes.map(c => '<span class="new-code">' + c + '</span>').join(' ');
+      d.codes.map(c => '<span class="new-code" onclick="navigator.clipboard.writeText(\''+c+'\')">' + c + '</span>').join(' ');
     div.style.display = 'block';
-    loadList();
     loadStats();
   } catch(e) { alert('Ошибка: ' + e); }
 }
