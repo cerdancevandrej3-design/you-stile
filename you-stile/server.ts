@@ -529,6 +529,7 @@ async function startServer() {
 
 <script>
 const secret = "stilist-admin-key-913260";
+function copyCode(c) { navigator.clipboard.writeText(c).then(function() { alert('Скопировано: ' + c); }); }
 let currentPeriod = 'all';
 function setPeriod(p) {
   currentPeriod = p;
@@ -626,7 +627,7 @@ async function doGenerate() {
     if (!d.codes || !d.codes.length) { alert('Нет кодов: ' + JSON.stringify(d)); return; }
     const div = document.getElementById('newCodes');
     div.innerHTML = '<div style="margin-bottom:8px;font-weight:600;color:#2e7d32">✨ Новые (' + d.codes.length + '):</div>' +
-      d.codes.map(c => '<span class="new-code" onclick="navigator.clipboard.writeText(\''+c+'\')">' + c + '</span>').join(' ');
+      d.codes.map(c => '<span class="new-code" style="cursor:pointer" onclick="copyCode(\''+c+'\')">' + c + '</span>').join(' ');
     div.style.display = 'block';
     loadStats();
   } catch(e) { alert('Ошибка: ' + e); }
