@@ -594,9 +594,9 @@ async function exportCSV() {
   (d.chartData || []).forEach(row => {
     rows.push([row.date, row.visits, row.standardSales, row.premiumSales, row.revenue]);
   });
-  const csv = rows.map(r => r.join(',')).join('\n');
+  const csv = rows.map(r => r.join(',')).join(String.fromCharCode(10));
   const a = document.createElement('a');
-  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent('﻿' + csv);
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
   a.download = 'stilist-stats.csv';
   a.click();
 }
