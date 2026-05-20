@@ -981,7 +981,16 @@ loadList();
 
       if (p.status === "succeeded" || p.status === "waiting_for_capture") {
         const tier = p.metadata?.tier || "standard";
+        const amount = (p as any).amount?.value || "?";
         console.log(`[YooKassa] Payment confirmed: ${paymentId}, tier: ${tier}`);
+        // Fallback: increment stats and notify Telegram (webhook may not have fired yet)
+        incPaidSale(tier);
+        const tierName = tier === "premium" ? "Премиум" : "Стандарт";
+        fetch(`https://api.telegram.org/bot8780162148:AAGHjZ_PNo0q9rTJ1TZQTkJdpdV7uo2hOSY/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: 8602635380, text: `✅ Оплата ${amount}₽ (${tierName}) [confirm]` }),
+        }).catch(() => {});
         res.redirect(`/?payment_success=true&payment_id=${paymentId}&tier=${tier}`);
       } else {
         console.log(`[YooKassa] Payment not succeeded: ${paymentId}, status: ${p.status}`);
