@@ -1107,38 +1107,53 @@ async function renderBrandedCanvas(look: LookForCanvas, lookIdx: number): Promis
 const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) => {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const cachedImageUrl = useRef<string | null>(null);
 
-  const SITE_URL = "https://stilist-ai.ru";
   const lookName = look.lookName || "Образ";
 
-  const getImageUrl = () => look.imageUrl || SITE_URL;
+  // Upload base64 image to server once, cache the hosted URL
+  const ensureImageUrl = async (): Promise<string> => {
+    if (cachedImageUrl.current) return cachedImageUrl.current;
+    const resp = await fetch(look.image); // data URL → blob
+    const blob = await resp.blob();
+    const fd = new FormData();
+    fd.append("image", blob, "look.jpg");
+    const r = await fetch("/api/share-image", { method: "POST", body: fd });
+    const data = await r.json() as { imageUrl: string };
+    cachedImageUrl.current = data.imageUrl;
+    return data.imageUrl;
+  };
 
   const handleShareClick = async () => {
     if (loading) return;
-    const imgUrl = getImageUrl();
+    setLoading(true);
+    try {
+      const imageUrl = await ensureImageUrl();
 
-    // Mobile only: try native share with image file
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    if (isMobile && typeof navigator.share === "function") {
-      setLoading(true);
-      try {
-        const resp = await fetch(imgUrl);
-        const fileBlob = await resp.blob();
-        const file = new File([fileBlob], `${lookName}.jpg`, { type: "image/jpeg" });
-        if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file] });
+      // Mobile only: native share with image file
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile && typeof navigator.share === "function") {
+        try {
+          const blob = await fetch(imageUrl).then(r => r.blob());
+          const file = new File([blob], `${lookName}.jpg`, { type: "image/jpeg" });
+          if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file] });
+            return;
+          }
+          await navigator.share({ url: imageUrl });
           return;
+        } catch (e: any) {
+          if (e?.name === "AbortError") return;
         }
-        await navigator.share({ url: imgUrl });
-        return;
-      } catch (e: any) {
-        if (e?.name === "AbortError") return;
-      } finally {
-        setLoading(false);
       }
-    }
 
-    setOpen(true);
+      setOpen(true);
+    } catch {
+      setOpen(true); // show popup even if upload failed
+    } finally {
+      setLoading(false);
+    }
   };
 
   const openShareUrl = (url: string) => {
@@ -1146,11 +1161,18 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
     setOpen(false);
   };
 
-  const shareWhatsApp = () => openShareUrl(`https://wa.me/?text=${encodeURIComponent(getImageUrl())}`);
-  const shareTelegram = () => openShareUrl(`https://t.me/share/url?url=${encodeURIComponent(getImageUrl())}`);
-  const shareVK = () => openShareUrl(`https://vk.com/share.php?url=${encodeURIComponent(getImageUrl())}`);
-  const shareOK = () => openShareUrl(`https://connect.ok.ru/offer?url=${encodeURIComponent(getImageUrl())}`);
-  const shareMAX = () => openShareUrl(`https://connect.mail.ru/share?url=${encodeURIComponent(getImageUrl())}`);
+  const getUrl = () => cachedImageUrl.current || "";
+
+  const shareWhatsApp = () => openShareUrl(`https://wa.me/?text=${encodeURIComponent(getUrl())}`);
+  const shareTelegram = () => openShareUrl(`https://t.me/share/url?url=${encodeURIComponent(getUrl())}`);
+  const shareVK = () => openShareUrl(`https://vk.com/share.php?url=${encodeURIComponent(getUrl())}`);
+  const shareOK = () => openShareUrl(`https://connect.ok.ru/offer?url=${encodeURIComponent(getUrl())}`);
+  const shareMAX = async () => {
+    try { await navigator.clipboard.writeText(getUrl()); } catch { /* ignore */ }
+    setOpen(false);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 3000);
+  };
 
   return (
     <>
@@ -1173,13 +1195,19 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
         )}
       </button>
 
+      {copied && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[300] bg-charcoal text-ivory text-sm px-4 py-2 rounded-full shadow-lg">
+          Ссылка скопирована — вставьте в MAX
+        </div>
+      )}
+
       {open && (
         <div
-          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-end justify-center p-4"
           onClick={() => setOpen(false)}
         >
           <div
-            className="bg-charcoal rounded-3xl shadow-2xl p-6 w-full max-w-sm"
+            className="bg-charcoal rounded-3xl shadow-2xl p-6 w-full max-w-sm mb-2"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center mb-5">
