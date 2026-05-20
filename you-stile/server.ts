@@ -351,6 +351,7 @@ async function startServer() {
   const ADMIN_SECRET = process.env.ADMIN_SECRET || "admin";
 
   app.use(cors());
+  app.set("trust proxy", 1); // trust Nginx X-Forwarded-Proto
   app.use(express.json());
 
   app.post("/api/check-promo", (req: Request, res: Response) => {
@@ -380,8 +381,112 @@ async function startServer() {
 
   app.get("/api/promo-list", (req: Request, res: Response) => {
     const list = Object.entries(promos).map(([code, e]) => ({ code, ...e }));
-    res.json({ total: list.length, unused: list.filter(e => !e.used).length, codes: list });
+    const sorted = list.slice().sort((a, b) =>
+      (b.createdAt || "").localeCompare(a.createdAt || "")
+    );
+    res.json({
+      total: list.length,
+      unused: list.filter(e => !e.used).length,
+      codes: sorted.slice(0, 15)
+    });
   });
+
+  // ============ SHARE WITH OG:IMAGE PREVIEW ============
+  // Storage for share metadata
+  const SHARES_FILE = path.join(__dirname, "data", "shares.json");
+  const SHARES_DIR = path.join(__dirname, "public", "share");
+  type ShareMeta = { lookName: string; description: string; createdAt: string };
+  let shares: Record<string, ShareMeta> = {};
+  try { shares = JSON.parse(fs.readFileSync(SHARES_FILE, "utf-8")); } catch {}
+  const saveShares = () => {
+    try {
+      fs.mkdirSync(path.dirname(SHARES_FILE), { recursive: true });
+      fs.writeFileSync(SHARES_FILE, JSON.stringify(shares, null, 2));
+    } catch (e) { console.error("saveShares failed:", e); }
+  };
+  const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c
+  ));
+
+  // Upload a generated branded image, store it, return public share URL
+  app.post("/api/share-image", upload.single("image"), (req: Request, res: Response) => {
+    if (!req.file) return res.status(400).json({ error: "no image" });
+    const id = (typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID() : Date.now() + "-" + Math.random()).toString().replace(/-/g, "").slice(0, 12);
+    try {
+      fs.mkdirSync(SHARES_DIR, { recursive: true });
+      fs.writeFileSync(path.join(SHARES_DIR, `${id}.jpg`), req.file.buffer);
+    } catch (e) {
+      console.error("share-image write failed:", e);
+      return res.status(500).json({ error: "write failed" });
+    }
+    shares[id] = {
+      lookName: ((req.body.lookName as string) || "Образ").slice(0, 200),
+      description: ((req.body.description as string) || "").slice(0, 500),
+      createdAt: new Date().toISOString()
+    };
+    saveShares();
+    const baseUrl = process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+    res.json({ id, url: `${baseUrl}/s/${id}`, imageUrl: `${baseUrl}/share/${id}.jpg` });
+  });
+
+  // Static serving of share images
+  app.use("/share", express.static(SHARES_DIR, { maxAge: "30d", immutable: true }));
+
+  // Promo landing page with og:image (must be registered BEFORE SPA fallback)
+  app.get("/s/:id", (req: Request, res: Response) => {
+    const meta = shares[req.params.id];
+    if (!meta) return res.status(404).type("text/html").send("<h1>Образ не найден</h1>");
+    const baseUrl = process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+    const imgUrl = `${baseUrl}/share/${req.params.id}.jpg`;
+    const title = `${meta.lookName} — Твой стилист`;
+    const firstLine = (meta.description.split("\n").find(l => l.trim()) || "Персональный AI-стилист").trim();
+    const desc = firstLine.slice(0, 200);
+    const pageUrl = `${baseUrl}/s/${req.params.id}`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`<!DOCTYPE html><html lang="ru"><head>
+<meta charset="UTF-8">
+<title>${escapeHtml(title)}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="${escapeHtml(desc)}">
+<meta property="og:title" content="${escapeHtml(title)}">
+<meta property="og:description" content="${escapeHtml(desc)}">
+<meta property="og:image" content="${imgUrl}">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:url" content="${pageUrl}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Твой стилист">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${escapeHtml(title)}">
+<meta name="twitter:description" content="${escapeHtml(desc)}">
+<meta name="twitter:image" content="${imgUrl}">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#faf7f2;color:#1a1a1a;min-height:100vh;padding:20px}
+.wrap{max-width:760px;margin:0 auto;text-align:center}
+h1{font-family:Georgia,serif;font-size:28px;font-weight:500;margin:24px 0 12px;line-height:1.25}
+.img-wrap{background:#fff;border-radius:24px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.08);margin-bottom:24px}
+img{width:100%;height:auto;display:block}
+.desc{color:#555;font-size:15px;line-height:1.6;margin:0 24px 28px;white-space:pre-wrap;text-align:left}
+.cta{display:inline-block;background:#c9a84c;color:#1a1a1a;text-decoration:none;padding:16px 32px;border-radius:999px;font-weight:600;font-size:16px;margin-bottom:32px;box-shadow:0 4px 12px rgba(201,168,76,.3);transition:transform .15s ease}
+.cta:hover{transform:translateY(-1px)}
+.tagline{color:#888;font-size:13px;margin-top:8px}
+.footer{color:#aaa;font-size:12px;margin-top:24px;padding-top:16px;border-top:1px solid #eee}
+.footer a{color:#888;text-decoration:none}
+@media(min-width:600px){h1{font-size:34px}}
+</style>
+</head><body>
+<div class="wrap">
+<h1>${escapeHtml(meta.lookName)}</h1>
+<div class="img-wrap"><img src="${imgUrl}" alt="${escapeHtml(meta.lookName)}"></div>
+<p class="desc">${escapeHtml(desc)}</p>
+<a href="${baseUrl}/" class="cta">✨ Создать свой образ</a>
+<p class="tagline">Персональный AI-стилист за 1 минуту</p>
+<div class="footer"><a href="${baseUrl}/">stilist-ai.ru</a></div>
+</div>
+</body></html>`);
+  });
+  // ============ END SHARE ============
 
   // Admin page (открытый доступ)
   app.get("/api/admin", (req: Request, res: Response) => {
@@ -755,6 +860,8 @@ loadList();
 
   // Payment endpoints
   const PAYMENT_MODE = process.env.PAYMENT_MODE || "test";
+  // Maps orderId (idempotenceKey) → paymentId for return_url lookup
+  const pendingPayments = new Map<string, string>();
 
   app.post("/api/create-payment", async (req: Request, res: Response) => {
     try {
@@ -774,7 +881,7 @@ loadList();
         },
         confirmation: {
           type: "redirect",
-          return_url: `${process.env.BASE_URL || "https://stilist-ai.ru"}/api/confirm-payment`,
+          return_url: `${process.env.BASE_URL || "https://stilist-ai.ru"}/api/confirm-payment?orderId=${idempotenceKey}`,
         },
         capture: true, // Автоматическое подтверждение платежа
         description: paymentDescription,
@@ -784,8 +891,8 @@ loadList();
         },
       }, idempotenceKey);
 
-      // Используем URL от YooKassa напрямую
-      const confirmUrl = payment.confirmation?.confirmation_url || `${process.env.BASE_URL || "https://stilist-ai.ru"}/api/confirm-payment?paymentId=${payment.id}`;
+      // Сохраняем маппинг orderId → paymentId для confirm-payment
+      pendingPayments.set(idempotenceKey, payment.id);
 
       console.log("[YooKassa] Payment created:", payment.id, "status:", payment.status);
 
@@ -840,31 +947,38 @@ loadList();
   // Подтверждение оплаты - вызывается после возврата с YooKassa
   app.get("/api/confirm-payment", async (req: Request, res: Response) => {
     try {
-      const paymentId = req.query.paymentId as string;
+      const orderId = req.query.orderId as string;
+      const paymentId = orderId ? pendingPayments.get(orderId) : (req.query.paymentId as string);
       if (!paymentId) {
+        console.log(`[YooKassa] confirm-payment: no paymentId for orderId=${orderId}`);
         return res.redirect("/?payment_error=no_id");
       }
 
-      const payment = await yooKassa.getPayment(paymentId);
+      let p = await yooKassa.getPayment(paymentId);
+      console.log(`[YooKassa] confirm-payment status: ${p.status}, id: ${paymentId}`);
 
-      // Если платёж ожидает (two-stage), автоматически подтверждаем
-      if (payment.status === "waiting_for_capture") {
-        await yooKassa.capturePayment(paymentId, undefined, paymentId);
-        console.log(`[YooKassa] Payment captured automatically: ${paymentId}`);
+      // СБП может вернуть pending — ждём до 15 сек
+      if (p.status === "pending") {
+        for (let i = 0; i < 5; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          p = await yooKassa.getPayment(paymentId);
+          console.log(`[YooKassa] poll ${i + 1}: ${p.status}`);
+          if (p.status !== "pending") break;
+        }
       }
 
-      if (payment.status === "succeeded" || payment.status === "waiting_for_capture") {
-        const tier = payment.metadata?.tier || "standard";
+      // Если платёж ожидает захвата (two-stage), подтверждаем
+      if (p.status === "waiting_for_capture") {
+        await yooKassa.capturePayment(paymentId, undefined, paymentId);
+        console.log(`[YooKassa] Payment captured: ${paymentId}`);
+      }
 
-        // Увеличиваем статистику
-        incPaidSale(tier);
-
+      if (p.status === "succeeded" || p.status === "waiting_for_capture") {
+        const tier = p.metadata?.tier || "standard";
         console.log(`[YooKassa] Payment confirmed: ${paymentId}, tier: ${tier}`);
-
-        // Редирект на главную с флагом успеха
         res.redirect(`/?payment_success=true&payment_id=${paymentId}&tier=${tier}`);
       } else {
-        console.log(`[YooKassa] Payment not succeeded: ${paymentId}, status: ${payment.status}`);
+        console.log(`[YooKassa] Payment not succeeded: ${paymentId}, status: ${p.status}`);
         res.redirect("/?payment_error=cancelled");
       }
     } catch (err: any) {
