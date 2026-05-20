@@ -4,6 +4,7 @@
  */
 
 import { useState, useRef, useEffect, ChangeEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download, Star, Share2 } from 'lucide-react';
 
@@ -1954,8 +1955,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                   ✍️ Оставить отзыв
                 </button>
 
-                {reviewOpen && (
-                  <div className="fixed inset-0 z-[300] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setReviewOpen(false)}>
+                {reviewOpen && createPortal(
+                  <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setReviewOpen(false)}>
                     <div className="bg-ivory rounded-3xl shadow-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
                       <h3 className="text-lg font-serif text-charcoal mb-3">Ваш отзыв</h3>
                       {reviewSent ? (
@@ -1975,7 +1976,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                         </>
                       )}
                     </div>
-                  </div>
+                  </div>,
+                  document.body
                 )}
               </div>
             )}
@@ -2239,7 +2241,7 @@ export default function App() {
           <div className="grid md:grid-cols-3 gap-4 md:gap-8 mb-16 md:mb-20">
             {[
               { icon: Smartphone, title: "Загрузите фото", desc: "Сделайте селфи в полный рост в простой, облегающей одежде." },
-              { icon: Sparkles, title: "Нейросеть анализирует", desc: "Nano Banana учитывает ваш рост, вес, цветотип и особенности фигуры." },
+              { icon: Sparkles, title: "Нейросеть анализирует", desc: "ИИ обучен на миллионах образов от ведущих дизайнеров и подиумов. Учитывает тип фигуры, цветотип и тренды 2026 — подбирает только то, что работает именно для вас." },
               { icon: Shirt, title: "Получите капсулу", desc: "3 готовых образа с подробным разбором одежды, обуви и аксессуаров." }
             ].map((step, idx) => (
               <motion.div 
