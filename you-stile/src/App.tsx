@@ -1196,7 +1196,7 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
       </button>
 
       {copied && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-[300] bg-charcoal text-ivory text-sm px-4 py-2 rounded-full shadow-lg whitespace-nowrap">
+        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[300] bg-charcoal text-ivory text-sm px-4 py-2 rounded-full shadow-lg whitespace-nowrap">
           Ссылка скопирована — вставьте в MAX
         </div>
       )}
@@ -1204,7 +1204,7 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
       {open && (
         <>
           <div className="fixed inset-0 z-[199]" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-full left-0 right-0 mb-2 z-[200] bg-charcoal rounded-2xl shadow-2xl p-4">
+          <div className="absolute top-full left-0 right-0 mt-2 z-[200] bg-charcoal rounded-2xl shadow-2xl p-4">
             <div className="flex justify-between gap-1">
               <button onClick={shareTelegram} className="flex flex-col items-center gap-1.5 flex-1 p-2 rounded-xl hover:bg-white/5 transition-colors">
                 <span className="w-10 h-10 rounded-full bg-[#0088cc] text-white flex items-center justify-center">
