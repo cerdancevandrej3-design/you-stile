@@ -1108,6 +1108,7 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
   const cachedImageUrl = useRef<string | null>(null);
 
   const lookName = look.lookName || "Образ";
@@ -1149,8 +1150,7 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
       }
 
       setOpen(true);
-    } catch {
-      setOpen(true); // show popup even if upload failed
+      setTimeout(() => popupRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
     } finally {
       setLoading(false);
     }
@@ -1204,7 +1204,7 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
       {open && (
         <>
           <div className="fixed inset-0 z-[199]" onClick={() => setOpen(false)} />
-          <div className="absolute top-full left-0 right-0 mt-2 z-[200] bg-charcoal rounded-2xl shadow-2xl p-4">
+          <div ref={popupRef} className="absolute top-full left-0 right-0 mt-2 z-[200] bg-charcoal rounded-2xl shadow-2xl p-4">
             <div className="flex justify-between gap-1">
               <button onClick={shareTelegram} className="flex flex-col items-center gap-1.5 flex-1 p-2 rounded-xl hover:bg-white/5 transition-colors">
                 <span className="w-10 h-10 rounded-full bg-[#0088cc] text-white flex items-center justify-center">
