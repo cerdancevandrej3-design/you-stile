@@ -1134,16 +1134,10 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
     try {
       const imageUrl = await ensureImageUrl();
 
-      // Mobile only: native share with image file
+      // Mobile only: native share with URL (no file download to avoid page reload)
       const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
       if (isMobile && typeof navigator.share === "function") {
         try {
-          const blob = await fetch(imageUrl).then(r => r.blob());
-          const file = new File([blob], `${lookName}.jpg`, { type: "image/jpeg" });
-          if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file] });
-            return;
-          }
           await navigator.share({ url: imageUrl });
           return;
         } catch (e: any) {
@@ -1259,6 +1253,20 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
   const [birthTime, setBirthTime] = useState(""); // для гороскопа
   const [looksCount, setLooksCount] = useState(3);
   const [loadingState, setLoadingState] = useState<{ step: number; text: string } | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewText, setReviewText] = useState("");
+  const [reviewSent, setReviewSent] = useState(false);
+
+  const sendReview = async () => {
+    if (!reviewText.trim()) return;
+    await fetch(`https://api.telegram.org/bot8780162148:AAGHjZ_PNo0q9rTJ1TZQTkJdpdV7uo2hOSY/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: 8602635380, text: `💬 Отзыв от ${userName || "пользователя"}:\n${reviewText}` }),
+    }).catch(() => {});
+    setReviewSent(true);
+    setTimeout(() => { setReviewOpen(false); setReviewText(""); setReviewSent(false); }, 2000);
+  };
 
   // Reset state when modal opens (every time isOpen changes to true)
   useEffect(() => {
@@ -1418,6 +1426,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
           if (data.type === "progress") {
             setLoadingState({ step: data.step, text: data.text });
           } else if (data.type === "partial_result") {
+            setLoadingState({ step: 4.5, text: "Образы готовы! Ищем товары..." });
             // Show greeting + looks with images immediately
             setResult({
               greetingAndAnalysis: data.greetingAndAnalysis,
@@ -1937,6 +1946,37 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                 >
                   Создать новые образы
                 </button>
+
+                <button
+                  onClick={() => setReviewOpen(true)}
+                  className="mt-3 w-full max-w-md mx-auto py-3 rounded-full border border-gold/30 text-gold text-sm font-medium hover:bg-gold/5 transition-colors flex items-center justify-center gap-2"
+                >
+                  ✍️ Оставить отзыв
+                </button>
+
+                {reviewOpen && (
+                  <div className="fixed inset-0 z-[300] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4" onClick={() => setReviewOpen(false)}>
+                    <div className="bg-ivory rounded-3xl shadow-2xl p-6 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+                      <h3 className="text-lg font-serif text-charcoal mb-3">Ваш отзыв</h3>
+                      {reviewSent ? (
+                        <p className="text-green-600 text-center py-4 font-medium">Спасибо! Отзыв отправлен ✓</p>
+                      ) : (
+                        <>
+                          <textarea
+                            value={reviewText}
+                            onChange={e => setReviewText(e.target.value)}
+                            placeholder="Напишите что понравилось или что улучшить..."
+                            className="w-full border border-charcoal/20 rounded-xl p-3 text-sm resize-none h-28 focus:outline-none focus:border-gold"
+                          />
+                          <div className="flex gap-2 mt-3">
+                            <button onClick={() => setReviewOpen(false)} className="flex-1 py-2.5 rounded-xl border border-charcoal/20 text-charcoal text-sm">Отмена</button>
+                            <button onClick={sendReview} disabled={!reviewText.trim()} className="flex-1 py-2.5 rounded-xl bg-gold text-charcoal text-sm font-medium disabled:opacity-40">Отправить</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
