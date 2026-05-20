@@ -961,6 +961,276 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
   );
 };
 
+// --- Render branded canvas: photo + title + description + wardrobe + watermark ---
+type LookForCanvas = {
+  image?: string;
+  lookName?: string;
+  description?: string;
+  items?: Array<{ name?: string; price?: string; description?: string }>;
+};
+
+async function renderBrandedCanvas(look: LookForCanvas, lookIdx: number): Promise<Blob> {
+  const img = new window.Image();
+  img.crossOrigin = 'anonymous';
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error('img load'));
+    img.src = look.image as string;
+  });
+
+  const padding = 50;
+  const gap = 50;
+  const photoW = 900;
+  const photoH = Math.round(img.height * (photoW / img.width));
+  const textW = 1100;
+  const totalW = padding + photoW + gap + textW + padding;
+
+  const wrap = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] => {
+    const lines: string[] = [];
+    for (const paragraph of text.split('\n')) {
+      if (!paragraph.trim()) { lines.push(''); continue; }
+      const words = paragraph.split(' ');
+      let line = '';
+      for (const w of words) {
+        const test = line ? line + ' ' + w : w;
+        if (ctx.measureText(test).width > maxWidth && line) {
+          lines.push(line);
+          line = w;
+        } else {
+          line = test;
+        }
+      }
+      if (line) lines.push(line);
+    }
+    return lines;
+  };
+
+  const measureCanvas = document.createElement('canvas');
+  const mctx = measureCanvas.getContext('2d');
+  if (!mctx) throw new Error('canvas ctx');
+
+  const titleSize = 56;
+  const bodySize = 28;
+  const itemNameSize = 28;
+  const itemDescSize = 22;
+  const lineGap = 1.4;
+  const watermarkSize = 22;
+  const watermarkPadding = 30;
+
+  mctx.font = `700 ${titleSize}px serif`;
+  const titleLines = wrap(mctx, `Образ ${lookIdx + 1}: ${look.lookName || ''}`, textW);
+
+  mctx.font = `400 ${bodySize}px sans-serif`;
+  const descLines = wrap(mctx, look.description || '', textW);
+
+  mctx.font = `700 ${titleSize - 12}px serif`;
+  const itemsHeaderLines = wrap(mctx, '🛍 Гардероб', textW);
+
+  const items = look.items || [];
+  const itemsBlocks: { name: string[]; desc: string[] }[] = items.map(it => {
+    mctx.font = `600 ${itemNameSize}px sans-serif`;
+    const nameLines = wrap(mctx, (it.name || '') + (it.price ? `   —   ${it.price}` : ''), textW);
+    mctx.font = `400 ${itemDescSize}px sans-serif`;
+    const descL = wrap(mctx, it.description || '', textW);
+    return { name: nameLines, desc: descL };
+  });
+
+  let textHeight = padding;
+  textHeight += titleLines.length * titleSize * lineGap + 40;
+  textHeight += descLines.length * bodySize * lineGap + 50;
+  textHeight += itemsHeaderLines.length * (titleSize - 12) * lineGap + 30;
+  for (const b of itemsBlocks) {
+    textHeight += b.name.length * itemNameSize * lineGap;
+    textHeight += b.desc.length * itemDescSize * lineGap + 22;
+  }
+  textHeight += padding + watermarkSize + watermarkPadding;
+
+  const totalH = Math.max(photoH + padding * 2 + watermarkSize + watermarkPadding, textHeight);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = totalW;
+  canvas.height = totalH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('canvas ctx 2');
+
+  ctx.fillStyle = '#FAF7F2';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.drawImage(img, padding, padding, photoW, photoH);
+
+  let y = padding;
+  const textX = padding + photoW + gap;
+  ctx.textBaseline = 'top';
+
+  ctx.fillStyle = '#1a1a1a';
+  ctx.font = `700 ${titleSize}px serif`;
+  for (const l of titleLines) { ctx.fillText(l, textX, y); y += titleSize * lineGap; }
+  y += 40;
+
+  ctx.font = `400 ${bodySize}px sans-serif`;
+  ctx.fillStyle = '#3a3a3a';
+  for (const l of descLines) { ctx.fillText(l, textX, y); y += bodySize * lineGap; }
+  y += 50;
+
+  ctx.fillStyle = '#1a1a1a';
+  ctx.font = `700 ${titleSize - 12}px serif`;
+  for (const l of itemsHeaderLines) { ctx.fillText(l, textX, y); y += (titleSize - 12) * lineGap; }
+  y += 30;
+
+  for (const b of itemsBlocks) {
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = `600 ${itemNameSize}px sans-serif`;
+    for (const l of b.name) { ctx.fillText(l, textX, y); y += itemNameSize * lineGap; }
+    ctx.fillStyle = '#5a5a5a';
+    ctx.font = `400 ${itemDescSize}px sans-serif`;
+    for (const l of b.desc) { ctx.fillText(l, textX, y); y += itemDescSize * lineGap; }
+    y += 22;
+  }
+
+  // Watermark — bottom right corner
+  ctx.fillStyle = '#c9a84c';
+  ctx.font = `600 ${watermarkSize}px sans-serif`;
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'right';
+  ctx.fillText('✨ stilist-ai.ru', totalW - watermarkPadding, totalH - watermarkPadding);
+  ctx.textAlign = 'left';
+
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) reject(new Error('blob failed'));
+      else resolve(blob);
+    }, 'image/jpeg', 0.92);
+  });
+}
+
+// --- Share Menu (single button → native share on mobile, popup menu on desktop) ---
+const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) => {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const SITE_URL = "https://stilist-ai.ru";
+  const lookName = look.lookName || "Образ";
+
+  const getImageUrl = () => look.imageUrl || SITE_URL;
+
+  const handleShareClick = async () => {
+    if (loading) return;
+    const imgUrl = getImageUrl();
+
+    // Mobile: try native share with image file
+    if (typeof navigator.share === "function") {
+      setLoading(true);
+      try {
+        const resp = await fetch(imgUrl);
+        const fileBlob = await resp.blob();
+        const file = new File([fileBlob], `${lookName}.jpg`, { type: "image/jpeg" });
+        if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file] });
+          return;
+        }
+        await navigator.share({ url: imgUrl });
+        return;
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    setOpen(true);
+  };
+
+  const openShareUrl = (url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer,width=600,height=600");
+    setOpen(false);
+  };
+
+  const shareWhatsApp = () => openShareUrl(`https://wa.me/?text=${encodeURIComponent(getImageUrl())}`);
+  const shareTelegram = () => openShareUrl(`https://t.me/share/url?url=${encodeURIComponent(getImageUrl())}`);
+  const shareVK = () => openShareUrl(`https://vk.com/share.php?url=${encodeURIComponent(getImageUrl())}`);
+  const shareOK = () => openShareUrl(`https://connect.ok.ru/offer?url=${encodeURIComponent(getImageUrl())}`);
+  const shareMAX = () => openShareUrl(`https://connect.mail.ru/share?url=${encodeURIComponent(getImageUrl())}`);
+
+  return (
+    <>
+      <button
+        onClick={handleShareClick}
+        disabled={loading}
+        className="w-full py-3 rounded-full bg-gold text-charcoal text-sm font-medium tracking-wide flex items-center justify-center gap-2 hover:bg-gold/90 transition-colors shadow-md disabled:opacity-60 disabled:cursor-wait"
+        title="Поделиться образом"
+      >
+        {loading ? (
+          <>
+            <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeOpacity="0.25"/><path d="M12 2a10 10 0 0110 10" strokeLinecap="round"/></svg>
+            Готовим...
+          </>
+        ) : (
+          <>
+            <Share2 className="w-4 h-4" />
+            Поделиться
+          </>
+        )}
+      </button>
+
+      {open && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="bg-charcoal rounded-3xl shadow-2xl p-6 w-full max-w-sm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-base font-serif text-gold tracking-wide">Поделиться образом</h3>
+              <button onClick={() => setOpen(false)} className="text-ivory/40 hover:text-ivory transition-colors" aria-label="Закрыть">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex justify-between gap-2">
+              <button onClick={shareTelegram} className="flex flex-col items-center gap-2 flex-1 p-2 rounded-2xl hover:bg-white/5 transition-colors">
+                <span className="w-12 h-12 rounded-full bg-[#0088cc] text-white flex items-center justify-center">
+                  <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+                </span>
+                <span className="text-[11px] text-ivory/70">Telegram</span>
+              </button>
+
+              <button onClick={shareWhatsApp} className="flex flex-col items-center gap-2 flex-1 p-2 rounded-2xl hover:bg-white/5 transition-colors">
+                <span className="w-12 h-12 rounded-full bg-green-500 text-white flex items-center justify-center">
+                  <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                </span>
+                <span className="text-[11px] text-ivory/70">WhatsApp</span>
+              </button>
+
+              <button onClick={shareVK} className="flex flex-col items-center gap-2 flex-1 p-2 rounded-2xl hover:bg-white/5 transition-colors">
+                <span className="w-12 h-12 rounded-full bg-[#0077FF] text-white flex items-center justify-center">
+                  <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M15.684 0H8.316C1.592 0 0 1.592 0 8.316v7.368C0 22.408 1.592 24 8.316 24h7.368C22.408 24 24 22.408 24 15.684V8.316C24 1.592 22.408 0 15.684 0zm3.692 17.123h-1.744c-.66 0-.864-.525-2.05-1.727-1.033-1-1.49-1.135-1.744-1.135-.356 0-.458.102-.458.593v1.575c0 .424-.135.678-1.253.678-1.846 0-3.896-1.118-5.335-3.202C4.624 10.857 4.03 8.57 4.03 8.096c0-.254.102-.491.593-.491h1.744c.44 0 .61.203.78.678.863 2.49 2.303 4.675 2.896 4.675.22 0 .322-.102.322-.66V9.721c-.068-1.186-.695-1.287-.695-1.71 0-.203.17-.407.44-.407h2.744c.372 0 .508.203.508.643v3.473c0 .372.17.508.271.508.22 0 .407-.136.813-.542 1.254-1.406 2.151-3.574 2.151-3.574.119-.254.322-.491.763-.491h1.744c.525 0 .644.27.525.643-.22 1.017-2.354 4.031-2.354 4.031-.186.305-.254.44 0 .78.186.254.796.779 1.203 1.253.745.847 1.32 1.558 1.473 2.05.17.49-.085.744-.576.744z"/></svg>
+                </span>
+                <span className="text-[11px] text-ivory/70">ВКонтакте</span>
+              </button>
+
+              <button onClick={shareOK} className="flex flex-col items-center gap-2 flex-1 p-2 rounded-2xl hover:bg-white/5 transition-colors">
+                <span className="w-12 h-12 rounded-full bg-[#EE8208] text-white flex items-center justify-center">
+                  <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M12 6.5a2 2 0 110-4 2 2 0 010 4zm0 1.5a3.5 3.5 0 100-7 3.5 3.5 0 000 7zm-5.7 2.1c-.3.6-.1 1.4.6 1.8 1.1.7 2.4 1.2 3.7 1.4l-3.6 3.6c-.5.5-.5 1.4 0 1.9.5.5 1.4.5 1.9 0l3.1-3.1 3.1 3.1c.5.5 1.4.5 1.9 0 .5-.5.5-1.4 0-1.9l-3.6-3.6c1.3-.2 2.6-.7 3.7-1.4.7-.4.9-1.2.6-1.8-.4-.6-1.2-.8-1.9-.4-2.5 1.5-5.8 1.5-8.3 0-.7-.4-1.5-.2-1.9.4z"/></svg>
+                </span>
+                <span className="text-[11px] text-ivory/70">ОК</span>
+              </button>
+
+              <button onClick={shareMAX} className="flex flex-col items-center gap-2 flex-1 p-2 rounded-2xl hover:bg-white/5 transition-colors">
+                <span className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#0088ff] to-[#0055cc] text-white flex items-center justify-center font-bold text-xl">
+                  M
+                </span>
+                <span className="text-[11px] text-ivory/70">MAX</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
 // --- Stylize Modal Component ---
 const StylizeModal = ({ isOpen, onClose, userName, tier, onToast }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier; onToast: (msg: string, type: 'success'|'error'|'info') => void }) => {
   const [files, setFiles] = useState<File[]>([]);
@@ -1553,134 +1823,15 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast }: { isOpen: bo
                             onClick={async () => {
                               const safeName = (look.lookName || `look-${lookIdx + 1}`).replace(/[^а-яa-z0-9\-_ ]/gi, '').trim() || `look-${lookIdx + 1}`;
                               try {
-                                const img = new window.Image();
-                                img.crossOrigin = 'anonymous';
-                                await new Promise<void>((resolve, reject) => {
-                                  img.onload = () => resolve();
-                                  img.onerror = () => reject(new Error('img load'));
-                                  img.src = look.image as string;
-                                });
-
-                                // Layout: photo on left, text on right (side-by-side)
-                                const padding = 50;
-                                const gap = 50;
-                                const photoW = 900;
-                                const photoH = Math.round(img.height * (photoW / img.width));
-                                const textW = 1100;
-                                const totalW = padding + photoW + gap + textW + padding;
-
-                                const wrap = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] => {
-                                  const lines: string[] = [];
-                                  for (const paragraph of text.split('\n')) {
-                                    if (!paragraph.trim()) { lines.push(''); continue; }
-                                    const words = paragraph.split(' ');
-                                    let line = '';
-                                    for (const w of words) {
-                                      const test = line ? line + ' ' + w : w;
-                                      if (ctx.measureText(test).width > maxWidth && line) {
-                                        lines.push(line);
-                                        line = w;
-                                      } else {
-                                        line = test;
-                                      }
-                                    }
-                                    if (line) lines.push(line);
-                                  }
-                                  return lines;
-                                };
-
-                                const measureCanvas = document.createElement('canvas');
-                                const mctx = measureCanvas.getContext('2d');
-                                if (!mctx) return;
-
-                                const titleSize = 56;
-                                const bodySize = 28;
-                                const itemNameSize = 28;
-                                const itemDescSize = 22;
-                                const lineGap = 1.4;
-
-                                mctx.font = `700 ${titleSize}px serif`;
-                                const titleLines = wrap(mctx, `Образ ${lookIdx + 1}: ${look.lookName}`, textW);
-
-                                mctx.font = `400 ${bodySize}px sans-serif`;
-                                const descLines = wrap(mctx, look.description || '', textW);
-
-                                mctx.font = `700 ${titleSize - 12}px serif`;
-                                const itemsHeaderLines = wrap(mctx, '🛍 Гардероб', textW);
-
-                                const itemsBlocks: { name: string[]; desc: string[] }[] = look.items.map(it => {
-                                  mctx.font = `600 ${itemNameSize}px sans-serif`;
-                                  const nameLines = wrap(mctx, it.name + (it.price ? `   —   ${it.price}` : ''), textW);
-                                  mctx.font = `400 ${itemDescSize}px sans-serif`;
-                                  const descL = wrap(mctx, it.description || '', textW);
-                                  return { name: nameLines, desc: descL };
-                                });
-
-                                let textHeight = padding;
-                                textHeight += titleLines.length * titleSize * lineGap + 40;
-                                textHeight += descLines.length * bodySize * lineGap + 50;
-                                textHeight += itemsHeaderLines.length * (titleSize - 12) * lineGap + 30;
-                                for (const b of itemsBlocks) {
-                                  textHeight += b.name.length * itemNameSize * lineGap;
-                                  textHeight += b.desc.length * itemDescSize * lineGap + 22;
-                                }
-                                textHeight += padding;
-
-                                const totalH = Math.max(photoH + padding * 2, textHeight);
-
-                                const canvas = document.createElement('canvas');
-                                canvas.width = totalW;
-                                canvas.height = totalH;
-                                const ctx = canvas.getContext('2d');
-                                if (!ctx) return;;
-
-                                ctx.fillStyle = '#FAF7F2';
-                                ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-                                // Картинка слева
-                                ctx.drawImage(img, padding, padding, photoW, photoH);
-
-                                // Текст справа
-                                let y = padding;
-                                const textX = padding + photoW + gap;
-                                ctx.textBaseline = 'top';
-
-                                ctx.fillStyle = '#1a1a1a';
-                                ctx.font = `700 ${titleSize}px serif`;
-                                for (const l of titleLines) { ctx.fillText(l, textX, y); y += titleSize * lineGap; }
-                                y += 40;
-
-                                ctx.font = `400 ${bodySize}px sans-serif`;
-                                ctx.fillStyle = '#3a3a3a';
-                                for (const l of descLines) { ctx.fillText(l, textX, y); y += bodySize * lineGap; }
-                                y += 50;
-
-                                ctx.fillStyle = '#1a1a1a';
-                                ctx.font = `700 ${titleSize - 12}px serif`;
-                                for (const l of itemsHeaderLines) { ctx.fillText(l, textX, y); y += (titleSize - 12) * lineGap; }
-                                y += 30;
-
-                                for (const b of itemsBlocks) {
-                                  ctx.fillStyle = '#1a1a1a';
-                                  ctx.font = `600 ${itemNameSize}px sans-serif`;
-                                  for (const l of b.name) { ctx.fillText(l, textX, y); y += itemNameSize * lineGap; }
-                                  ctx.fillStyle = '#5a5a5a';
-                                  ctx.font = `400 ${itemDescSize}px sans-serif`;
-                                  for (const l of b.desc) { ctx.fillText(l, textX, y); y += itemDescSize * lineGap; }
-                                  y += 22;
-                                }
-
-                                canvas.toBlob((blob) => {
-                                  if (!blob) throw new Error('blob');
-                                  const url = URL.createObjectURL(blob);
-                                  const a = document.createElement('a');
-                                  a.href = url;
-                                  a.download = `${safeName}.jpg`;
-                                  document.body.appendChild(a);
-                                  a.click();
-                                  document.body.removeChild(a);
-                                  URL.revokeObjectURL(url);
-                                }, 'image/jpeg', 0.92);
+                                const blob = await renderBrandedCanvas(look, lookIdx);
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = `${safeName}.jpg`;
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                URL.revokeObjectURL(url);
                               } catch {
                                 window.open(look.image as string, '_blank');
                               }
@@ -1691,53 +1842,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast }: { isOpen: bo
                             Сохранить образ с описанием
                           </button>
                         )}
-                        {/* Share Buttons Row */}
-                        <div className="flex gap-2 flex-wrap">
-                          <button
-                            onClick={() => {
-                              const text = `Мой новый образ от Твой стилист: ${look.lookName}\n\n${look.description?.slice(0, 200) || ''}...\n\nhttps://stilist-ai.ru`;
-                              window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-                            }}
-                            className="flex-1 py-3 rounded-full bg-green-500 text-white text-sm font-medium tracking-wide flex items-center justify-center gap-2 hover:bg-green-600 transition-colors min-w-[120px]"
-                            title="WhatsApp"
-                          >
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-                            WhatsApp
-                          </button>
-                          <button
-                            onClick={() => {
-                              const text = `Мой новый образ от Твой стилист: ${look.lookName}\n\n${look.description?.slice(0, 200) || ''}...\n\nhttps://stilist-ai.ru`;
-                              window.open(`https://t.me/share/url?url=${encodeURIComponent('https://stilist-ai.ru')}&text=${encodeURIComponent(text)}`, '_blank');
-                            }}
-                            className="flex-1 py-3 rounded-full bg-[#0088cc] text-white text-sm font-medium tracking-wide flex items-center justify-center gap-2 hover:bg-[#0077b3] transition-colors min-w-[120px]"
-                            title="Telegram"
-                          >
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
-                            Telegram
-                          </button>
-                          <button
-                            onClick={() => {
-                              const text = `Мой новый образ от Твой стилист: ${look.lookName}`;
-                              window.open(`https://vk.com/share.php?url=${encodeURIComponent('https://stilist-ai.ru')}&title=${encodeURIComponent(text)}`, '_blank');
-                            }}
-                            className="flex-1 py-3 rounded-full border border-[#4C75A3] text-[#4C75A3] text-sm font-medium tracking-wide flex items-center justify-center gap-2 hover:bg-[#4C75A3]/10 transition-colors min-w-[120px]"
-                            title="ВКонтакте"
-                          >
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M15.684 0H8.316C1.592 0 0 1.592 0 8.316v7.368C0 22.408 1.592 24 8.316 24h7.368C22.408 24 24 22.408 24 15.684V8.316C24 1.592 22.408 0 15.684 0zm3.692 17.123h-1.744c-.66 0-.864-.525-2.05-1.727-1.033-1-1.49-1.135-1.744-1.135-.356 0-.458.102-.458.593v1.575c0 .424-.135.678-1.253.678-1.846 0-3.896-1.118-5.335-3.202C4.624 10.857 4.03 8.57 4.03 8.096c0-.254.102-.491.593-.491h1.744c.44 0 .61.203.78.678.863 2.49 2.303 4.675 2.896 4.675.22 0 .322-.102.322-.66V9.721c-.068-1.186-.695-1.287-.695-1.71 0-.203.17-.407.44-.407h2.744c.372 0 .508.203.508.643v3.473c0 .372.17.508.271.508.22 0 .407-.136.813-.542 1.254-1.406 2.151-3.574 2.151-3.574.119-.254.322-.491.763-.491h1.744c.525 0 .644.27.525.643-.22 1.017-2.354 4.031-2.354 4.031-.186.305-.254.44 0 .78.186.254.796.779 1.203 1.253.745.847 1.32 1.558 1.473 2.05.17.49-.085.744-.576.744z"/></svg>
-                            ВКонтакте
-                          </button>
-                          <button
-                            onClick={() => {
-                              const text = `Мой новый образ от Твой стилист: ${look.lookName}`;
-                              window.open(`https://connect.mail.ru/share?url=${encodeURIComponent('https://stilist-ai.ru')}&title=${encodeURIComponent(text)}`, '_blank');
-                            }}
-                            className="flex-1 py-3 rounded-full border border-[#FF8800] text-[#FF8800] text-sm font-medium tracking-wide flex items-center justify-center gap-2 hover:bg-[#FF8800]/10 transition-colors min-w-[120px]"
-                            title="Мой Мир"
-                          >
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="#FF8800"/><text x="12" y="16" textAnchor="middle" fill="white" fontSize="10" fontWeight="bold">@</text></svg>
-                            Мой Мир
-                          </button>
-                        </div>
+                        {/* Share Button */}
+                        <ShareMenu look={look} lookIdx={lookIdx} />
                       </div>
                       
                       {/* Description & Shopping List */}
