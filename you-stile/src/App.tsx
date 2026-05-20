@@ -134,16 +134,18 @@ const MagicMirror = () => {
       onTouchStart={onTouchStart}
     >
       {/* Before Image (Bottom) */}
-      <img 
-        src="/after.jpg" 
-        alt="Before: Casual Home Clothes" 
+      <img
+        src="/after.jpg"
+        alt="Before: Casual Home Clothes"
+        loading="lazy"
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
       />
-      
+
       {/* After Image (Top, Clipped) */}
-      <img 
-        src="/before.jpg" 
-        alt="After: Premium Styled Look" 
+      <img
+        src="/before.jpg"
+        alt="After: Premium Styled Look"
+        loading="lazy"
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
         style={{ clipPath: `inset(0 0 0 ${sliderPosition}%)` }}
       />
@@ -931,7 +933,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
                 <span>{showPromo ? "Скрыть промокод" : "У меня есть промокод"}</span>
               </button>
               {showPromo && (
-              <div className="flex gap-2 max-w-md mx-auto">
+              <div className="flex flex-col sm:flex-row gap-2 max-w-md mx-auto">
                 <input
                   id="promo-input"
                   type="text"
@@ -939,14 +941,14 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
                   onChange={(e) => { setPromoCode(e.target.value.toUpperCase()); setPromoStatus("idle"); }}
                   onKeyDown={(e) => e.key === "Enter" && handlePromo()}
                   placeholder="Введите промокод"
-                  className={`flex-1 px-4 py-2 rounded-xl border text-sm text-center font-medium uppercase ${
+                  className={`w-full flex-1 px-4 py-3 rounded-xl border text-sm text-center font-medium uppercase ${
                     promoStatus === "valid" ? "border-green-400 bg-green-50" :
                     promoStatus === "invalid" || promoStatus === "used" ? "border-red-300 bg-red-50" :
                     "border-charcoal/20 bg-white focus:border-gold focus:outline-none"
                   }`}
                 />
                 <button onClick={handlePromo} disabled={!promoCode.trim() || promoStatus === "checking"}
-                  className="px-4 py-2 rounded-xl bg-charcoal text-ivory text-sm font-medium hover:bg-charcoal/90 disabled:opacity-40 transition-colors">
+                  className="w-full sm:w-auto whitespace-nowrap px-6 py-3 rounded-xl bg-charcoal text-ivory text-sm font-medium hover:bg-charcoal/90 disabled:opacity-40 transition-colors">
                   {promoStatus === "checking" ? "..." : "Применить"}
                 </button>
               </div>)}
@@ -2153,25 +2155,25 @@ export default function App() {
               <span className="italic text-gold">лучшую версию.</span> <br />
               За секунды.
             </h1>
-            <p className="text-lg md:text-xl text-ivory/70 mb-12 leading-relaxed font-light max-w-2xl mx-auto">
+            <p className="text-base md:text-xl text-ivory/70 mb-10 leading-relaxed font-light max-w-2xl mx-auto">
               Загрузи чёткое фото лица — стилист воссоздаст образ именно с вашей внешностью. Рост и вес вводятся вручную для идеальной посадки одежды.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <button
                 onClick={() => openModal()}
-                className="bg-gold text-charcoal px-10 py-4 rounded-full text-base font-semibold hover:bg-gold/90 transition-all flex items-center justify-center gap-2 group"
+                className="bg-gold text-charcoal px-8 py-3 sm:py-4 rounded-full text-base font-semibold hover:bg-gold/90 transition-all flex items-center justify-center gap-2 group"
               >
                 Начать преображение
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
               <button
                 onClick={() => document.getElementById('lookbook')?.scrollIntoView({ behavior: 'smooth' })}
-                className="border border-ivory/40 text-ivory px-10 py-4 rounded-full text-base font-medium hover:bg-ivory/10 transition-colors">
+                className="border border-ivory/40 text-ivory px-8 py-3 sm:py-4 rounded-full text-base font-medium hover:bg-ivory/10 transition-colors">
                 Смотреть примеры
               </button>
               <button
                 onClick={() => openTrialModal()}
-                className="border border-gold/40 text-gold px-10 py-4 rounded-full text-base font-medium hover:bg-gold/10 transition-colors">
+                className="border border-gold/40 text-gold px-8 py-3 sm:py-4 rounded-full text-base font-medium hover:bg-gold/10 transition-colors">
                 Попробовать бесплатно
               </button>
             </div>
@@ -2266,13 +2268,14 @@ export default function App() {
                   whileInView={{ opacity: 1, scale: 1 }}
                   viewport={{ once: true }}
                   transition={{ delay: idx * 0.1 }}
-                  className="relative group overflow-hidden rounded-2xl aspect-[4/5] cursor-pointer"
+                  className="relative group overflow-hidden rounded-2xl aspect-[3/4] md:aspect-[4/5] cursor-pointer"
                   onClick={() => setTapped(v => !v)}
                 >
                   {/* Before Image */}
                   <img
                     src={item.before}
                     alt={`${item.label} До`}
+                    loading="lazy"
                     className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${tapped ? "opacity-0" : "group-hover:opacity-0"}`}
                   />
 
@@ -2280,6 +2283,7 @@ export default function App() {
                   <img
                     src={item.after}
                     alt={`${item.label} После`}
+                    loading="lazy"
                     className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${tapped ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
                   />
 
