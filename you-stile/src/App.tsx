@@ -1117,8 +1117,9 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
     if (loading) return;
     const imgUrl = getImageUrl();
 
-    // Mobile: try native share with image file
-    if (typeof navigator.share === "function") {
+    // Mobile only: try native share with image file
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (isMobile && typeof navigator.share === "function") {
       setLoading(true);
       try {
         const resp = await fetch(imgUrl);
