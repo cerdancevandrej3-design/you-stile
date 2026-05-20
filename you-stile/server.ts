@@ -1135,8 +1135,8 @@ loadList();
       // Step 1: Analyze with Gemini 3.1 Flash Lite
       res.write(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ фото и подбор образов с помощью AI..." }) + "\n");
 
-      // Если есть wishes — temperature чуть выше для креативности, но не настолько чтобы JSON ломался
-      const analysisTemp = wishes ? 0.95 : 0.8;
+      // Высокая температура для разнообразия образов при каждой генерации
+      const analysisTemp = 0.95;
 
       // Подмешиваем тренды в последнее user-сообщение
       if (trendsContext) {
