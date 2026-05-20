@@ -929,11 +929,17 @@ loadList();
       if (event.type === "payment.succeeded" || event.type === "waiting_for_capture") {
         const paymentId = event.object?.id;
         const tier = event.object?.metadata?.tier || "standard";
+        const amount = event.object?.amount?.value || "?";
 
         if (paymentId) {
-          // Увеличиваем статистику
           incPaidSale(tier);
           console.log(`[YooKassa Webhook] Payment confirmed: ${paymentId}, tier: ${tier}`);
+          const tierName = tier === "premium" ? "Премиум" : "Стандарт";
+          fetch(`https://api.telegram.org/bot8780162148:AAGHjZ_PNo0q9rTJ1TZQTkJdpdV7uo2hOSY/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: 8602635380, text: `✅ Оплата ${amount}₽ (${tierName})` }),
+          }).catch(() => {});
         }
       }
 
