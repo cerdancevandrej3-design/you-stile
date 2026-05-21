@@ -1020,6 +1020,122 @@ loadList();
     }
   });
 
+  // Group styling endpoint
+  app.post("/api/group-stylize", (req: Request, res: Response, next: NextFunction) => {
+    upload.single("image")(req, res, (err) => {
+      if (err && err.code === "LIMIT_FILE_SIZE") {
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+        res.flushHeaders();
+        res.write(JSON.stringify({ type: "error", error: "Фото слишком большое. Максимум 20 МБ." }) + "\n");
+        return res.end();
+      }
+      if (err) return next(err);
+      next();
+    });
+  }, async (req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    try {
+      const file = (req as any).file as MulterFile;
+      if (!file) {
+        res.write(JSON.stringify({ type: "error", error: "Фото не загружено" }) + "\n");
+        return res.end();
+      }
+
+      heartbeat = setInterval(() => res.write(JSON.stringify({ type: "heartbeat" }) + "\n"), 15000);
+
+      const imageBase64 = file.buffer.toString("base64");
+      const mimeType = file.mimetype;
+      const wishes = sanitizeWishes((req.body.wishes || "").toString().slice(0, 300));
+
+      res.write(JSON.stringify({ type: "progress", step: 1.0, text: "Анализируем всех участников группы..." }) + "\n");
+
+      const groupSystemPrompt = `Ты — групповой стилист-эксперт. Твоя задача — проанализировать групповое фото и создать 3 гармоничных образа для всей группы.
+
+АНАЛИЗ: Определи всех людей на фото. Для каждого опиши внешность, тип фигуры, цветотип.
+
+СОЗДАЙ 3 ГРУППОВЫХ ОБРАЗА:
+1. Smart Casual / деловой
+2. Вечерний / ресторан
+3. Яркий / отпуск / color-block
+
+ДЛЯ КАЖДОГО ОБРАЗА:
+- lookName: креативное название
+- description: для КАЖДОГО человека отдельно — что надеть, почему подходит, как гармонирует с группой. Пиши тепло и с комплиментами.
+- editPrompt: на английском — групповая fashion editorial фотосессия, те же люди в тех же позах, новые скоординированные образы. Максимальное качество: 8k, highly detailed, professional fashion photography, perfect lighting. Aspect ratio 4:3 (horizontal/landscape). Preserve each person's facial features exactly.
+
+ВАЖНО: Не нужны ссылки на товары. Фокус на гармонии стилей внутри группы.
+${wishes ? `Пожелания: "${wishes}"` : ""}
+
+Отвечай ТОЛЬКО валидным JSON:
+{
+  "greetingAndAnalysis": "тёплое приветствие + анализ группы",
+  "looks": [
+    {
+      "lookName": "string",
+      "description": "string",
+      "editPrompt": "string in English"
+    }
+  ]
+}`;
+
+      const analysisText = await callPolzaChat({
+        model: ANALYSIS_MODEL,
+        systemPrompt: groupSystemPrompt,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Проанализируй это групповое фото и создай 3 скоординированных образа для всей группы." },
+            { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+          ],
+        }],
+        temperature: 0.9,
+        maxTokens: 6000,
+      });
+
+      let analysisData: any;
+      try {
+        const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+        analysisData = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+      } catch { analysisData = null; }
+
+      if (!analysisData?.looks?.length) {
+        res.write(JSON.stringify({ type: "error", error: "Не удалось проанализировать фото. Попробуйте ещё раз." }) + "\n");
+        return res.end();
+      }
+
+      res.write(JSON.stringify({ type: "progress", step: 2.0, text: `Генерируем ${analysisData.looks.length} групповых образа...` }) + "\n");
+
+      // Generate one image per look
+      const looksWithImages = await Promise.all(analysisData.looks.map(async (look: any, idx: number) => {
+        let image = null;
+        try {
+          const prompt = `High-end fashion editorial photography. Group of people in the same poses as the reference photo, wearing new coordinated outfits. ${look.editPrompt} Aspect ratio 4:3, landscape orientation, 8k, highly detailed, professional lighting, fashion magazine quality.`;
+          image = await generateImageWithFlux(prompt, imageBase64, mimeType);
+        } catch (e: any) { console.error(`Group image ${idx} failed:`, e.message); }
+        res.write(JSON.stringify({ type: "progress", step: 2.0 + ((idx + 1) / analysisData.looks.length) * 2, text: `Образ ${idx + 1}/${analysisData.looks.length} готов...` }) + "\n");
+        return { ...look, image };
+      }));
+
+      clearInterval(heartbeat);
+      res.write(JSON.stringify({
+        type: "result",
+        greetingAndAnalysis: analysisData.greetingAndAnalysis,
+        looks: looksWithImages,
+      }) + "\n");
+      res.end();
+    } catch (err: any) {
+      clearInterval(heartbeat);
+      console.error("[GroupStylize] Error:", err);
+      res.write(JSON.stringify({ type: "error", error: err.message || "Ошибка генерации" }) + "\n");
+      res.end();
+    }
+  });
+
   app.post("/api/stylize", (req: Request, res: Response, next: NextFunction) => {
     upload.array("images", 3)(req, res, (err) => {
       if (err && err.code === "LIMIT_FILE_SIZE") {

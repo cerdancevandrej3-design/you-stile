@@ -1259,6 +1259,119 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
   );
 };
 
+// --- Group Stylize Modal ---
+const GroupModal = ({ isOpen, onClose, userName }: { isOpen: boolean; onClose: () => void; userName: string }) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [wishes, setWishes] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState("");
+  const [loadingStep, setLoadingStep] = useState(0);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => { if (!isOpen) { setFile(null); setPreview(null); setWishes(""); setResult(null); setError(""); setLoading(false); } }, [isOpen]);
+
+  const handleFile = (f: File) => {
+    setFile(f);
+    const url = URL.createObjectURL(f);
+    setPreview(url);
+  };
+
+  const handleGenerate = async () => {
+    if (!file) return;
+    setLoading(true); setError(""); setResult(null); setLoadingStep(0);
+    try {
+      const fd = new FormData();
+      fd.append("image", file);
+      if (wishes) fd.append("wishes", wishes);
+      if (userName) fd.append("userName", userName);
+      const resp = await fetch("/api/group-stylize", { method: "POST", body: fd });
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const d = JSON.parse(line);
+            if (d.type === "progress") { setLoadingText(d.text); setLoadingStep(d.step); }
+            else if (d.type === "result") { setResult(d); setLoadingStep(5); }
+            else if (d.type === "error") { setError(d.error); }
+          } catch {}
+        }
+      }
+    } catch (e: any) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  if (!isOpen) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[100] bg-charcoal/80 backdrop-blur-md flex items-start justify-center p-4 pt-8 overflow-y-auto">
+      <div className="bg-ivory w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden relative">
+        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-charcoal/5 rounded-full z-10"><X className="w-5 h-5" /></button>
+        <div className="p-6">
+          <h2 className="text-2xl font-serif text-charcoal mb-1">👥 Групповое преображение</h2>
+          <p className="text-charcoal/60 text-sm mb-6">Загрузите групповое фото — стилист создаст 3 образа для всей компании</p>
+
+          {!result && !loading && (
+            <>
+              <div
+                className="border-2 border-dashed border-charcoal/20 rounded-2xl p-8 text-center cursor-pointer hover:border-gold transition-colors mb-4"
+                onClick={() => document.getElementById("group-file-input")?.click()}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
+              >
+                {preview ? <img src={preview} className="max-h-64 mx-auto rounded-xl object-contain" /> : <><p className="text-charcoal/40 text-sm">Нажмите или перетащите групповое фото</p><p className="text-charcoal/30 text-xs mt-1">JPG, PNG до 20 МБ</p></>}
+                <input id="group-file-input" type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+              </div>
+              <textarea value={wishes} onChange={e => setWishes(e.target.value)} placeholder="Пожелания (необязательно): стиль, повод, предпочтения..." className="w-full border border-charcoal/20 rounded-xl p-3 text-sm resize-none h-20 focus:outline-none focus:border-gold mb-4" maxLength={300} />
+              <button onClick={handleGenerate} disabled={!file} className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold text-lg hover:bg-gold/90 transition-colors disabled:opacity-40">
+                Создать групповые образы — 150 ₽
+              </button>
+            </>
+          )}
+
+          {loading && (
+            <div className="text-center py-8">
+              <div className="w-full bg-charcoal/10 rounded-full h-2 mb-3 overflow-hidden">
+                <div className="h-full bg-gold transition-all duration-500 rounded-full" style={{ width: `${(loadingStep / 5) * 100}%` }} />
+              </div>
+              <p className="text-charcoal/60 text-sm">{loadingText || "Анализируем группу..."}</p>
+            </div>
+          )}
+
+          {error && <p className="text-red-500 text-sm text-center py-4">{error}</p>}
+
+          {result && (
+            <div>
+              <p className="text-charcoal/80 text-sm leading-relaxed mb-6 whitespace-pre-wrap">{result.greetingAndAnalysis}</p>
+              {result.looks?.map((look: any, i: number) => (
+                <div key={i} className="mb-8 border border-charcoal/10 rounded-2xl overflow-hidden">
+                  {look.image && <img src={look.image} alt={look.lookName} className="w-full object-cover max-h-96" />}
+                  <div className="p-4">
+                    <h3 className="font-serif text-lg text-charcoal mb-2">Образ {i + 1}: {look.lookName}</h3>
+                    <p className="text-charcoal/70 text-sm leading-relaxed whitespace-pre-wrap">{look.description}</p>
+                  </div>
+                </div>
+              ))}
+              <button onClick={() => { setResult(null); setFile(null); setPreview(null); }} className="w-full py-3 rounded-full border border-charcoal/20 text-charcoal text-sm font-medium hover:bg-charcoal/5 transition-colors">
+                Создать новые образы
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
 // --- Stylize Modal Component ---
 const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier; onToast: (msg: string, type: 'success'|'error'|'info') => void; onNewLooks: () => void }) => {
   const [files, setFiles] = useState<File[]>([]);
@@ -2019,6 +2132,7 @@ export default function App() {
   const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [isTrialOpen, setIsTrialOpen] = useState(false);
   const [isTrialPaymentOpen, setIsTrialPaymentOpen] = useState(false);
+  const [isGroupOpen, setIsGroupOpen] = useState(false);
   const [modalKey, setModalKey] = useState(0);
   const [currentTier, setCurrentTier] = useState<Tier>("standard");
   const [userName, setUserName] = useState(getSavedName);
@@ -2172,6 +2286,7 @@ export default function App() {
       {isTrialOpen && <TrialModalContent isOpen={isTrialOpen} onClose={() => setIsTrialOpen(false)} userName={userName} onUnlock={() => setIsTrialPaymentOpen(true)} />}
       <TrialPaymentModal isOpen={isTrialPaymentOpen} onClose={() => setIsTrialPaymentOpen(false)} onPaid={() => {}} />
       <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} />
+      <GroupModal isOpen={isGroupOpen} onClose={() => setIsGroupOpen(false)} userName={userName} />
 
       {/* 1. Header */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-ivory/70 backdrop-blur-lg border-b border-charcoal/5 transition-all">
@@ -2194,6 +2309,12 @@ export default function App() {
               <a href="#lookbook" className="hover:text-charcoal transition-colors">Лукбук</a>
               <a href="#pricing" className="hover:text-charcoal transition-colors">Тарифы</a>
             </nav>
+            <button
+              onClick={() => setIsGroupOpen(true)}
+              className="border border-charcoal/20 text-charcoal px-6 py-2.5 rounded-full text-sm font-medium hover:bg-charcoal/5 transition-colors"
+            >
+              👥 Групповое
+            </button>
             <button
               onClick={() => openModal()}
               className="bg-charcoal text-ivory px-6 py-2.5 rounded-full text-sm font-medium hover:bg-charcoal/90 transition-colors"
@@ -2224,6 +2345,12 @@ export default function App() {
               <a href="#how-it-works" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Как это работает</a>
               <a href="#lookbook" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Лукбук</a>
               <a href="#pricing" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Тарифы</a>
+              <button
+                onClick={() => { setMenuOpen(false); setIsGroupOpen(true); }}
+                className="border border-charcoal/20 text-charcoal px-6 py-3 rounded-full text-sm font-medium w-full mt-1"
+              >
+                👥 Групповое
+              </button>
               <button
                 onClick={() => { setMenuOpen(false); openModal(); }}
                 className="bg-charcoal text-ivory px-6 py-3 rounded-full text-sm font-medium w-full mt-1"
