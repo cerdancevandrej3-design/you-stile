@@ -2000,6 +2000,22 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(() => !getSavedName());
   const [prices, setPrices] = useState({ standard: 100, premium: 200 });
 
+  // Telegram Mini App init
+  useEffect(() => {
+    const tg = (window as any).Telegram?.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+      // Автозаполнение имени из Telegram если ещё не введено
+      const tgName = tg.initDataUnsafe?.user?.first_name;
+      if (tgName && !getSavedName()) {
+        setUserName(tgName);
+        setShowWelcome(false);
+        localStorage.setItem("stilist_user_name", tgName);
+      }
+    }
+  }, []);
+
   // Загружаем цены с сервера
   useEffect(() => {
     fetch("/api/admin-stats")
