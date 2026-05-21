@@ -219,7 +219,7 @@ const PaymentModal = ({ isOpen, tier, onPaid, onClose }: {
           // Если есть confirmationUrl - сразу редиректим
           if (d.confirmationUrl) {
             const tgWA = (window as any).Telegram?.WebApp;
-            if (tgWA?.openLink) tgWA.openLink(d.confirmationUrl);
+            if (tgWA?.initData && tgWA.openLink) tgWA.openLink(d.confirmationUrl);
             else window.location.href = d.confirmationUrl;
           }
         }
@@ -514,7 +514,7 @@ const TrialPaymentModal = ({ isOpen, onClose, onPaid }: {
       if (data.confirmationUrl) {
         // Редирект на YooKassa
         const tgWT = (window as any).Telegram?.WebApp;
-        if (tgWT?.openLink) tgWT.openLink(data.confirmationUrl);
+        if (tgWT?.initData && tgWT.openLink) tgWT.openLink(data.confirmationUrl);
         else window.location.href = data.confirmationUrl;
       }
     } catch (err) {
@@ -867,7 +867,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
         localStorage.setItem("pending_payment_tier", selectedTier);
         // Редирект на YooKassa — через openLink в Telegram, иначе обычный редирект
         const tgWP = (window as any).Telegram?.WebApp;
-        if (tgWP?.openLink) tgWP.openLink(data.confirmationUrl);
+        if (tgWP?.initData && tgWP.openLink) tgWP.openLink(data.confirmationUrl);
         else window.location.href = data.confirmationUrl;
       } else {
         alert("Ошибка создания платежа: " + (data.error || "Попробуйте ещё раз"));
