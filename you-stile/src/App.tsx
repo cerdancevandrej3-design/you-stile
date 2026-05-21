@@ -218,7 +218,9 @@ const PaymentModal = ({ isOpen, tier, onPaid, onClose }: {
           setPaymentId(d.paymentId);
           // Если есть confirmationUrl - сразу редиректим
           if (d.confirmationUrl) {
-            window.location.href = d.confirmationUrl;
+            const tgWA = (window as any).Telegram?.WebApp;
+            if (tgWA?.openLink) tgWA.openLink(d.confirmationUrl);
+            else window.location.href = d.confirmationUrl;
           }
         }
       })
@@ -511,7 +513,9 @@ const TrialPaymentModal = ({ isOpen, onClose, onPaid }: {
 
       if (data.confirmationUrl) {
         // Редирект на YooKassa
-        window.location.href = data.confirmationUrl;
+        const tgWT = (window as any).Telegram?.WebApp;
+        if (tgWT?.openLink) tgWT.openLink(data.confirmationUrl);
+        else window.location.href = data.confirmationUrl;
       }
     } catch (err) {
       alert("Ошибка создания платежа");
@@ -861,8 +865,10 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
         // Сохраняем paymentId для проверки после возврата
         localStorage.setItem("pending_payment_id", data.paymentId);
         localStorage.setItem("pending_payment_tier", selectedTier);
-        // Редирект на YooKassa
-        window.location.href = data.confirmationUrl;
+        // Редирект на YooKassa — через openLink в Telegram, иначе обычный редирект
+        const tgWP = (window as any).Telegram?.WebApp;
+        if (tgWP?.openLink) tgWP.openLink(data.confirmationUrl);
+        else window.location.href = data.confirmationUrl;
       } else {
         alert("Ошибка создания платежа: " + (data.error || "Попробуйте ещё раз"));
         setIsProcessing(false);
@@ -2113,9 +2119,8 @@ export default function App() {
       // Если оплата из Telegram — редиректим обратно в бота
       const tg = (window as any).Telegram?.WebApp;
       if (!tg?.initData) {
-        // Открыли в браузере (не в Telegram) — предлагаем вернуться в бот
-        window.location.href = `https://t.me/Alex_tel_12bot?start=paid_${tier}_${paymentId}`;
-        return;
+        // Открыли в браузере после оплаты — просто открываем сайт с результатом
+        // Параметры уже сохранены в localStorage выше, просто показываем модалку
       }
 
       // Открываем окно загрузки
