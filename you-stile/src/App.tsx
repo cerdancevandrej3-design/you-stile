@@ -47,6 +47,14 @@ function incrementVisitCount(): number {
   localStorage.setItem("you-stile-visit-count", String(count));
   return count;
 }
+function getPastLooks(): string[] {
+  try { return JSON.parse(localStorage.getItem("you-stile-past-looks") || "[]"); } catch { return []; }
+}
+function savePastLooks(looks: string[]) {
+  // Keep last 9 look names
+  const all = [...getPastLooks(), ...looks].slice(-9);
+  localStorage.setItem("you-stile-past-looks", JSON.stringify(all));
+}
 function saveName(name: string) {
   if (!localStorage.getItem("you-stile-user-id")) {
     localStorage.setItem("you-stile-user-id", crypto.randomUUID());
@@ -1382,6 +1390,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       formData.append("looksCount", String(looksCount));
       formData.append("userName", userName);
       formData.append("visitCount", String(incrementVisitCount()));
+      const pastLooks = getPastLooks();
+      if (pastLooks.length > 0) formData.append("pastLooks", pastLooks.join(", "));
       if (birthDay && birthMonth && birthYear) {
         formData.append("birthDate", `${birthDay}.${birthMonth}.${birthYear}`);
       }
@@ -1447,6 +1457,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
             }, 100);
           } else if (data.type === "result") {
             setLoadingState({ step: 5, text: "Готово!" });
+            // Save look names to history
+            if (data.looks?.length) savePastLooks(data.looks.map((l: any) => l.lookName).filter(Boolean));
             // Update with enriched items (real products)
             setResult({
               greetingAndAnalysis: data.greetingAndAnalysis,
