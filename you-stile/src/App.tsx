@@ -2013,6 +2013,18 @@ export default function App() {
         setShowWelcome(false);
         localStorage.setItem("stilist_user_name", tgName);
       }
+      // Обработка возврата после оплаты через Telegram start param
+      const startParam = tg.initDataUnsafe?.start_param;
+      if (startParam?.startsWith("paid_")) {
+        const parts = startParam.split("_");
+        const tier = parts[1] as Tier;
+        const paymentId = parts.slice(2).join("_");
+        if (tier && paymentId) {
+          localStorage.setItem(`paid_${tier}_${paymentId}`, "true");
+          setCurrentTier(tier);
+          setTimeout(() => setIsModalOpen(true), 500);
+        }
+      }
     }
   }, []);
 
@@ -2078,6 +2090,14 @@ export default function App() {
 
       // Убираем параметры из URL
       window.history.replaceState({}, "", "/");
+
+      // Если оплата из Telegram — редиректим обратно в бота
+      const tg = (window as any).Telegram?.WebApp;
+      if (!tg?.initData) {
+        // Открыли в браузере (не в Telegram) — предлагаем вернуться в бот
+        window.location.href = `https://t.me/Alex_tel_12bot?start=paid_${tier}_${paymentId}`;
+        return;
+      }
 
       // Открываем окно загрузки
       setCurrentTier(tier as Tier);

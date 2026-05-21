@@ -78,7 +78,7 @@ function computeStats(stats: StatsData, period?: string) {
   return { visits, paidStandardSales, paidPremiumSales, standardPrice: stats.standardPrice, premiumPrice: stats.premiumPrice, revenue: paidStandardSales * stats.standardPrice + paidPremiumSales * stats.premiumPrice };
 }
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 // Load fashion knowledge base (2026 trends)
 const knowledgeBasePath = path.join(PROJECT_ROOT, "src", "fashion-knowledge-base.txt");
@@ -1020,7 +1020,18 @@ loadList();
     }
   });
 
-  app.post("/api/stylize", upload.array("images", 3), async (req: Request, res: Response) => {
+  app.post("/api/stylize", (req: Request, res: Response, next: NextFunction) => {
+    upload.array("images", 3)(req, res, (err) => {
+      if (err && err.code === "LIMIT_FILE_SIZE") {
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+        res.flushHeaders();
+        res.write(JSON.stringify({ type: "error", error: "Фото слишком большое. Пожалуйста, уменьшите размер до 20 МБ или сделайте новое фото." }) + "\n");
+        return res.end();
+      }
+      if (err) return next(err);
+      next();
+    });
+  }, async (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
