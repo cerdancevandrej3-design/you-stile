@@ -2311,7 +2311,7 @@ export default function App() {
             </nav>
             <button
               onClick={() => setIsGroupOpen(true)}
-              className="border border-charcoal/20 text-charcoal px-6 py-2.5 rounded-full text-sm font-medium hover:bg-charcoal/5 transition-colors"
+              className="hidden border border-charcoal/20 text-charcoal px-6 py-2.5 rounded-full text-sm font-medium hover:bg-charcoal/5 transition-colors"
             >
               👥 Групповое
             </button>
@@ -2347,7 +2347,7 @@ export default function App() {
               <a href="#pricing" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Тарифы</a>
               <button
                 onClick={() => { setMenuOpen(false); setIsGroupOpen(true); }}
-                className="border border-charcoal/20 text-charcoal px-6 py-3 rounded-full text-sm font-medium w-full mt-1"
+              className="hidden border border-charcoal/20 text-charcoal px-6 py-3 rounded-full text-sm font-medium w-full mt-1"
               >
                 👥 Групповое
               </button>
