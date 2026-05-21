@@ -1066,6 +1066,11 @@ loadList();
       const wishes = sanitizeWishes(rawWishes);
       const looksCount = Math.min(5, Math.max(1, parseInt(req.body.looksCount) || 3));
       const userName = (req.body.userName || "").toString().trim().slice(0, 50);
+      const visitCount = Math.max(1, parseInt(req.body.visitCount) || 1);
+      const isReturning = visitCount > 1;
+      const returningInstruction = isReturning
+        ? `ВАЖНО: это НЕ первый визит пользователя (визит №${visitCount}). Начни приветствие как со старым знакомым — радостно, как будто узнал: например "О, снова вы!", "Рад снова вас видеть!", "А, это снова наша [имя/леди/]!" — и добавь что-то вроде "На этот раз я приготовил для вас ещё более интересные образы" или "Я уже знаю ваш вкус — давайте удивим вас по-новому". Каждый раз придумывай РАЗНЫЙ оборот для повторного визита. `
+        : "";
       const nameInstruction = userName ? `Обращайся к пользователю по имени "${userName}" в приветствии и 1-2 раза по ходу анализа. ` : "";
 
       // Astro block — parse birth date and compute zodiac sign
@@ -1106,7 +1111,7 @@ loadList();
         {
           role: "user",
           content: [
-            { type: "text", text: `${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.\n\n⚠️ GENDER DETECTION — CRITICAL: Determine the person's gender STRICTLY from the photo, NOT from the user's name. The account owner may be uploading a photo of someone else (e.g. a husband uploading his wife's photo). If the photo shows a WOMAN — generate women's looks and address her as a woman. If the photo shows a MAN — generate men's looks. If the name suggests a different gender than the photo, acknowledge it warmly in greetingAndAnalysis (e.g. "Андрей, судя по фото, это прекрасная девушка — создадим для неё идеальные образы!") and proceed with the correct gender.\n\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${seasonInstruction}${wishesBlock}${zodiacBlock}` },
+            { type: "text", text: `${returningInstruction}${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.\n\n⚠️ GENDER DETECTION — CRITICAL: Determine the person's gender STRICTLY from the photo, NOT from the user's name. The account owner may be uploading a photo of someone else (e.g. a husband uploading his wife's photo). If the photo shows a WOMAN — generate women's looks and address her as a woman. If the photo shows a MAN — generate men's looks. If the name suggests a different gender than the photo, acknowledge it warmly in greetingAndAnalysis (e.g. "Андрей, судя по фото, это прекрасная девушка — создадим для неё идеальные образы!") and proceed with the correct gender.\n\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${seasonInstruction}${wishesBlock}${zodiacBlock}` },
             { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
           ],
         },

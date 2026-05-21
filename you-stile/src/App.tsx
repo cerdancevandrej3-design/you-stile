@@ -41,6 +41,12 @@ function getActiveStageIndex(s: number): number {
 
 // --- localStorage helpers ---
 function getSavedName(): string { return localStorage.getItem("you-stile-user-name") || ""; }
+function getVisitCount(): number { return parseInt(localStorage.getItem("you-stile-visit-count") || "0"); }
+function incrementVisitCount(): number {
+  const count = getVisitCount() + 1;
+  localStorage.setItem("you-stile-visit-count", String(count));
+  return count;
+}
 function saveName(name: string) {
   if (!localStorage.getItem("you-stile-user-id")) {
     localStorage.setItem("you-stile-user-id", crypto.randomUUID());
@@ -1375,6 +1381,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       formData.append("wishes", wishes);
       formData.append("looksCount", String(looksCount));
       formData.append("userName", userName);
+      formData.append("visitCount", String(incrementVisitCount()));
       if (birthDay && birthMonth && birthYear) {
         formData.append("birthDate", `${birthDay}.${birthMonth}.${birthYear}`);
       }
