@@ -1385,6 +1385,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
   const [birthRegion, setBirthRegion] = useState(""); // для гороскопа
   const [birthCity, setBirthCity] = useState(""); // для гороскопа
   const [birthTime, setBirthTime] = useState(""); // для гороскопа
+  const [selectedOccasion, setSelectedOccasion] = useState("");
   const [looksCount, setLooksCount] = useState(3);
   const [loadingState, setLoadingState] = useState<{ step: number; text: string } | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -1410,6 +1411,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       setHeight("");
       setWeight("");
       setWishes("");
+      setSelectedOccasion("");
       setBirthDay("");
       setBirthMonth("");
       setBirthYear("");
@@ -1505,7 +1507,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       
       formData.append("height", height);
       formData.append("weight", weight);
-      formData.append("wishes", wishes);
+      const fullWishes = [selectedOccasion, wishes].filter(Boolean).join(". ");
+      formData.append("wishes", fullWishes);
       formData.append("looksCount", String(looksCount));
       formData.append("userName", userName);
       formData.append("visitCount", String(incrementVisitCount()));
@@ -1729,6 +1732,50 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                       placeholder="Например, 65"
                       className="w-full px-4 py-3 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors"
                     />
+                  </div>
+                </div>
+
+                {/* Occasion buttons — all tiers */}
+                <div className="w-full max-w-md mb-6">
+                  <label className="block text-sm font-medium text-charcoal/70 mb-2">Повод</label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { label: "📸 Фотосессия", value: "Фотосессия" },
+                      { label: "🍽️ Ресторан", value: "Ресторан" },
+                      { label: "💑 Свидание", value: "Свидание" },
+                      { label: "🏖️ Отдых / пляж", value: "Отдых на пляже" },
+                      { label: "🎉 Вечеринка", value: "Вечеринка" },
+                      { label: "💍 Свадьба", value: "Свадьба" },
+                      { label: "💼 Офис", value: "Офис" },
+                      { label: "🏃 Спорт", value: "Спорт" },
+                      { label: "☕ Прогулка / кафе", value: "Прогулка или кафе" },
+                      { label: "🎭 Театр", value: "Театр" },
+                      { label: "✈️ Путешествие", value: "Путешествие" },
+                      { label: "🎵 Клуб", value: "Ночной клуб" },
+                      { label: "🎓 Выпускной", value: "Выпускной" },
+                      { label: "🛍️ Шопинг / casual", value: "Шопинг и casual" },
+                      { label: "🧘 Йога / spa", value: "Йога или spa" },
+                      { label: "⛵ Курорт / яхта", value: "Курорт или яхта" },
+                      { label: "🎸 Фестиваль / концерт", value: "Фестиваль или концерт" },
+                      { label: "🏢 Корпоратив", value: "Корпоратив" },
+                      { label: "🎈 Детский праздник", value: "Детский праздник" },
+                      { label: "🌿 Загородный отдых", value: "Загородный отдых" },
+                      { label: "⛷️ Горнолыжный курорт", value: "Горнолыжный курорт" },
+                      { label: "🕯️ Романтический ужин", value: "Романтический ужин" },
+                    ].map(({ label, value }) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setSelectedOccasion(selectedOccasion === value ? "" : value)}
+                        className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
+                          selectedOccasion === value
+                            ? "bg-gold text-charcoal border-gold font-medium"
+                            : "bg-white text-charcoal/70 border-charcoal/20 hover:border-gold"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -2483,55 +2530,32 @@ export default function App() {
             </button>
           </motion.div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
             {[
-              { before: "/look1.jpg", after: "/look1a.png", label: "Мужской Casual" },
-              { before: "/look2.jpg", after: "/look2a.png", label: "Яркий Летний" },
-              { before: "/look3.jpg", after: "/look3a.jpg", label: "Стильное Преображение" }
-            ].map((item, idx) => {
-              const [tapped, setTapped] = useState(false);
-              return (
-                <motion.div
-                  key={idx}
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  whileInView={{ opacity: 1, scale: 1 }}
-                  viewport={{ once: true }}
-                  transition={{ delay: idx * 0.1 }}
-                  className="relative group overflow-hidden rounded-2xl aspect-[3/4] md:aspect-[4/5] cursor-pointer"
-                  onClick={() => setTapped(v => !v)}
-                >
-                  {/* Before Image */}
-                  <img
-                    src={item.before}
-                    alt={`${item.label} До`}
-                    loading="lazy"
-                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${tapped ? "opacity-0" : "group-hover:opacity-0"}`}
-                  />
-
-                  {/* After Image */}
-                  <img
-                    src={item.after}
-                    alt={`${item.label} После`}
-                    loading="lazy"
-                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${tapped ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-                  />
-
-                  <div className="absolute inset-0 bg-gradient-to-t from-charcoal/90 via-charcoal/20 to-transparent opacity-80 transition-opacity duration-500 group-hover:opacity-90"></div>
-
-                  <div className="absolute bottom-6 left-6 right-6 flex flex-col items-start gap-3">
-                    <span className="px-4 py-2 bg-white/20 backdrop-blur-md rounded-full text-white text-sm font-medium tracking-wide border border-white/10">
-                      {item.label}
-                    </span>
-
-                    {/* Interactive Hint */}
-                    <div className={`flex items-center gap-2 text-xs font-medium uppercase tracking-wider transition-colors duration-300 ${tapped ? "text-gold" : "text-white/70 group-hover:text-gold"}`}>
-                      <Sparkles className={`w-4 h-4 transition-opacity duration-300 ${tapped ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`} />
-                      <span>{tapped ? "Результат работы ИИ" : "Нажмите, чтобы увидеть магию"}</span>
-                    </div>
-                  </div>
-                </motion.div>
-              );
-            })}
+              "/t_015489e5914d6585.png",
+              "/t_15f40dfe361ae217.png",
+              "/t_4239bc16837f1a02.png",
+              "/t_9e4a37c97f110362.png",
+              "/t_f08a79ad92e58e85.png",
+              "/t_f8e7705adda65034.png",
+              "/gallery/anti/t_30372d9f6488dbd5.jpg",
+              "/gallery/anti/t_47b4d1f606a75351.jpg",
+              "/gallery/anti/t_9567cbaeff8468d8.jpg",
+              "/gallery/anti/t_a4c979ef130afb34.jpg",
+              "/gallery/anti/t_aa9376368e40acea.jpg",
+              "/gallery/anti/t_b2bb3dc93de628e2.jpg",
+            ].map((src, idx) => (
+              <motion.div
+                key={idx}
+                initial={{ opacity: 0, scale: 0.95 }}
+                whileInView={{ opacity: 1, scale: 1 }}
+                viewport={{ once: true }}
+                transition={{ delay: idx * 0.05 }}
+                className="overflow-hidden rounded-2xl aspect-[3/4]"
+              >
+                <img src={src} alt={`Образ ${idx + 1}`} loading="lazy" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
+              </motion.div>
+            ))}
           </div>
         </div>
       </section>

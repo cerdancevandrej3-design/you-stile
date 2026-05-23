@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from "express";
+﻿import express, { Request, Response, NextFunction } from "express";
 import { createServer as createViteServer } from "vite";
 import multer from "multer";
 import cors from "cors";
@@ -32,22 +32,28 @@ interface StatsEvent { type: "visit" | "paid_standard" | "paid_premium"; ts: str
 interface StatsData { events: StatsEvent[]; standardPrice: number; premiumPrice: number }
 
 const statsPath = path.join(PROJECT_ROOT, "data", "stats.json");
+const RESULTS_DIR = path.join(PROJECT_ROOT, "data", "results");
+if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
+let _statsCache: StatsData | null = null;
 function loadStats(): StatsData {
+  if (_statsCache) return _statsCache;
   try {
     if (fs.existsSync(statsPath)) {
       const raw = JSON.parse(fs.readFileSync(statsPath, "utf-8"));
-      if (raw.events) return raw;
-      // Migrate old format { visits, standardSales/paidStandardSales, ... }
+      if (raw.events) { _statsCache = raw; return raw; }
       const events: StatsEvent[] = [];
       for (let i = 0; i < (raw.visits || 0); i++) events.push({ type: "visit", ts: new Date().toISOString() });
       for (let i = 0; i < (raw.paidStandardSales || raw.standardSales || 0); i++) events.push({ type: "paid_standard", ts: new Date().toISOString() });
       for (let i = 0; i < (raw.paidPremiumSales || raw.premiumSales || 0); i++) events.push({ type: "paid_premium", ts: new Date().toISOString() });
-      return { events, standardPrice: raw.standardPrice || 100, premiumPrice: raw.premiumPrice || 200 };
+      _statsCache = { events, standardPrice: raw.standardPrice || 100, premiumPrice: raw.premiumPrice || 200 };
+      return _statsCache;
     }
   } catch {}
-  return { events: [], standardPrice: 100, premiumPrice: 200 };
+  _statsCache = { events: [], standardPrice: 100, premiumPrice: 200 };
+  return _statsCache;
 }
 function saveStats(stats: StatsData) {
+  _statsCache = stats;
   const dir = path.dirname(statsPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   // Prune events older than 1 year
@@ -105,6 +111,137 @@ const POLZA_BASE_URL = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
 const ANALYSIS_MODEL = "google/gemini-3.1-flash-lite-preview";
 // Nano Banana 2 — генерация изображений с лицом пользователя
 const IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
+
+function getOccasionStyleGuide(wishes: string): string {
+  const w = wishes.toLowerCase();
+  if (w.includes("пляж") || w.includes("отдых") || w.includes("курорт") || w.includes("яхта"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ОТДЫХА/ПЛЯЖА — ИГНОРИРУЙ стандартную структуру офис/вечер/color-block. Создай ТРИ образа:\n1. RESORT CHIC: яркий этнический принт (фуксия/кобальт/терракот), рубашка+шорты или платье-рубашка, соломенная шляпа, зеркальные очки, эспадрильи, плетёная сумка. Вайб: Санторини, закат, "вау какая стильная".\n2. BEACH CLUB LUXE: монохромный яркий купальный look (лимонный/коралловый/аква), парео или льняные брюки, золотые украшения-ракушки, сандалии на платформе, oversized соломенная шляпа. Вайб: Ибица, яхта, глянцевый журнал.\n3. TROPICAL MAXIMALISM: смелый цветочный или анималистичный принт, сатиновое мини или макси платье, яркие аксессуары, цветные линзы, босоножки. Вайб: Бали, тропики, Instagram-perfect.`;
+  if (w.includes("свидание") || w.includes("романтич"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ СВИДАНИЯ — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. ROMANTIC EVENING: элегантное платье миди в глубоком цвете (бордо/изумруд/полночный синий), тонкие украшения, каблук, клатч. Вайб: первое свидание, ресторан, "она потрясающая".\n2. CHIC & PLAYFUL: стильный комплект — шёлковая блуза + широкие брюки или юбка миди, интересный аксессуар как акцент, лоферы или мюли. Вайб: кофе перерастает в ужин, непринуждённо и красиво.\n3. BOLD DATE LOOK: смелый монохромный total look или statement платье, яркая помада, эффектные серьги. Вайб: она точно запомнится, уверенность и шарм.`;
+  if (w.includes("ресторан"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ РЕСТОРАНА — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. CLASSIC ELEGANCE: платье-футляр или костюм в нейтральном/глубоком цвете, жемчуг или тонкие украшения, каблук, маленькая сумочка. Вайб: fine dining, безупречно.\n2. MODERN CHIC: шёлковая блуза + брюки с высокой талией, интересный пояс, лоферы или мюли, statement серьги. Вайб: стильный ресторан, уверенная женщина.\n3. GLAMOUR NIGHT: вечернее платье с деталями (разрез/открытая спина/блеск), эффектные украшения, вечерняя сумочка. Вайб: особый повод, все взгляды на неё.`;
+  if (w.includes("вечеринк") || w.includes("клуб") || w.includes("ночная"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ВЕЧЕРИНКИ/КЛУБА — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. PARTY QUEEN: мини-платье с блеском или пайетками, высокие каблуки, bold макияж, клатч. Вайб: VIP-вечеринка, все смотрят.\n2. COOL GIRL NIGHT: кожаные брюки + шёлковый топ или корсет, ботильоны, statement украшения. Вайб: клуб, уверенность, стиль.\n3. NEON BOLD: яркий неоновый или металлический look, смелый цвет, эффектный силуэт. Вайб: фестиваль или ночной клуб, запоминающийся образ.`;
+  if (w.includes("свадьб") || w.includes("торжеств") || w.includes("выпускн"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ТОРЖЕСТВА — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. TIMELESS GLAMOUR: вечернее платье в пол (шампань/пудра/айвори), тонкие украшения с камнями, каблук, элегантная причёска. Вайб: свадьба, безупречная гостья.\n2. MODERN FORMAL: стильный костюм или платье-миди в насыщенном цвете (изумруд/сапфир/рубин), эффектные украшения. Вайб: торжество, запоминающийся образ.\n3. ROMANTIC PRINCESS: пышное или A-line платье с деталями (кружево/вышивка/объём), нежные украшения, романтичная причёска. Вайб: выпускной или свадьба, сказочный образ.`;
+  if (w.includes("офис") || w.includes("деловая") || w.includes("бизнес"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ОФИСА/БИЗНЕСА — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. POWER SUIT: идеально скроенный костюм (серый/тёмно-синий/кремовый), шёлковая блуза, каблук или лоферы, кожаная сумка. Вайб: CEO, авторитет и стиль.\n2. QUIET LUXURY OFFICE: монохромный look в нейтральных тонах, кашемировый джемпер + брюки, минималистичные украшения, дорогие детали. Вайб: Quiet Luxury, дорого без лишнего.\n3. SMART CREATIVE: пиджак с интересной деталью + брюки или юбка миди, акцентный аксессуар, лоферы. Вайб: творческий офис, стильно и профессионально.`;
+  if (w.includes("спорт") || w.includes("фитнес"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ СПОРТА — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. PREMIUM ATHLEISURE: дизайнерский спортивный комплект (Lululemon/Alo/Vuori уровень), монохромный или с акцентом, кроссовки премиум. Вайб: из спортзала прямо на кофе, безупречно.\n2. SPORT CHIC: стильный тренировочный look с модными деталями, яркий акцент, функционально и красиво. Вайб: фитнес-блогер, вдохновляет.\n3. OUTDOOR ACTIVE: premium outdoor look (беговые брюки + куртка + кроссовки), динамичная поза. Вайб: утренняя пробежка в парке, энергия и здоровье.`;
+  if (w.includes("прогулк") || w.includes("кафе") || w.includes("шопинг") || w.includes("casual"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ПРОГУЛКИ/КАФЕ — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. EFFORTLESS CHIC: джинсы идеального кроя + шёлковая блуза или тонкий джемпер, лоферы, маленькая сумка. Вайб: Париж, непринуждённо и стильно.\n2. CASUAL LUXE: льняной комплект или платье в нейтральном тоне, плетёная сумка, сандалии, минималистичные украшения. Вайб: летний город, свежо и красиво.\n3. STREET STYLE COOL: интересный принт или яркий акцент, кроссовки премиум или ботинки, стильная сумка. Вайб: уличный стиль, запоминающийся образ.`;
+  if (w.includes("театр") || w.includes("выставк"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ТЕАТРА/ВЫСТАВКИ — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. CULTURAL ELEGANCE: платье миди с интересным кроем или костюм, statement украшения, каблук или лоферы. Вайб: театральная премьера, утончённо.\n2. ARTISTIC CHIC: необычный силуэт или принт, авторские украшения, интересная обувь. Вайб: вернисаж, творческая личность с вкусом.\n3. DRAMATIC EVENING: вечернее платье с характером (асимметрия/объём/необычный цвет), эффектные украшения. Вайб: опера, незабываемый образ.`;
+  if (w.includes("путешеств") || w.includes("самолёт"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ПУТЕШЕСТВИЯ — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. TRAVEL CHIC: стильный комфортный look (широкие брюки + блуза + лёгкий пиджак), кроссовки или лоферы, вместительная сумка. Вайб: бизнес-класс, путешественница с вкусом.\n2. CITY EXPLORER: джинсы + интересный верх + кроссовки премиум, рюкзак или crossbody, удобно и стильно. Вайб: исследование нового города.\n3. RESORT ARRIVAL: лёгкое платье или льняной комплект, сандалии, соломенная шляпа. Вайб: прилетела на курорт, сразу готова к отдыху.`;
+  if (w.includes("фотосессия"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ФОТОСЕССИИ — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. STUDIO EDITORIAL: чистый минималистичный look с одним сильным акцентом (цвет/силуэт/деталь), идеальная посадка, рекламное качество. Вайб: обложка Vogue, безупречно.\n2. URBAN STREET STYLE: яркий или необычный look для городской съёмки, интересный фон, динамичная поза. Вайб: уличная мода, живой и современный.\n3. GLAMOUR PORTRAIT: эффектный вечерний или гламурный look, драматическое освещение, statement образ. Вайб: глянцевый журнал, запоминающийся портрет.`;
+  if (w.includes("фестиваль") || w.includes("концерт"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ФЕСТИВАЛЯ/КОНЦЕРТА — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. FESTIVAL BOHO: бохо-шик с этническими деталями, яркие аксессуары, ботинки или сандалии, венок или шляпа. Вайб: Coachella, свободный дух.\n2. CONCERT COOL: стильный rock-chic look (кожаная куртка/джинсы/ботинки), bold аксессуары. Вайб: рок-концерт, уверенно и стильно.\n3. RAVE NEON: яркий неоновый или металлический look, смелые аксессуары, кроссовки. Вайб: электронный фестиваль, заметна в толпе.`;
+  if (w.includes("горнолыжн"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ГОРНОЛЫЖНОГО КУРОРТА — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. SLOPE CHIC: premium горнолыжный комбинезон или комплект (Bogner/Fendi Ski уровень), яркий или монохромный, шлем с визором, перчатки. Вайб: Куршевель, стильно на склоне.\n2. APRÈS-SKI LUXE: кашемировый свитер + горнолыжные брюки или меховой жилет, угги или ботинки, шапка-бини. Вайб: шале, горячий шоколад, уютно и дорого.\n3. MOUNTAIN GLAM: вечерний look для ресторана курорта (платье + шуба или пуховик), элегантно в горах. Вайб: ужин в Альпах, гламур и снег.`;
+  if (w.includes("корпоратив"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ КОРПОРАТИВА — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. FESTIVE PROFESSIONAL: нарядный костюм или платье-миди в праздничном цвете (бордо/изумруд/золото), элегантно и уместно. Вайб: корпоратив в хорошей компании, запомнится.\n2. COCKTAIL CHIC: коктейльное платье или стильный комплект, интересные украшения, каблук. Вайб: вечеринка коллег, выглядит лучше всех.\n3. SMART PARTY: пиджак с блеском или интересной деталью + брюки/юбка, баланс между офисом и праздником. Вайб: профессионально и празднично одновременно.`;
+  if (w.includes("загородн") || w.includes("природ") || w.includes("пикник"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ЗАГОРОДНОГО ОТДЫХА — ИГНОРИРУЙ стандартную структуру. Создай ТРИ образа:\n1. COUNTRY CHIC: льняное платье или комплект в нейтральных тонах, соломенная шляпа, сандалии или эспадрильи. Вайб: загородный дом, естественно и красиво.\n2. PICNIC STYLE: лёгкий сарафан или юбка с блузой, плетёная корзина-сумка, балетки или мюли. Вайб: пикник в поле, романтично.\n3. OUTDOOR ADVENTURE: стильный casual look (джинсы + рубашка + кроссовки), функционально и модно. Вайб: прогулка по лесу, активный отдых.`;
+  return "";
+}
+
+function getOccasionAtmosphere(wishes: string, idx: number = 0): string {
+  const w = wishes.toLowerCase();
+  const i = idx % 3;
+  if (w.includes("пляж") || w.includes("отдых") || w.includes("курорт") || w.includes("яхта"))
+    return [
+      " Sun-kissed glowing skin, golden hour light, Santorini white terrace overlooking the sea, warm amber tones, resort chic, vibrant ethnic prints, espadrilles, relaxed confident pose.",
+      " Beach club setting, turquoise water in background, soft midday sun, tropical lush greenery, resort wear, barefoot on white sand, carefree summer energy.",
+      " Luxury yacht deck, Mediterranean sunset, golden reflections on water, sophisticated resort look, champagne glass in hand, glamorous vacation mood.",
+    ][i];
+  if (w.includes("свидание") || w.includes("романтич"))
+    return [
+      " Intimate candlelit restaurant interior, warm golden light, elegant evening look, soft bokeh background, romantic date-night atmosphere.",
+      " Rooftop terrace at sunset, city lights below, romantic warm glow, sophisticated evening silhouette, gentle breeze.",
+      " Cozy wine bar, exposed brick walls, warm amber lighting, intimate close-up framing, elegant yet relaxed evening style.",
+    ][i];
+  if (w.includes("ресторан"))
+    return [
+      " Upscale restaurant interior, warm ambient chandelier light, polished marble table, sophisticated dining look, refined elegance.",
+      " Outdoor restaurant terrace, golden evening light, lush greenery, chic summer dining look, relaxed confidence.",
+      " Modern minimalist fine dining, dramatic spotlighting, architectural interior, sleek editorial fashion look.",
+    ][i];
+  if (w.includes("вечеринк") || w.includes("клуб") || w.includes("ночная"))
+    return [
+      " Upscale nightclub, dramatic neon pink and blue lighting, bold confident look, electric night atmosphere, dynamic pose.",
+      " Rooftop party, city skyline at night, string lights, glamorous evening look, celebratory mood.",
+      " Exclusive lounge, moody dark interior, spotlight from above, statement outfit, mysterious and alluring.",
+    ][i];
+  if (w.includes("свадьб") || w.includes("торжеств") || w.includes("выпускн"))
+    return [
+      " Grand ballroom, crystal chandeliers, elegant formal look, luxurious fabrics, dreamy soft lighting, special occasion glamour.",
+      " Garden ceremony, soft natural light through trees, romantic floral backdrop, elegant flowing outfit.",
+      " Historic venue exterior, golden hour light, architectural columns, sophisticated formal look, magazine-worthy composition.",
+    ][i];
+  if (w.includes("офис") || w.includes("деловая") || w.includes("бизнес"))
+    return [
+      " Modern glass office interior, natural daylight through floor-to-ceiling windows, professional confident look, clean structured lines.",
+      " Business district street, architectural glass buildings, sharp tailored look, purposeful stride, urban professional.",
+      " Minimalist conference room, soft diffused light, polished business look, authoritative yet approachable pose.",
+    ][i];
+  if (w.includes("спорт") || w.includes("фитнес"))
+    return [
+      " Modern gym interior, dramatic spotlighting, premium athletic wear, powerful dynamic pose, energy and strength.",
+      " Outdoor park at sunrise, golden morning light, sporty premium look, running or stretching pose, fresh vitality.",
+      " Urban rooftop workout space, city skyline background, athletic editorial look, motion blur effect, high energy.",
+    ][i];
+  if (w.includes("прогулк") || w.includes("кафе"))
+    return [
+      " Charming European cobblestone street, soft morning light, effortless chic look, relaxed confident walk.",
+      " Outdoor café terrace, dappled sunlight through trees, casual stylish look, coffee cup in hand, leisurely mood.",
+      " City park, lush greenery, golden afternoon light, relaxed elegant look, natural and fresh.",
+    ][i];
+  if (w.includes("театр") || w.includes("выставк"))
+    return [
+      " Grand theatre lobby, ornate architecture, dramatic chandelier light, sophisticated evening look, cultural elegance.",
+      " Contemporary art gallery, white walls, dramatic spotlights on artwork, editorial fashion look, artistic atmosphere.",
+      " Theatre exterior at night, illuminated marquee, elegant evening silhouette, dramatic shadows, glamorous arrival.",
+    ][i];
+  if (w.includes("путешеств") || w.includes("самолёт"))
+    return [
+      " Modern airport terminal, large windows with planes visible, stylish travel look, cosmopolitan chic, confident traveller.",
+      " Iconic city landmark backdrop, tourist destination, fashionable explorer look, natural daylight, adventurous mood.",
+      " Boutique hotel lobby, luxurious interior, travel-ready chic look, sophisticated wanderer aesthetic.",
+    ][i];
+  if (w.includes("фотосессия"))
+    return [
+      " Professional photography studio, pure white seamless backdrop, dramatic Rembrandt lighting, high-fashion editorial pose, advertising campaign quality.",
+      " Urban street location, graffiti wall or architectural detail, natural daylight, editorial fashion photography, dynamic confident pose.",
+      " Rooftop or loft space, industrial aesthetic, large windows with city view, atmospheric side lighting, artistic fashion editorial.",
+    ][i];
+  if (w.includes("фестиваль") || w.includes("концерт"))
+    return [
+      " Outdoor music festival, golden sunset light, bohemian expressive look, crowd energy in background, free-spirited.",
+      " Concert venue, dramatic stage lighting, bold statement outfit, electric atmosphere, vibrant colors.",
+      " Festival grounds, flower fields or art installations, eclectic creative look, warm natural light, joyful energy.",
+    ][i];
+  if (w.includes("горнолыжн"))
+    return [
+      " Alpine ski resort, snowy mountain peaks, luxury après-ski look, crisp winter light, stylish and warm.",
+      " Ski slope, fresh powder snow, premium ski wear, dynamic action pose, mountain panorama.",
+      " Cozy mountain chalet interior, fireplace glow, warm winter look, après-ski elegance, intimate alpine atmosphere.",
+    ][i];
+  if (w.includes("загородн") || w.includes("природ"))
+    return [
+      " Countryside estate, lush green meadow, soft natural daylight, relaxed elegant look, fresh air and freedom.",
+      " Forest path, dappled sunlight through trees, nature-inspired look, organic textures, serene atmosphere.",
+      " Lakeside dock, golden hour reflection on water, casual chic look, peaceful natural setting.",
+    ][i];
+  if (w.includes("корпоратив"))
+    return [
+      " Corporate event venue, professional yet festive look, warm event lighting, confident social pose.",
+      " Hotel ballroom, business celebration, polished smart-casual look, networking atmosphere.",
+      " Rooftop corporate party, city view, business chic look, evening event energy.",
+    ][i];
+  return "";
+}
 
 function sanitizeWishes(text: string): string {
   if (!text) return text;
@@ -860,8 +997,23 @@ loadList();
 
   // Payment endpoints
   const PAYMENT_MODE = process.env.PAYMENT_MODE || "test";
-  // Maps orderId (idempotenceKey) → paymentId for return_url lookup
-  const pendingPayments = new Map<string, string>();
+  // Maps orderId (idempotenceKey) -> paymentId — persisted to disk so restarts don't lose pending payments
+  const pendingPaymentsFile = path.join(PROJECT_ROOT, "data", "pending_payments.json");
+  function loadPendingPayments(): Map<string, string> {
+    try {
+      if (fs.existsSync(pendingPaymentsFile)) {
+        return new Map(Object.entries(JSON.parse(fs.readFileSync(pendingPaymentsFile, "utf-8"))));
+      }
+    } catch {}
+    return new Map();
+  }
+  function savePendingPayment(orderId: string, paymentId: string) {
+    const m = loadPendingPayments();
+    m.set(orderId, paymentId);
+    const entries = [...m.entries()].slice(-500);
+    fs.writeFileSync(pendingPaymentsFile, JSON.stringify(Object.fromEntries(entries)));
+  }
+  const pendingPayments = loadPendingPayments();
 
   app.post("/api/create-payment", async (req: Request, res: Response) => {
     try {
@@ -893,6 +1045,7 @@ loadList();
 
       // Сохраняем маппинг orderId → paymentId для confirm-payment
       pendingPayments.set(idempotenceKey, payment.id);
+      savePendingPayment(idempotenceKey, payment.id);
 
       console.log("[YooKassa] Payment created:", payment.id, "status:", payment.status);
 
@@ -1018,6 +1171,30 @@ loadList();
       console.error("[YooKassa] Check paid error:", err);
       res.json({ paid: false });
     }
+  });
+
+  // Recover saved result by paymentId
+  app.get("/api/result/:paymentId", (req: Request, res: Response) => {
+    const id = req.params.paymentId.replace(/[^a-zA-Z0-9_-]/g, "");
+    if (!id) return res.status(400).json({ error: "invalid id" });
+    const file = path.join(RESULTS_DIR, id, "result.json");
+    if (!fs.existsSync(file)) return res.status(404).json({ ready: false });
+    try {
+      const data = JSON.parse(fs.readFileSync(file, "utf-8"));
+      res.json({ ready: true, ...data });
+    } catch {
+      res.status(500).json({ error: "read failed" });
+    }
+  });
+
+  // Serve saved result images
+  app.get("/api/result-image/:paymentId/:file", (req: Request, res: Response) => {
+    const id = req.params.paymentId.replace(/[^a-zA-Z0-9_-]/g, "");
+    const file = req.params.file.replace(/[^a-zA-Z0-9._-]/g, "");
+    if (!id || !file) return res.status(400).end();
+    const imgPath = path.join(RESULTS_DIR, id, file);
+    if (!fs.existsSync(imgPath)) return res.status(404).end();
+    res.sendFile(imgPath);
   });
 
   // Group styling endpoint
@@ -1180,6 +1357,10 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         ? `\n🗓️ Пользователь запросил образы для сезона: ${detectedSeason}. Все 3 образа должны соответствовать этому сезону.`
         : "";
       const wishes = sanitizeWishes(rawWishes);
+      const budgetRaw = parseInt((req.body.budget || "").toString()) || 0;
+      const budgetInstruction = budgetRaw > 0
+        ? `\n\n💰 БЮДЖЕТ ПОЛЬЗОВАТЕЛЯ: ${budgetRaw.toLocaleString("ru-RU")} ₽ на один образ. КРИТИЧЕСКИ ВАЖНО: сумма всех items[] в каждом образе НЕ должна превышать ${budgetRaw.toLocaleString("ru-RU")} ₽. Подбирай реальные вещи в этом ценовом диапазоне. Расставляй приоритеты: сначала ключевые вещи образа, потом аксессуары. Указывай честные цены — не занижай и не завышай.`
+        : "";
       const looksCount = Math.min(5, Math.max(1, parseInt(req.body.looksCount) || 3));
       const userName = (req.body.userName || "").toString().trim().slice(0, 50);
       const visitCount = Math.max(1, parseInt(req.body.visitCount) || 1);
@@ -1228,6 +1409,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       const mimeType = referenceImage.mimetype;
 
       // Prepare messages with image for Gemini analysis
+      const occasionGuide = getOccasionStyleGuide(wishes);
       const wishesBlock = wishes
         ? `\n\n🌟 ОСОБЫЕ ПОЖЕЛАНИЯ ПОЛЬЗОВАТЕЛЯ (PREMIUM — ВЫСШИЙ ПРИОРИТЕТ): "${wishes}"\n\n⚠️ КРИТИЧЕСКОЕ ПРАВИЛО ПРИ НАЛИЧИИ ПОЖЕЛАНИЙ:\nЕсли пользователь сформулировал конкретный запрос — ПОЛНОСТЬЮ ИГНОРИРУЙ структуру "офис/вечер/color-block" и стандартный список из 6 направлений. Создавай РОВНО то, что человек попросил.\n\nКонкретные сценарии:\n- "хочу образ рокера и 2 для свидания" → ровно 1 рокер + 2 свидания (НЕ офис/вечер/color-block!)\n- "три ярких на курорт" → все 3 курортных, можно оставить летние правила\n- "посоветуй макияж/причёску для X" → расширь раздел груминга в каждом образе с конкретикой под X (продукты, бренды, шаги)\n- "дай совет на первое свидание" → добавь блок "💬 Совет для свидания" в каждом образе: парфюм-нота, как зайти, что говорить, чего избегать\n- Любой другой запрос — БУКВАЛЬНО следуй пожеланию\n\nОБЯЗАТЕЛЬНЫЙ ПУНКТ ПАРФЮМ:\nЕсли пожелание касается свидания/вечера/мероприятия/стиля жизни — в каждом образе ОБЯЗАТЕЛЬНО рекомендуй парфюм (одну конкретную нишевую/премиум модель). ВАЖНО: каждый раз выбирай РАЗНЫЕ ароматы, не повторяй одни и те же. Для вдохновения — большой пул на выбор:\n\nМУЖСКИЕ/УНИСЕКС нишевые: Le Labo Santal 33, Le Labo Bergamote 22, Le Labo Rose 31, Maison Margiela Replica Jazz Club, Maison Margiela Replica By the Fireplace, Maison Margiela Replica Sailing Day, Tom Ford Tobacco Vanille, Tom Ford Oud Wood, Tom Ford Grey Vetiver, Tom Ford Neroli Portofino, Byredo Mojave Ghost, Byredo Bal d\'Afrique, Byredo Gypsy Water, Creed Aventus, Creed Silver Mountain Water, Acqua di Parma Colonia, Acqua di Parma Blu Mediterraneo, Diptyque Tam Dao, Diptyque Eau des Sens, Memo Paris Irish Leather, Parfums de Marly Layton, Parfums de Marly Percival, Initio Oud for Greatness, Initio Rehab, Nasomatto Black Afgano, Juliette Has a Gun Not a Perfume, Comme des Garçons Series 3 Incense Kyoto, Serge Lutens Ambre Sultan, Serge Lutens Chergui, Xerjoff Naxos, Xerjoff Alexandria II, Roja Dove Oligarch\n\nЖЕНСКИЕ/УНИСЕКС нишевые: Maison Francis Kurkdjian Baccarat Rouge 540, Maison Francis Kurkdjian Aqua Celestia, Maison Francis Kurkdjian À la Rose, Diptyque Philosykos, Diptyque Do Son, Diptyque Eau Rose, Chloé Atelier des Fleurs Rose Naturelle, Byredo Blanche, Byredo La Tulipe, Frederic Malle Portrait of a Lady, Frederic Malle Musc Ravageur, Frederic Malle Une Fleur de Cassie, Guerlain Spiritueuse Double Vanille, Guerlain Mon Guerlain Bloom of Rose, Penhaligon\'s Empressa, Penhaligon\'s Juniper Sling, Jo Malone Peony & Blush Suede, Jo Malone Wood Sage & Sea Salt, Jo Malone Lime Basil & Mandarin, Annick Goutal Petite Chérie, Memo Paris Inlé, Amouage Reflection Woman, Amouage Honour Woman, Serge Lutens Sa Majesté la Rose, Etat Libre d\'Orange Putain des Palaces, Comme des Garçons Wonderwood, Viktor&Rolf Flowerbomb Nectar, Narciso Rodriguez for Her Musc Noir\n\nВсегда объясняй ПОЧЕМУ этот конкретный аромат подходит к образу/ситуации/характеру человека.\n\nЕсли пожелания нет или они общие (типа "красиво") — следуй стандартной структуре офис/вечер/color-block.`
         : "";
@@ -1235,7 +1417,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         {
           role: "user",
           content: [
-            { type: "text", text: `${returningInstruction}${pastLooksInstruction}${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.\n\n⚠️ GENDER DETECTION — CRITICAL: Determine the person's gender STRICTLY from the photo, NOT from the user's name. The account owner may be uploading a photo of someone else (e.g. a husband uploading his wife's photo). If the photo shows a WOMAN — generate women's looks and address her as a woman. If the photo shows a MAN — generate men's looks. If the name suggests a different gender than the photo, acknowledge it warmly in greetingAndAnalysis (e.g. "Андрей, судя по фото, это прекрасная девушка — создадим для неё идеальные образы!") and proceed with the correct gender.\n\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${seasonInstruction}${wishesBlock}${zodiacBlock}` },
+            { type: "text", text: `${returningInstruction}${pastLooksInstruction}${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.\n\n⚠️ GENDER DETECTION — CRITICAL: Determine the person's gender STRICTLY from the photo, NOT from the user's name. The account owner may be uploading a photo of someone else (e.g. a husband uploading his wife's photo). If the photo shows a WOMAN — generate women's looks and address her as a woman. If the photo shows a MAN — generate men's looks. If the name suggests a different gender than the photo, acknowledge it warmly in greetingAndAnalysis (e.g. "Андрей, судя по фото, это прекрасная девушка — создадим для неё идеальные образы!") and proceed with the correct gender.\n\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${seasonInstruction}${budgetInstruction}${wishesBlock}${occasionGuide}${zodiacBlock}` },
             { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
           ],
         },
@@ -1356,7 +1538,8 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
           let lastError = "";
           for (let attempt = 0; attempt < 2; attempt++) {
             try {
-              const fluxPrompt = `High-end fashion editorial photography. Single person only, one subject in frame. ${sanitizeEditPrompt(look.editPrompt)}`;
+              const occasionAtmosphere = getOccasionAtmosphere(wishes, idx);
+              const fluxPrompt = `High-end fashion editorial photography. Single person only, one subject in frame. Youthful appearance, fresh glowing skin, natural healthy complexion, smooth skin texture — person looks approximately 5 years younger than their actual age, vibrant and energetic. No tired look, no aging signs.${occasionAtmosphere} ${sanitizeEditPrompt(look.editPrompt)}`;
               imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
               if (imageDataUrl) break;
               lastError = "No image data returned from Flux model.";
@@ -1424,7 +1607,34 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         astroReading: astroReading || null,
         looks: looksWithImagesAndUrls,
       }) + "\n");
-      
+
+      // Persist result so it can be recovered if connection dropped
+      const paymentId = (req.body.paymentId || "").toString().trim();
+      if (paymentId) {
+        try {
+          const resultDir = path.join(RESULTS_DIR, paymentId);
+          fs.mkdirSync(resultDir, { recursive: true });
+          // Save images as separate files, store only paths in JSON
+          const looksForStorage = looksWithImagesAndUrls.map((look: any, idx: number) => {
+            let imageRef = look.image;
+            if (look.image && look.image.startsWith("data:")) {
+              const m = look.image.match(/^data:([^;]+);base64,(.+)$/);
+              if (m) {
+                const ext = m[1].includes("png") ? "png" : "jpg";
+                const imgFile = `look_${idx}.${ext}`;
+                fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(m[2], "base64"));
+                imageRef = `/api/result-image/${paymentId}/${imgFile}`;
+              }
+            }
+            return { ...look, image: imageRef };
+          });
+          fs.writeFileSync(
+            path.join(resultDir, "result.json"),
+            JSON.stringify({ greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null, looks: looksForStorage, savedAt: new Date().toISOString() })
+          );
+        } catch (e) { console.error("[Result] Save failed:", e); }
+      }
+
       clearInterval(heartbeat);
       res.end();
 
@@ -1510,6 +1720,95 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
     }
   });
 
+  app.post("/api/antistyle", upload.array("photos", 1), async (req: Request, res: Response) => {
+    try {
+      const files = req.files as MulterFile[];
+      if (!files || files.length === 0) return res.status(400).json({ error: "Нужно загрузить фото" });
+      const height = req.body.height || "не указан";
+      const weight = req.body.weight || "не указан";
+      const img = files[0];
+      const b64 = img.buffer.toString("base64");
+      const mime = img.mimetype;
+
+      const prompt = `Ты — остроумный стилист-эксперт. Проанализируй внешность человека и опиши его персональный АНТИ-СТИЛЬ.
+
+РОСТ: ${height} см
+ВЕС: ${weight} кг
+
+Ответь СТРОГО в формате JSON:
+{
+  "result": "текст на русском, 4-6 абзацев: 1) АНТИ-ОБРАЗ — конкретные вещи/цвета/фасоны которые нелепо смотрятся, 2) ПОЧЕМУ ЭТО КАТАСТРОФА — объяснение для каждого элемента, 3) ГЛАВНЫЕ ТАБУ — 3-4 правила",
+  "editPrompt": "english prompt for image generation: person wearing the described anti-style outfit, ridiculous fashion, specific ugly clothing items, colors and accessories that clash with their appearance. Fashion photography style, full body shot."
+}`;
+
+      const analysisRaw = await callPolzaChat({
+        model: ANALYSIS_MODEL,
+        systemPrompt: "Ты стилист с чувством юмора. Отвечай ТОЛЬКО валидным JSON.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } }] }],
+        temperature: 0.8,
+        maxTokens: 2048,
+      });
+
+      let parsed: any = {};
+      try { parsed = typeof analysisRaw === "string" ? JSON.parse(analysisRaw) : analysisRaw; } catch { parsed = { result: String(analysisRaw), editPrompt: "" }; }
+
+      let text = (parsed.result || "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/^#{1,6}\s+/gm, "").trim();
+      const editPrompt = parsed.editPrompt || "";
+
+      // Generate anti-style image
+      let image: string | null = null;
+      if (editPrompt) {
+        image = await generateImageWithFlux(
+          `Fashion photography, full body shot. ${editPrompt}`,
+          b64, mime
+        );
+      }
+
+      res.json({ result: text, image });
+    } catch (error) {
+      console.error("Error in /api/antistyle:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  app.post("/api/analyze-style", upload.array("photos", 2), async (req: Request, res: Response) => {
+    try {
+      const files = req.files as MulterFile[];
+      if (!files || files.length < 2) return res.status(400).json({ error: "Нужно загрузить 2 фото: портрет и в полный рост" });
+
+      const images = files.map(f => ({ type: "image_url" as const, image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` } }));
+
+      const prompt = `Ты — профессиональный стилист. Перед тобой два фото одного человека: портрет и фото в полный рост.
+
+Проанализируй стиль и внешний вид. Ответь СТРОГО в формате JSON:
+{
+  "score": число от 1 до 10,
+  "summary": "2-3 предложения — общее впечатление о стиле",
+  "strengths": ["что хорошо — 2-3 пункта"],
+  "improvements": ["что стоит изменить — 3-4 конкретных пункта с объяснением почему"],
+  "potential": "2-3 предложения — каким может стать стиль при правильном подходе"
+}`;
+
+      const raw = await callPolzaChat({
+        model: ANALYSIS_MODEL,
+        systemPrompt: "Ты профессиональный стилист. Отвечай ТОЛЬКО валидным JSON без markdown.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...images] }],
+        temperature: 0.7,
+        maxTokens: 1500,
+      });
+
+      let result: any = {};
+      try {
+        const match = raw.match(/\{[\s\S]*\}/);
+        result = match ? JSON.parse(match[0]) : {};
+      } catch { result = { score: 0, summary: raw, strengths: [], improvements: [], potential: "" }; }
+
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Ошибка анализа" });
+    }
+  });
+
   // Serve production build if available, otherwise use Vite dev middleware
   const distIndexPath = path.join(__dirname, "dist", "index.html");
   if (fs.existsSync(distIndexPath)) {
@@ -1519,7 +1818,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
     // Using middleware (not "*" route) to be compatible with Express 5 / path-to-regexp v8.
     app.use((req: Request, res: Response, next: NextFunction) => {
       if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.startsWith("/admin-panel")) return next();
-      incVisit(); // Count visit
+      if (req.path === "/" || req.path === "") incVisit();
       res.sendFile(path.join(distPath, "index.html"));
     });
   } else {
