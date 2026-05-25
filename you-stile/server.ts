@@ -212,9 +212,9 @@ function getOccasionAtmosphere(wishes: string, idx: number = 0): string {
     ][i];
   if (w.includes("фотосессия"))
     return [
-      " Professional photography studio, pure white seamless backdrop, dramatic Rembrandt lighting, high-fashion editorial pose, advertising campaign quality.",
-      " Urban street location, graffiti wall or architectural detail, natural daylight, editorial fashion photography, dynamic confident pose.",
-      " Rooftop or loft space, industrial aesthetic, large windows with city view, atmospheric side lighting, artistic fashion editorial.",
+      " Luxury penthouse interior, floor-to-ceiling windows, Manhattan skyline view, dramatic side lighting, high-fashion editorial atmosphere, advertising campaign quality.",
+      " Urban street location, iconic architectural backdrop, natural daylight, editorial fashion photography, dynamic confident pose, real environment.",
+      " Rooftop terrace, golden hour light, city panorama in background, atmospheric warm tones, artistic fashion editorial, real outdoor setting.",
     ][i];
   if (w.includes("фестиваль") || w.includes("концерт"))
     return [
@@ -240,7 +240,13 @@ function getOccasionAtmosphere(wishes: string, idx: number = 0): string {
       " Hotel ballroom, business celebration, polished smart-casual look, networking atmosphere.",
       " Rooftop corporate party, city view, business chic look, evening event energy.",
     ][i];
-  return "";
+  // Дефолтный реальный фон — чередуем для разных образов
+  const defaults = [
+    " Upscale European city street, golden afternoon light, architectural stone buildings, cobblestone pavement, natural urban environment, cinematic depth of field.",
+    " Modern minimalist interior, large floor-to-ceiling windows with city view, warm natural daylight, stylish contemporary space, editorial atmosphere.",
+    " Lush city park, dappled sunlight through trees, green bokeh background, fresh natural light, relaxed sophisticated outdoor setting.",
+  ];
+  return defaults[idx % 3];
 }
 
 function sanitizeWishes(text: string): string {
@@ -633,8 +639,8 @@ img{width:100%;height:auto;display:block}
 <html lang="ru">
 <head><meta charset="UTF-8"><title>Админка — Вход</title>
 <style>
-  body{font-family:-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#faf9f7}
-  .box{background:#fff;padding:40px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.1);text-align:center}
+  body{font-family:-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#faf9f7;padding:16px;box-sizing:border-box}
+  .box{background:#fff;padding:32px 24px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.1);text-align:center;width:90%;max-width:340px}
   h2{margin:0 0 20px;font-size:20px;color:#333}
   input{padding:12px 16px;border:1px solid #ddd;border-radius:10px;font-size:18px;text-align:center;width:140px;margin-bottom:16px}
   button{padding:12px 32px;background:#c9a84c;color:#fff;border:none;border-radius:10px;font-size:15px;cursor:pointer}
@@ -657,7 +663,7 @@ img{width:100%;height:auto;display:block}
 <title>Админка — Твой стилист</title>
 <style>
   *{box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:0 auto;padding:24px;background:#faf9f7;color:#1a1a1a}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:0 auto;padding:16px;background:#faf9f7;color:#1a1a1a;overflow-x:hidden}
   h1{font-size:22px;margin:0 0 24px;display:flex;align-items:center;gap:10px}
   h2{font-size:16px;color:#555;margin:0 0 12px}
   .card{background:#fff;border-radius:16px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.06);border:1px solid #eee}
@@ -1539,7 +1545,11 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
           for (let attempt = 0; attempt < 2; attempt++) {
             try {
               const occasionAtmosphere = getOccasionAtmosphere(wishes, idx);
-              const fluxPrompt = `High-end fashion editorial photography. Single person only, one subject in frame. Youthful appearance, fresh glowing skin, natural healthy complexion, smooth skin texture — person looks approximately 5 years younger than their actual age, vibrant and energetic. No tired look, no aging signs.${occasionAtmosphere} ${sanitizeEditPrompt(look.editPrompt)}`;
+              const poseInstruction = wishes.toLowerCase().includes("фотосессия")
+                ? " POSE: Professional fashion editorial pose — body angled 45° to camera, weight shifted to one leg, slight hip tilt, one hand in pocket with thumb out OR hand lightly touching lapel/collar, chin slightly down with direct confident gaze. OR: three-quarter turn, looking back over shoulder, asymmetric stance. GQ/Vogue magazine cover quality pose. NOT stiff, NOT arms hanging straight down."
+                : " POSE: Natural confident pose — slight body angle to camera, weight on one leg, one hand in pocket or relaxed at side with slight elbow bend, shoulders relaxed back, chin parallel to ground, genuine expression. Avoid symmetry, create natural angles.";
+              const qualityInstruction = " QUALITY: Maximum resolution, ultra-sharp details, professional studio lighting or perfect natural light, magazine cover quality, WOW factor — image must make viewer want to look twice. Shot on Phase One IQ4, 8K resolution.";
+              const fluxPrompt = `High-end fashion editorial photography. Single person only, one subject in frame. Youthful appearance, fresh glowing skin, natural healthy complexion, smooth skin texture — person looks approximately 5 years younger than their actual age, vibrant and energetic. No tired look, no aging signs.${occasionAtmosphere}${poseInstruction}${qualityInstruction} ${sanitizeEditPrompt(look.editPrompt)}`;
               imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
               if (imageDataUrl) break;
               lastError = "No image data returned from Flux model.";
@@ -1647,7 +1657,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
   });
 
   // Trial endpoint — бесплатный текстовый анализ без генерации картинок
-  app.post("/api/trial", upload.array("photos", 3), async (req: Request, res: Response) => {
+  app.post("/api/trial", upload.array("photos", 2), async (req: Request, res: Response) => {
     try {
       const files = req.files as MulterFile[];
       const height = req.body.height || "не указан";
@@ -1657,63 +1667,50 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         return res.status(400).json({ error: "Нужно загрузить фото" });
       }
 
-      const referenceImage = files[0];
-      const referenceImageBase64 = referenceImage.buffer.toString("base64");
-      const mimeType = referenceImage.mimetype;
+      const imageContent: any[] = files.map(f => ({
+        type: "image_url",
+        image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` },
+      }));
 
-      const trialPrompt = `Ты — опытный стилист-эксперт. По фотографии человека дай краткий персональный анализ его внешности и стиля.
+      const scorePrompt = `Оцени стиль человека на фото по шкале от 1 до 10. Рост: ${height} см, вес: ${weight} кг. Ответь ТОЛЬКО одним числом от 1 до 10. Ничего больше.`;
 
-ПРОФИЛЬ ВНЕШНОСТИ:
-- Определи примерный возраст, тип лица, черты
-- Оцени цветотип (времена года)
-- Отметь сильные стороны внешности
+      const analysisPrompt = `Ты — профессиональный стилист. Рост: ${height} см, вес: ${weight} кг.
+Дай детальный анализ стиля на русском языке строго в таком порядке:
 
-СТИЛИСТИЧЕСКИЕ РЕКОМЕНДАЦИИ:
-- Какие цвета и оттенки тебе подходят больше всего
-- Какие фасоны и силуэты подчеркнут достоинства
-- Какие ткани и материалы предпочтительны
-- 2-3 ключевых совета по гардеробу
+✅ Что гармонично в образе:
+(конкретные вещи с фото — что хорошо сидит, что подходит)
 
-РОСТ: ${height} см
-ВЕС: ${weight} кг
+🔄 Что стоит сменить:
+(конкретные предметы гардероба которые стоит заменить и почему)
 
-Ответь ТОЛЬКО текстом на русском языке, без JSON, без списков в квадратных скобках, 3-5 абзацев. Будь конкретным и полезным.`;
+💡 Рекомендации:
+(цвета, силуэт, материалы, стиль)`;
 
-      const messages = [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: trialPrompt },
-            { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
-          ],
-        },
-      ];
+      const [scoreRaw, analysisRaw] = await Promise.all([
+        callPolzaChat({
+          model: ANALYSIS_MODEL,
+          systemPrompt: "Отвечай только одним числом.",
+          messages: [{ role: "user", content: [{ type: "text", text: scorePrompt }, ...imageContent] }],
+          temperature: 0.1, maxTokens: 10, useJsonFormat: false,
+        }),
+        callPolzaChat({
+          model: ANALYSIS_MODEL,
+          systemPrompt: "Ты профессиональный стилист. Отвечай только текстом на русском языке.",
+          messages: [{ role: "user", content: [{ type: "text", text: analysisPrompt }, ...imageContent] }],
+          temperature: 0.7, maxTokens: 1200, useJsonFormat: false,
+        }),
+      ]);
 
-      const analysisText = await callPolzaChat({
-        model: ANALYSIS_MODEL,
-        systemPrompt: "Ты дружелюбный стилист-консультант. Отвечай ТОЛЬКО обычным текстом на русском языке, без JSON, без кодовых блоков, без звёздочек и заголовков.",
-        messages,
-        temperature: 0.7,
-        maxTokens: 2048,
-        useJsonFormat: false, // Отключаем JSON формат
-      });
+      const scoreStr = typeof scoreRaw === "string" ? scoreRaw : JSON.stringify(scoreRaw);
+      const scoreNum = parseInt(scoreStr.replace(/\D/g, "").slice(0, 2));
+      const score = isNaN(scoreNum) || scoreNum < 1 || scoreNum > 10 ? null : scoreNum;
+      const scoreLabels = ["","Начинающий","Базовый","Базовый","Хороший","Хороший","Уверенный","Уверенный","Отличный","Безупречный","Безупречный"];
+      const scoreLabel = score ? scoreLabels[score] : null;
 
-      // Очищаем ответ от markdown
-      let cleanText = typeof analysisText === 'string' ? analysisText : String(analysisText);
-      // Убираем все markdown блоки ```...```
-      cleanText = cleanText.replace(/```[\w]*\s*/gi, '');
-      cleanText = cleanText.replace(/```/gi, '');
-      // Убираем **жирный**, *курсив*, # заголовки
-      cleanText = cleanText.replace(/\*\*([^*]+)\*\*/g, '$1');
-      cleanText = cleanText.replace(/\*([^*]+)\*/g, '$1');
-      cleanText = cleanText.replace(/^#{1,6}\s+/gm, '');
-      // Убираем списки - и *
-      cleanText = cleanText.replace(/^[\s]*[-*]\s+/gm, '• ');
-      // Убираем нумерованные списки
-      cleanText = cleanText.replace(/^[\s]*\d+\.\s+/gm, '');
-      cleanText = cleanText.trim();
+      const analysis = typeof analysisRaw === "string" ? analysisRaw : JSON.stringify(analysisRaw);
+      const cleanAnalysis = analysis.replace(/```[\w]*\s*/gi, "").replace(/```/gi, "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*]+)\*/g, "$1").replace(/^#{1,6}\s+/gm, "").trim();
 
-      res.json({ greetingAndAnalysis: cleanText || "Спасибо за фото! Ваш стиль уникален — обратитесь к нашим образам для персонализированных рекомендаций." });
+      res.json({ score, scoreLabel, greetingAndAnalysis: cleanAnalysis });
     } catch (error) {
       console.error("Error in /api/trial:", error);
       res.status(500).json({ error: (error as Error).message });

@@ -575,61 +575,37 @@ const TrialModalContent = ({ isOpen, onClose, userName, onUnlock }: {
   const [step, setStep] = useState<'form' | 'loading' | 'result'>('form');
   const [height, setHeight] = useState("");
   const [weight, setWeight] = useState("");
-  const [preview, setPreview] = useState<string | null>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [fullBodyPreview, setFullBodyPreview] = useState<string | null>(null);
+  const [portraitPreview, setPortraitPreview] = useState<string | null>(null);
+  const [fullBodyFile, setFullBodyFile] = useState<File | null>(null);
+  const [portraitFile, setPortraitFile] = useState<File | null>(null);
   const [result, setResult] = useState<any>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const fullBodyRef = useRef<HTMLInputElement>(null);
+  const portraitRef = useRef<HTMLInputElement>(null);
 
-  // Сброс при закрытии
   useEffect(() => {
     if (!isOpen) {
       setStep('form');
-      setPreview(null);
-      setFile(null);
+      setFullBodyPreview(null);
+      setPortraitPreview(null);
+      setFullBodyFile(null);
+      setPortraitFile(null);
       setResult(null);
+      setHeight("");
+      setWeight("");
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  // Проверяем, использовал ли уже пользователь trial
-  if (localStorage.getItem("trial_used")) {
-    return (
-      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-charcoal/80 backdrop-blur-sm">
-        <div className="bg-ivory w-full max-w-md rounded-3xl shadow-2xl p-8 text-center">
-          <p className="font-serif text-gold text-xs tracking-widest uppercase mb-2">Бесплатный анализ</p>
-          <h2 className="text-2xl font-serif text-charcoal mb-4">Вы уже использовали бесплатный анализ</h2>
-          <p className="text-sm text-charcoal/60 mb-6">Для продолжения необходимо оплатить полный пакет</p>
-          <button
-            onClick={onUnlock}
-            className="w-full py-3 rounded-full bg-gold text-charcoal font-medium hover:bg-gold/90 transition-colors"
-          >
-            Выбрать тариф
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setFile(f);
-    setPreview(URL.createObjectURL(f));
-  };
-
-  const handleSubmit = async (e?: MouseEvent) => {
-    e?.preventDefault();
-    e?.stopPropagation();
-    if (!file || !height || !weight) return;
+  const handleSubmit = async () => {
+    if (!fullBodyFile || !portraitFile || !height || !weight) return;
     setStep('loading');
-
     const formData = new FormData();
-    formData.append("photos", file);
+    formData.append("photos", fullBodyFile);
+    formData.append("photos", portraitFile);
     formData.append("height", height);
     formData.append("weight", weight);
-    formData.append("trial", "true");
-
     try {
       const res = await fetch("/api/trial", { method: "POST", body: formData });
       if (!res.ok) throw new Error("Ошибка сервера");
@@ -638,55 +614,81 @@ const TrialModalContent = ({ isOpen, onClose, userName, onUnlock }: {
       localStorage.setItem("trial_used", "true");
       setStep('result');
     } catch (err: any) {
-      console.error("Trial error:", err);
       alert("Ошибка: " + (err?.message || "Попробуйте ещё раз"));
       setStep('form');
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-16 bg-charcoal/80 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-ivory w-full max-w-xl rounded-3xl shadow-2xl overflow-hidden p-6 relative">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-8 bg-charcoal/80 backdrop-blur-sm overflow-y-auto">
+      <div className="bg-ivory w-full max-w-xl rounded-3xl shadow-2xl p-6 relative max-h-[90vh] overflow-y-auto">
         <button type="button" onClick={onClose} className="absolute top-4 right-4 p-2 bg-charcoal/5 rounded-full">
           <X className="w-5 h-5 text-charcoal" />
         </button>
 
         {step === 'form' && (
           <>
-            <p className="font-serif text-gold text-xs tracking-widest uppercase mb-1">Бесплатный анализ</p>
-            <h2 className="text-2xl font-serif text-charcoal mb-4">Узнайте свой стиль</h2>
-            <p className="text-sm text-charcoal/60 mb-4">Чёткое портретное фото при хорошем освещении — для максимального сходства в генерациях</p>
+            <p className="font-serif text-gold text-xs tracking-widest uppercase mb-1">Бесплатно</p>
+            <h2 className="text-2xl font-serif text-charcoal mb-2">Оцени свой стиль</h2>
+            <p className="text-sm text-charcoal/60 mb-4">Стилист оценит ваш стиль по 10-балльной шкале и даст рекомендации</p>
 
-            <div className="flex gap-3 mb-3">
+            <div className="flex gap-3 mb-4">
               <input type="number" value={height} onChange={e => setHeight(e.target.value)} placeholder="Рост (см)"
                 className="flex-1 px-3 py-2 rounded-lg border border-charcoal/20 text-sm" />
               <input type="number" value={weight} onChange={e => setWeight(e.target.value)} placeholder="Вес (кг)"
                 className="flex-1 px-3 py-2 rounded-lg border border-charcoal/20 text-sm" />
             </div>
 
-            {preview ? (
-              <div className="relative mb-3 rounded-xl overflow-hidden aspect-[3/4] max-h-48">
-                <img src={preview} alt="" className="w-full h-full object-cover" />
-                <button onClick={() => { setPreview(null); setFile(null); }} className="absolute top-2 right-2 p-1 bg-black/50 rounded-full">
-                  <X className="w-4 h-4 text-white" />
-                </button>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {/* Фото в полный рост */}
+              <div>
+                <p className="text-xs text-charcoal/60 mb-1 font-medium">Фото в полный рост</p>
+                {fullBodyPreview ? (
+                  <div className="relative rounded-xl overflow-hidden aspect-[3/4]">
+                    <img src={fullBodyPreview} alt="" className="w-full h-full object-cover" />
+                    <button onClick={() => { setFullBodyPreview(null); setFullBodyFile(null); }}
+                      className="absolute top-1 right-1 p-1 bg-black/50 rounded-full">
+                      <X className="w-3 h-3 text-white" />
+                    </button>
+                  </div>
+                ) : (
+                  <div onClick={() => fullBodyRef.current?.click()}
+                    className="border-2 border-dashed border-charcoal/20 rounded-xl aspect-[3/4] flex flex-col items-center justify-center cursor-pointer hover:border-gold transition-colors">
+                    <Upload className="w-6 h-6 text-charcoal/30 mb-1" />
+                    <p className="text-xs text-charcoal/50 text-center px-2">В полный рост</p>
+                  </div>
+                )}
+                <input ref={fullBodyRef} type="file" accept="image/*" className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) { setFullBodyFile(f); setFullBodyPreview(URL.createObjectURL(f)); } }} />
               </div>
-            ) : (
-              <>
-                <div onClick={() => fileRef.current?.click()}
-                  className="border-2 border-dashed border-charcoal/20 rounded-xl p-6 text-center cursor-pointer hover:border-gold mb-2">
-                  <Upload className="w-8 h-8 text-charcoal/40 mx-auto mb-2" />
-                  <p className="text-sm text-charcoal">Загрузить фото</p>
-                </div>
-                <p className="text-xs text-charcoal/50 text-center mb-3">Чёткое фото лица, взгляд в камеру, хорошее освещение</p>
-              </>
-            )}
 
-            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+              {/* Портретное фото */}
+              <div>
+                <p className="text-xs text-charcoal/60 mb-1 font-medium">Портретное фото</p>
+                {portraitPreview ? (
+                  <div className="relative rounded-xl overflow-hidden aspect-[3/4]">
+                    <img src={portraitPreview} alt="" className="w-full h-full object-cover" />
+                    <button onClick={() => { setPortraitPreview(null); setPortraitFile(null); }}
+                      className="absolute top-1 right-1 p-1 bg-black/50 rounded-full">
+                      <X className="w-3 h-3 text-white" />
+                    </button>
+                  </div>
+                ) : (
+                  <div onClick={() => portraitRef.current?.click()}
+                    className="border-2 border-dashed border-charcoal/20 rounded-xl aspect-[3/4] flex flex-col items-center justify-center cursor-pointer hover:border-gold transition-colors">
+                    <Upload className="w-6 h-6 text-charcoal/30 mb-1" />
+                    <p className="text-xs text-charcoal/50 text-center px-2">Лицо крупно</p>
+                  </div>
+                )}
+                <input ref={portraitRef} type="file" accept="image/*" className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) { setPortraitFile(f); setPortraitPreview(URL.createObjectURL(f)); } }} />
+              </div>
+            </div>
 
-            <button type="button" onClick={(e) => { e.preventDefault(); handleSubmit(); }} disabled={!file || !height || !weight}
-              className="w-full py-3 rounded-full bg-charcoal text-ivory text-sm font-medium disabled:opacity-50">
-              Получить бесплатный анализ
+            <button type="button" onClick={handleSubmit}
+              disabled={!fullBodyFile || !portraitFile || !height || !weight}
+              className="w-full py-3 rounded-full bg-gold text-charcoal text-sm font-semibold disabled:opacity-50 hover:bg-gold/90 transition-colors">
+              Оценить мой стиль бесплатно
             </button>
           </>
         )}
@@ -694,102 +696,33 @@ const TrialModalContent = ({ isOpen, onClose, userName, onUnlock }: {
         {step === 'loading' && (
           <div className="text-center py-12">
             <div className="w-8 h-8 border-2 border-gold border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-charcoal/60">Анализируем ваш стиль...</p>
+            <p className="text-charcoal/60">Стилист анализирует ваш стиль...</p>
           </div>
         )}
 
         {step === 'result' && result && (
           <div className="space-y-4">
-            {/* Анализ стиля */}
+            <p className="font-serif text-gold text-xs tracking-widest uppercase">Результат оценки</p>
+            {/* Оценка по 10 баллам */}
+            {result.score != null && (
+              <div className="flex items-center gap-4 bg-gold/10 rounded-2xl p-4">
+                <div className="text-5xl font-serif text-gold font-bold">{result.score}</div>
+                <div>
+                  <p className="text-xs text-charcoal/50 uppercase tracking-wider">из 10</p>
+                  <p className="text-sm font-medium text-charcoal">{result.scoreLabel || "Оценка стиля"}</p>
+                </div>
+              </div>
+            )}
+            {/* Описание стилиста */}
             <div className="bg-gold/5 rounded-2xl p-4 border-l-2 border-gold">
-              <h3 className="font-serif text-gold text-xs tracking-widest uppercase mb-2">Ваш персональный анализ</h3>
               <p className="text-sm text-charcoal/85 whitespace-pre-wrap leading-relaxed">{result.greetingAndAnalysis || ""}</p>
             </div>
-
-            {/* Рекомендуемые вещи */}
-            <div className="border-t border-charcoal/10 pt-4">
-              <p className="text-xs font-medium text-gold uppercase tracking-wider mb-3 flex items-center gap-2">
-                <span className="w-6 h-6 rounded-full bg-gold/20 flex items-center justify-center text-[10px]">✦</span>
-                Подобранные вещи для вас
-              </p>
-              <div className="space-y-2">
-                {[
-                  { name: "Бежевый тренч из хлопка", price: "от 4 500 ₽", hint: "верхняя одежда", emoji: "🧥" },
-                  { name: "Кожаные лоферы на низком каблуке", price: "от 3 200 ₽", hint: "обувь", emoji: "👞" },
-                  { name: "Шёлковый шарф с принтом", price: "от 1 800 ₽", hint: "аксессуары", emoji: "🧣" },
-                  { name: "Брюки чинос бежевого оттенка", price: "от 2 100 ₽", hint: "низ", emoji: "👖" },
-                  { name: "Сумка-тоут из замши", price: "от 5 900 ₽", hint: "аксессуары", emoji: "👜" },
-                ].map((item, itemIdx) => (
-                  <div key={itemIdx} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-charcoal/5 hover:border-gold/30 transition-colors">
-                    <span className="text-2xl">{item.emoji}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-charcoal font-medium">{item.name}</p>
-                      <p className="text-xs text-charcoal/50">{item.hint}</p>
-                    </div>
-                    <p className="text-xs text-gold font-medium whitespace-nowrap">{item.price}</p>
-                    <div className="flex gap-1 flex-shrink-0">
-                      <button className="px-2 py-1 bg-[#CB11AB] text-white text-[10px] font-medium rounded hover:opacity-80 transition-opacity">
-                        WB
-                      </button>
-                      <button className="px-2 py-1 bg-[#005BFF] text-white text-[10px] font-medium rounded hover:opacity-80 transition-opacity">
-                        Ozon
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                <p className="text-xs text-charcoal/50 text-center">
-                  + ещё 8 вещей в полной версии
-                </p>
-              </div>
-            </div>
-
-            {/* Заблюренное фото с замком */}
-            <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden mb-3">
-              {preview ? (
-                <img src={preview} alt="" className="absolute inset-0 w-full h-full object-cover blur-xl scale-105" />
-              ) : (
-                <div className="absolute inset-0 bg-gradient-to-br from-gray-300 via-gray-200 to-gray-400" />
-              )}
-              <div className="absolute inset-0 bg-black/30" />
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <div className="w-14 h-14 rounded-full bg-white/90 backdrop-blur-md shadow-xl flex items-center justify-center mb-3">
-                  <span className="text-2xl">🔒</span>
-                </div>
-                <p className="text-xs text-white font-medium">Визуализация готова!</p>
-              </div>
-            </div>
-
-            {/* Предложение 99₽ */}
-            <div className="bg-gradient-to-r from-gold/10 via-gold/20 to-gold/10 rounded-xl p-3 mb-3 border border-gold/30">
-              <p className="text-center text-sm text-charcoal font-medium">
-                ✨ Только сейчас — полный пакет за 99 ₽
-              </p>
-              <p className="text-center text-xs text-charcoal/60 mt-1">
-                3 фото-визуализации вас + описания + ссылки
-              </p>
-            </div>
-            <div className="flex flex-col gap-1.5 text-sm text-charcoal/80">
-              <div className="flex items-center gap-2">
-                <span>🎨</span>
-                <span>3 фото-визуализации вас в разных образах</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span>📝</span>
-                <span>3 подробных описания стиля</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span>🛒</span>
-                <span>Все вещи со ссылками на покупку</span>
-              </div>
-            </div>
-
-            {/* Кнопки */}
-            <div className="border-t border-charcoal/10 pt-4 mt-4">
-              <button onClick={onUnlock} className="w-full py-3 rounded-2xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors">
-                Получить 3 образа за 99 ₽
+            <div className="flex gap-2 pt-2">
+              <button onClick={onUnlock} className="flex-1 py-3 rounded-2xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors text-sm">
+                Создать образ
               </button>
-              <button onClick={onClose} className="w-full py-2 text-sm text-charcoal/50 mt-2">
-                Попробовать позже
+              <button onClick={onClose} className="flex-1 py-3 rounded-2xl border border-charcoal/20 text-charcoal/70 text-sm hover:bg-charcoal/5 transition-colors">
+                Закрыть
               </button>
             </div>
           </div>
@@ -919,10 +852,11 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
                   {selectedTier === "standard" && <div className="w-6 h-6 rounded-full bg-gold flex items-center justify-center"><Check className="w-4 h-4 text-charcoal" /></div>}
                 </div>
                 <div className="font-medium text-charcoal mb-3">Стандарт</div>
-                <ul className="text-sm text-charcoal/60 space-y-1">
-                  <li>✓ Анализ внешности</li>
-                  <li>✓ 3 образа от стилиста</li>
-                  <li>✓ Список покупок</li>
+                <ul className="text-sm space-y-1.5">
+                  <li className="font-semibold text-charcoal">✓ 1 фото</li>
+                  <li className="font-semibold text-charcoal">✓ 3 образа от стилиста</li>
+                  <li className="text-charcoal/60">✓ Анализ внешности</li>
+                  <li className="text-charcoal/60">✓ Список покупок</li>
                 </ul>
               </button>
 
@@ -934,11 +868,13 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
                   {selectedTier === "premium" && <div className="w-6 h-6 rounded-full bg-gold flex items-center justify-center"><Check className="w-4 h-4 text-charcoal" /></div>}
                 </div>
                 <div className={`font-medium mb-3 ${selectedTier === "premium" ? "text-ivory" : "text-charcoal"}`}>Премиум</div>
-                <ul className={`text-sm space-y-1 ${selectedTier === "premium" ? "text-ivory/70" : "text-charcoal/60"}`}>
-                  <li>✓ Всё из Стандарт</li>
-                  <li>✓ До 5 образов</li>
-                  <li>✓ Пожелания стилисту</li>
-                  <li>✓ Астро-разбор</li>
+                <ul className={`text-sm space-y-1.5 ${selectedTier === "premium" ? "text-ivory/70" : "text-charcoal/60"}`}>
+                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ До 3 фото</li>
+                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ До 5 образов</li>
+                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ 22 повода (ресторан, свидание...)</li>
+                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ Бюджет + астро-разбор</li>
+                  <li>✓ Анализ внешности</li>
+                  <li>✓ Список покупок</li>
                 </ul>
               </button>
             </div>
@@ -1382,15 +1318,39 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
   const [birthDay, setBirthDay] = useState("");
   const [birthMonth, setBirthMonth] = useState("");
   const [birthYear, setBirthYear] = useState("");
-  const [birthRegion, setBirthRegion] = useState(""); // для гороскопа
-  const [birthCity, setBirthCity] = useState(""); // для гороскопа
-  const [birthTime, setBirthTime] = useState(""); // для гороскопа
+  const [birthRegion, setBirthRegion] = useState("");
+  const [birthCity, setBirthCity] = useState("");
+  const [birthTime, setBirthTime] = useState("");
   const [selectedOccasion, setSelectedOccasion] = useState("");
   const [looksCount, setLooksCount] = useState(3);
+  const [budget, setBudget] = useState("");
   const [loadingState, setLoadingState] = useState<{ step: number; text: string } | null>(null);
+  const [displayPercent, setDisplayPercent] = useState(0);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewText, setReviewText] = useState("");
   const [reviewSent, setReviewSent] = useState(false);
+
+  // Плавная анимация прогресс-бара — ползёт непрерывно, реальный прогресс только ускоряет
+  useEffect(() => {
+    if (!loadingState) { setDisplayPercent(0); return; }
+    // При новом реальном шаге — если он выше текущего displayPercent, быстро догоняем
+    const realPercent = Math.round((loadingState.step / 5) * 100);
+    setDisplayPercent(prev => prev < realPercent ? realPercent : prev);
+  }, [loadingState?.step]);
+
+  useEffect(() => {
+    if (!loadingState) return;
+    // Непрерывно ползём до 95%, скорость замедляется по мере приближения
+    const timer = setInterval(() => {
+      setDisplayPercent(prev => {
+        if (prev >= 95) return prev;
+        // Быстро до 40%, потом медленнее, совсем медленно после 70%
+        const speed = prev < 40 ? 0.8 : prev < 70 ? 0.3 : 0.1;
+        return Math.min(95, prev + speed);
+      });
+    }, 200);
+    return () => clearInterval(timer);
+  }, [!!loadingState]);
 
   const sendReview = async () => {
     if (!reviewText.trim()) return;
@@ -1418,6 +1378,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       setBirthRegion("");
       setBirthCity("");
       setBirthTime("");
+      setBudget("");
       setResult(null);
       setErrorMsg(null);
       setLoadingState(null);
@@ -1512,6 +1473,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       formData.append("looksCount", String(looksCount));
       formData.append("userName", userName);
       formData.append("visitCount", String(incrementVisitCount()));
+      if (budget) formData.append("budget", budget);
       const pastLooks = getPastLooks();
       if (pastLooks.length > 0) formData.append("pastLooks", pastLooks.join(", "));
       if (birthDay && birthMonth && birthYear) {
@@ -1652,21 +1614,21 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                   
                   <h3 className="text-3xl font-serif mb-6 text-center px-4 tracking-wide">Создаем магию...</h3>
                   
-                  <div className="w-72 bg-white/10 rounded-full h-2.5 mb-4 overflow-hidden relative">
+                  <div className="w-full max-w-[288px] bg-white/10 rounded-full h-2.5 mb-4 overflow-hidden relative">
                     <motion.div
                       className="absolute top-0 left-0 h-full bg-gradient-to-r from-gold/50 via-gold to-gold/50"
                       initial={{ width: "0%" }}
-                      animate={{ width: `${(loadingState.step / 5) * 100}%` }}
-                      transition={{ duration: 0.3, ease: "easeOut" }}
+                      animate={{ width: `${displayPercent}%` }}
+                      transition={{ duration: 0.5, ease: "easeOut" }}
                     />
                   </div>
                   <div className="text-gold text-sm font-medium mb-6">
-                    {Math.round((loadingState.step / 5) * 100)}%
+                    {Math.round(displayPercent)}%
                   </div>
 
-                  <div className="w-72 space-y-2 mt-2">
+                  <div className="w-full max-w-[288px] space-y-2 mt-2">
                     {PROGRESS_STAGES.map((stage, i) => {
-                      const activeIndex = getActiveStageIndex(loadingState.step);
+                      const activeIndex = getActiveStageIndex((displayPercent / 100) * 5);
                       const isCompleted = i < activeIndex;
                       const isActive = i === activeIndex;
                       return (
@@ -1699,7 +1661,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
             </AnimatePresence>
 
             <h2 className="text-3xl font-serif text-charcoal mb-2">Создать новый образ</h2>
-            <p className="text-charcoal/60 mb-8">Загрузите до 3-х фото, укажите параметры, и наш ИИ подберет идеальный гардероб.</p>
+            <p className="text-charcoal/60 mb-8">{tier === "standard" ? "Загрузите фото, укажите рост и вес — стилист создаст 3 образа специально для вас." : "Загрузите до 3-х фото, укажите параметры, и наш ИИ подберет идеальный гардероб."}</p>
 
             {errorMsg && (
               <div className="bg-red-50 text-red-600 p-4 rounded-xl mb-6 flex items-start gap-3 border border-red-100">
@@ -1735,7 +1697,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                   </div>
                 </div>
 
-                {/* Occasion buttons — all tiers */}
+                {/* Occasion buttons — premium only */}
+                {tier === "premium" && (
                 <div className="w-full max-w-md mb-6">
                   <label className="block text-sm font-medium text-charcoal/70 mb-2">Повод</label>
                   <div className="flex flex-wrap gap-2">
@@ -1778,30 +1741,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                     ))}
                   </div>
                 </div>
-
-                {/* Wishes — premium only */}
-                {tier === "premium" ? (
-                <div className="w-full max-w-md mb-6">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-sm font-medium text-charcoal/70">
-                      Пожелания стилисту
-                    </label>
-                    <span className="text-[10px] uppercase tracking-widest font-bold text-gold bg-gold/10 px-2 py-0.5 rounded-full">
-                      Premium
-                    </span>
-                  </div>
-                  <textarea
-                    value={wishes}
-                    onChange={(e) => setWishes(e.target.value.slice(0, 500))}
-                    placeholder="Например: «Хочу три ярких образа для отдыха на Бали», «Посоветуй макияж и причёску для свидания», «Нужен капсульный гардероб для бизнес-поездки»…"
-                    rows={3}
-                    className="w-full px-4 py-3 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors resize-none text-sm leading-relaxed"
-                  />
-                  <div className="text-[11px] text-charcoal/40 mt-1 text-right">
-                    {wishes.length}/500
-                  </div>
-                </div>
-                ) : null}
+                )}
 
                 {/* Looks count slider — premium only */}
                 {tier === "premium" && (
@@ -1826,6 +1766,23 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                     </div>
                     <p className="text-[11px] text-charcoal/40 mt-1">От 1 до 5 образов</p>
                   </div>
+                )}
+
+                {/* Budget field — premium only */}
+                {tier === "premium" && (
+                <div className="w-full max-w-md mb-6">
+                  <label className="text-sm font-medium text-charcoal/70 mb-1 block">
+                    Бюджет на образ (₽)
+                  </label>
+                  <input
+                    type="number"
+                    value={budget}
+                    onChange={(e) => setBudget(e.target.value)}
+                    placeholder="Например: 5000"
+                    className="w-full px-4 py-3 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
+                  />
+                  <p className="text-[11px] text-charcoal/40 mt-1">Стилист подберёт вещи в этом ценовом диапазоне</p>
+                </div>
                 )}
 
                 {/* Birth date — premium astro feature */}
@@ -1871,56 +1828,38 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                   </div>
                 )}
 
-                {/* Birth place and time — premium astro feature */}
-                {tier === "premium" && (
-                <div className="w-full max-w-md mb-6">
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="text-sm font-medium text-charcoal/70">
-                        Место и время рождения
-                      </label>
-                      <span className="text-[10px] uppercase tracking-widest font-bold text-gold bg-gold/10 px-2 py-0.5 rounded-full">
-                        Астро
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-charcoal/40 mb-2">
-                      Для точного астрологического разбора укажите город и время рождения
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <input
-                        type="text"
-                        value={birthRegion}
-                        onChange={(e) => setBirthRegion(e.target.value)}
-                        placeholder="Область"
-                        className="w-32 px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
-                      />
-                      <input
-                        type="text"
-                        value={birthCity}
-                        onChange={(e) => setBirthCity(e.target.value)}
-                        placeholder="Город"
-                        className="w-32 px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
-                      />
-                      <input
-                        type="time"
-                        value={birthTime}
-                        onChange={(e) => setBirthTime(e.target.value)}
-                        placeholder="Время"
-                        className="w-28 px-3 py-2 rounded-xl border border-charcoal/20 bg-white focus:outline-none focus:border-gold transition-colors text-sm"
-                      />
-                    </div>
-                  </div>
-                )}
-
                 {previewUrls.length === 0 ? (
-                  <div 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full max-w-md aspect-[3/4] border-2 border-dashed border-charcoal/20 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all group"
-                  >
-                    <div className="w-16 h-16 bg-charcoal/5 rounded-full flex items-center justify-center mb-4 group-hover:bg-gold/20 transition-colors">
-                      <Upload className="w-8 h-8 text-charcoal/50 group-hover:text-gold transition-colors" />
+                  <div className="w-full max-w-md">
+                    <div
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full aspect-[3/4] border-2 border-dashed border-charcoal/20 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-all group"
+                    >
+                      <div className="w-16 h-16 bg-charcoal/5 rounded-full flex items-center justify-center mb-4 group-hover:bg-gold/20 transition-colors">
+                        <Upload className="w-8 h-8 text-charcoal/50 group-hover:text-gold transition-colors" />
+                      </div>
+                      <span className="font-medium text-charcoal">Нажмите, чтобы загрузить фото</span>
+                      <span className="text-sm text-charcoal/50 mt-2">{tier === "standard" ? "1 фото (JPEG, PNG)" : "До 3 фото (JPEG, PNG)"}</span>
                     </div>
-                    <span className="font-medium text-charcoal">Нажмите, чтобы загрузить фото</span>
-                    <span className="text-sm text-charcoal/50 mt-2">До 3 фото (JPEG, PNG)</span>
+                    {tier === "standard" ? (
+                      <div className="mt-3 bg-gold/5 rounded-xl p-3 text-xs text-charcoal/70 space-y-1">
+                        <p className="font-medium text-charcoal mb-1">📸 Как сделать идеальное фото:</p>
+                        <p>✓ Чёткое фото лица анфас — взгляд в камеру</p>
+                        <p>✓ Хорошее освещение, без теней на лице</p>
+                        <p>✓ Нейтральный фон (стена, улица)</p>
+                        <p>✓ Без очков, без фильтров и масок</p>
+                        <p>✓ Волосы убраны от лица</p>
+                        <p className="text-charcoal/50 mt-1">Чем чётче лицо — тем точнее стилист воссоздаст ваш образ</p>
+                      </div>
+                    ) : (
+                      <div className="mt-3 bg-gold/5 rounded-xl p-3 text-xs text-charcoal/70 space-y-1">
+                        <p className="font-medium text-charcoal mb-1">📸 Советы по фото для лучшего результата:</p>
+                        <p>✓ Фото 1: чёткое лицо анфас, хорошее освещение</p>
+                        <p>✓ Фото 2–3: в полный рост или по пояс в нейтральной одежде</p>
+                        <p>✓ Без фильтров, без очков, волосы убраны от лица</p>
+                        <p>✓ Нейтральный фон, дневной свет</p>
+                        <p className="text-charcoal/50 mt-1">Больше фото — точнее образ и лучше сходство</p>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="w-full max-w-md relative rounded-2xl overflow-hidden shadow-lg bg-charcoal/5 p-4">
@@ -1930,8 +1869,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                            <img src={url} alt={`Preview ${idx + 1}`} className="w-full h-full object-cover" />
                         </div>
                       ))}
-                      {previewUrls.length < 3 && (
-                        <div 
+                      {previewUrls.length < (tier === "standard" ? 1 : 3) && (
+                        <div
                           onClick={() => fileInputRef.current?.click()}
                           className="aspect-[3/4] rounded-xl border-2 border-dashed border-charcoal/20 flex items-center justify-center cursor-pointer hover:border-gold hover:bg-gold/5 transition-colors"
                         >
@@ -1942,13 +1881,13 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                   </div>
                 )}
 
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleFileSelect} 
-                  accept="image/*" 
-                  multiple
-                  className="hidden" 
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  accept="image/*"
+                  multiple={tier !== "standard"}
+                  className="hidden"
                 />
 
                 {previewUrls.length > 0 && !loadingState && (
@@ -2240,17 +2179,11 @@ export default function App() {
   const openModal = (tier?: Tier) => {
     const t = tier || "standard";
     setSelectedPricingTier(t);
-    setTimeout(() => setIsPricingOpen(true), 0);
+    setIsPricingOpen(true);
   };
 
   const openTrialModal = () => {
-    if (localStorage.getItem("trial_used")) {
-      // Trial already used - redirect to payment
-      setSelectedPricingTier("standard");
-      setIsPricingOpen(true);
-    } else {
-      setIsTrialOpen(true);
-    }
+    setIsTrialOpen(true);
   };
 
   const handlePaid = (tier: Tier) => {
@@ -2329,7 +2262,7 @@ export default function App() {
       <AnimatePresence>
         {showWelcome && <WelcomeScreen key="welcome" onSubmit={handleNameSubmit} />}
       </AnimatePresence>
-      <PricingModal isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} userName={userName} initialTier={selectedPricingTier} prices={prices} />
+      <PricingModal key={selectedPricingTier} isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} userName={userName} initialTier={selectedPricingTier} prices={prices} />
       {isTrialOpen && <TrialModalContent isOpen={isTrialOpen} onClose={() => setIsTrialOpen(false)} userName={userName} onUnlock={() => setIsTrialPaymentOpen(true)} />}
       <TrialPaymentModal isOpen={isTrialPaymentOpen} onClose={() => setIsTrialPaymentOpen(false)} onPaid={() => {}} />
       <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} />
@@ -2443,21 +2376,45 @@ export default function App() {
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
               <button
-                onClick={() => document.getElementById('lookbook')?.scrollIntoView({ behavior: 'smooth' })}
-                className="border border-ivory/40 text-ivory px-8 py-3 sm:py-4 rounded-full text-base font-medium hover:bg-ivory/10 transition-colors">
-                Смотреть примеры
-              </button>
-              <button
                 onClick={() => openTrialModal()}
                 className="border border-gold/40 text-gold px-8 py-3 sm:py-4 rounded-full text-base font-medium hover:bg-gold/10 transition-colors">
-                Попробовать бесплатно
+                Оцени свой стиль
               </button>
             </div>
           </motion.div>
         </div>
       </section>
 
-      {/* 3. How it works — с Magic Mirror как иллюстрацией */}
+      {/* 3. Lookbook — сразу после hero */}
+      <section id="lookbook" className="py-16 px-6 bg-white">
+        <div className="max-w-7xl mx-auto">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4"
+          >
+            <div>
+              <h2 className="text-4xl md:text-5xl mb-3">Работы нашего стилиста</h2>
+              <p className="text-charcoal/60 text-lg font-light">Примеры генераций нашего ИИ-стилиста.</p>
+            </div>
+          </motion.div>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {[
+              "/gallery/gen1.jpg","/gallery/gen2.jpg","/gallery/gen3.jpg","/gallery/gen4.jpg",
+              "/gallery/gen5.jpg","/gallery/gen6.jpg","/gallery/gen7.jpg","/gallery/gen8.jpg",
+              "/gallery/gen9.jpg","/gallery/gen10.jpg","/gallery/gen11.jpg","/gallery/gen12.jpg",
+            ].map((src, idx) => (
+              <motion.div key={idx} initial={{ opacity: 0, scale: 0.95 }} whileInView={{ opacity: 1, scale: 1 }}
+                viewport={{ once: true }} transition={{ delay: idx * 0.05 }} className="overflow-hidden rounded-2xl aspect-[3/4]">
+                <img src={src} alt={`Образ ${idx + 1}`} loading="lazy" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* 4. How it works */}
       <section id="how-it-works" className="py-24 px-6 bg-white">
         <div className="max-w-7xl mx-auto">
           <motion.div
@@ -2509,54 +2466,6 @@ export default function App() {
               <MagicMirror />
             </div>
           </motion.div>
-        </div>
-      </section>
-
-      {/* 4. Lookbook */}
-      <section id="lookbook" className="py-24 px-6">
-        <div className="max-w-7xl mx-auto">
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6"
-          >
-            <div>
-              <h2 className="text-4xl md:text-5xl mb-4">Lookbook</h2>
-              <p className="text-charcoal/60 text-lg font-light">Примеры генераций нашего ИИ-стилиста.</p>
-            </div>
-            <button className="text-sm font-medium uppercase tracking-widest hover:text-gold transition-colors flex items-center gap-2">
-              Смотреть все <ArrowRight className="w-4 h-4" />
-            </button>
-          </motion.div>
-
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {[
-              "/t_015489e5914d6585.png",
-              "/t_15f40dfe361ae217.png",
-              "/t_4239bc16837f1a02.png",
-              "/t_9e4a37c97f110362.png",
-              "/t_f08a79ad92e58e85.png",
-              "/t_f8e7705adda65034.png",
-              "/gallery/anti/t_30372d9f6488dbd5.jpg",
-              "/gallery/anti/t_47b4d1f606a75351.jpg",
-              "/gallery/anti/t_9567cbaeff8468d8.jpg",
-              "/gallery/anti/t_a4c979ef130afb34.jpg",
-              "/gallery/anti/t_aa9376368e40acea.jpg",
-              "/gallery/anti/t_b2bb3dc93de628e2.jpg",
-            ].map((src, idx) => (
-              <motion.div
-                key={idx}
-                initial={{ opacity: 0, scale: 0.95 }}
-                whileInView={{ opacity: 1, scale: 1 }}
-                viewport={{ once: true }}
-                transition={{ delay: idx * 0.05 }}
-                className="overflow-hidden rounded-2xl aspect-[3/4]"
-              >
-                <img src={src} alt={`Образ ${idx + 1}`} loading="lazy" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
-              </motion.div>
-            ))}
-          </div>
         </div>
       </section>
 
