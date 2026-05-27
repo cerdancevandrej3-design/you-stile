@@ -1408,6 +1408,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
       description: string;
       image: string | null;
       imageError?: string | null;
+      editPrompt?: string;
       items: { name: string; category?: string; description?: string; price: string; url?: string; marketplace?: string; imageUrl?: string | null; productUrl?: string | null; wbUrl?: string | null; ozonUrl?: string | null; ymUrl?: string | null; similarity?: string | null; reason?: string | null }[];
     }[];
   } | null>(null);
@@ -1595,7 +1596,12 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
 
     } catch (error: any) {
       console.error("Full error:", error);
-      setErrorMsg("Произошла ошибка. Зайдите через 10 минут — ваш заказ будет готов.");
+      const msg = error?.message || "";
+      if (msg.includes("No image data") || msg.includes("fetch failed") || msg.includes("Image generation failed")) {
+        setErrorMsg("Сервис генерации изображений временно недоступен. Попробуйте ещё раз через 1-2 минуты.");
+      } else {
+        setErrorMsg("Произошла ошибка. Зайдите через 10 минут — ваш заказ будет готов.");
+      }
     } finally {
       setLoadingState(null);
     }
@@ -1805,29 +1811,6 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                 </div>
                 )}
 
-                {/* Looks count slider — premium only */}
-                {tier === "premium" && (
-                <div className="w-full max-w-md mb-6">
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="text-sm font-medium text-charcoal/70">
-                        Количество образов
-                      </label>
-                      <span className="text-[10px] uppercase tracking-widest font-bold text-gold bg-gold/10 px-2 py-0.5 rounded-full">
-                        Premium
-                      </span>
-                    </div>
-                    {(() => { const total = Object.values(occasionCounts).reduce((a,b)=>a+b,0); return total > 0 ? (
-                      <p className="text-sm text-charcoal/60">Итого образов: <span className="font-semibold text-charcoal">{total}</span> (по поводам)</p>
-                    ) : (
-                      <div className="flex items-center gap-3">
-                        <input type="range" min={1} max={5} value={looksCount} onChange={(e) => setLooksCount(Number(e.target.value))} className="flex-1 accent-gold" />
-                        <span className="text-charcoal font-medium w-6 text-center">{looksCount}</span>
-                      </div>
-                    ); })()}
-                    <p className="text-[11px] text-charcoal/40 mt-1">От 1 до 5 образов</p>
-                  </div>
-                )}
-
                 {/* Budget field — premium only */}
                 {tier === "premium" && (
                 <div className="w-full max-w-md mb-6">
@@ -2011,6 +1994,34 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                               {look.imageError && (
                                   <span className="text-sm font-mono text-red-500/80 mt-4 max-w-full truncate whitespace-normal leading-relaxed">Ошибка API: {look.imageError}</span>
                               )}
+                              <button
+                                type="button"
+                                className="mt-4 px-4 py-2 bg-gold text-charcoal rounded-full text-sm font-medium hover:bg-gold/90 transition-colors"
+                                onClick={async () => {
+                                  if (!files.length || !look.editPrompt) return;
+                                  const fd = new FormData();
+                                  try { const b = await resizeImage(files[0]); fd.append("image", b, files[0].name); } catch { fd.append("image", files[0]); }
+                                  fd.append("editPrompt", look.editPrompt);
+                                  fd.append("wishes", wishes);
+                                  fd.append("lookIdx", String(lookIdx));
+                                  const pid = localStorage.getItem("pending_payment_id") || "";
+                                  if (pid) fd.append("paymentId", pid);
+                                  const btn = document.activeElement as HTMLButtonElement;
+                                  if (btn) btn.textContent = "Генерирую...";
+                                  try {
+                                    const r = await fetch("/api/regenerate-image", { method: "POST", body: fd });
+                                    const d = await r.json();
+                                    if (d.image) {
+                                      setResult(prev => prev ? { ...prev, looks: prev.looks.map((l, i) => i === lookIdx ? { ...l, image: d.image, imageError: null } : l) } : prev);
+                                    } else {
+                                      if (btn) btn.textContent = "Повторить";
+                                      alert("Не удалось. Попробуйте ещё раз.");
+                                    }
+                                  } catch { if (btn) btn.textContent = "Повторить"; }
+                                }}
+                              >
+                                🔄 Повторить генерацию
+                              </button>
                             </div>
                           )}
                         </div>

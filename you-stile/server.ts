@@ -1752,6 +1752,62 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
     }
   });
 
+  // Regenerate a single look image
+  app.post("/api/regenerate-image", upload.single("image"), async (req: Request, res: Response) => {
+    try {
+      const file = req.file as MulterFile | undefined;
+      const editPrompt = (req.body.editPrompt || "").toString().trim();
+      const wishes = (req.body.wishes || "").toString().trim();
+      const paymentId = (req.body.paymentId || "").toString().trim();
+      const lookIdx = parseInt(req.body.lookIdx || "0", 10);
+
+      if (!file || !editPrompt) return res.status(400).json({ error: "Missing image or editPrompt" });
+
+      const mimeType = file.mimetype as "image/jpeg" | "image/png" | "image/webp";
+      const referenceImageBase64 = file.buffer.toString("base64");
+
+      let imageDataUrl: string | null = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          const poseInstruction = wishes.toLowerCase().includes("фотосессия")
+            ? " POSE: Professional fashion editorial pose — body angled 45° to camera, weight shifted to one leg."
+            : " POSE: Natural confident pose — slight body angle to camera, weight on one leg.";
+          const fluxPrompt = `High-end fashion editorial photography. Single person only.${poseInstruction} QUALITY: Maximum resolution, magazine cover quality. ${sanitizeEditPrompt(editPrompt)}`;
+          imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
+          if (imageDataUrl) break;
+        } catch (e: any) {
+          if (attempt < 4) await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+        }
+      }
+
+      if (!imageDataUrl) return res.status(503).json({ error: "Image generation failed after 5 attempts" });
+
+      // Update saved result if paymentId provided
+      if (paymentId) {
+        try {
+          const resultFile = path.join(RESULTS_DIR, paymentId, "result.json");
+          if (fs.existsSync(resultFile)) {
+            const saved = JSON.parse(fs.readFileSync(resultFile, "utf-8"));
+            if (saved.looks && saved.looks[lookIdx]) {
+              const m = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+              if (m) {
+                const ext = m[1].includes("png") ? "png" : "jpg";
+                const imgFile = `look_${lookIdx}.${ext}`;
+                fs.writeFileSync(path.join(RESULTS_DIR, paymentId, imgFile), Buffer.from(m[2], "base64"));
+                saved.looks[lookIdx].image = `/api/result-image/${paymentId}/${imgFile}`;
+                fs.writeFileSync(resultFile, JSON.stringify(saved));
+              }
+            }
+          }
+        } catch (e) { console.error("[Regen save] failed:", e); }
+      }
+
+      res.json({ image: imageDataUrl });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Trial endpoint — бесплатный текстовый анализ без генерации картинок
   app.post("/api/trial", upload.array("photos", 2), async (req: Request, res: Response) => {
     try {
