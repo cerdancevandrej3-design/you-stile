@@ -57,15 +57,16 @@ In dev mode, Vite proxies `/api` → `http://localhost:3000` (note: hardcoded in
 
 ### Production deployment
 
-**CRITICAL:** After `npm run build`, server.ts looks for files in `dist/dist/`, but Vite outputs to `dist/`.
+**VPS:** `186.246.31.126`, path `/var/www/you-stile/you-stile/`, PM2 process `stilist`.
 
-On VPS after build:
+Server reads static files from `dist/` (Vite output). `public/` is copied into `dist/` automatically by Vite on build — gallery images, before/after photos, etc. all live in `public/` locally and end up in `dist/` after build.
+
+**To deploy** (run from `you-stile/`):
 ```bash
-mkdir -p dist/dist && cp -r dist/* dist/dist/
-pm2 restart stilist
+npm run build
+python deploy.py
 ```
 
-Alternatively, fix server.ts to use `dist/` instead of `dist/dist/`:
-```typescript
-const distIndexPath = path.join(__dirname, "dist", "index.html");
-```
+`deploy.py` uploads `server.ts`, syncs entire `dist/` to VPS, restarts PM2 with `--update-env`.
+
+**Do NOT** manually upload only `index.html` + `assets/` — that breaks gallery images and other static files.

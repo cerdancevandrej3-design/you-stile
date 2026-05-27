@@ -1367,13 +1367,35 @@ const TrialModalContent = ({ isOpen, onClose, userName, onUnlock }: {
                     <p className="text-xs text-white font-medium">Визуализация готова!</p>
                   </div>
                 </div>
-                <p className="text-center text-sm text-charcoal/60">Разблокируйте полный результат</p>
+                {/* Уникальное предложение */}
+                <div className="bg-gradient-to-r from-gold/10 via-gold/20 to-gold/10 rounded-xl p-3 mb-3 border border-gold/30">
+                  <p className="text-center text-sm text-charcoal font-medium">
+                    ✨ Только сейчас — полный пакет за 99 ₽
+                  </p>
+                  <p className="text-center text-xs text-charcoal/60 mt-1">
+                    3 фото-визуализации вас + описания + ссылки
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5 text-sm text-charcoal/80">
+                  <div className="flex items-center gap-2">
+                    <span>🎨</span>
+                    <span>3 фото-визуализации вас в разных образах</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span>📝</span>
+                    <span>3 подробных описания стиля</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span>🛒</span>
+                    <span>Ссылки на покупку всех вещей</span>
+                  </div>
+                </div>
               </div>
             ))}
 
             <div className="border-t border-charcoal/10 pt-4 mt-4">
               <button onClick={onUnlock} className="w-full py-3 rounded-2xl bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors">
-                Получить 3 образа со ссылками на покупки за 100 ₽
+                Получить 3 образа за 99 ₽
               </button>
               <button onClick={onClose} className="w-full py-2 text-sm text-charcoal/50 mt-2">
                 Попробовать позже
@@ -1567,6 +1589,24 @@ export default function App() {
         </div>
       </section>
 
+      {/* 2. Наши работы */}
+      <section id="lookbook" className="py-16 px-6 bg-white">
+        <div className="max-w-7xl mx-auto">
+          <motion.div initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="mb-10">
+            <h2 className="text-4xl md:text-5xl mb-3">Наши работы</h2>
+            <p className="text-charcoal/60 text-lg font-light">Примеры образов, созданных нашим ИИ-стилистом.</p>
+          </motion.div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[1,2,3,4,5,6,7,8,9,10,11,12].map((n, idx) => (
+              <motion.div key={n} initial={{ opacity: 0, scale: 0.95 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true }} transition={{ delay: (idx % 4) * 0.1 }}
+                className="relative overflow-hidden rounded-2xl aspect-[3/4]">
+                <img src={`/gallery/gen${n}.jpg`} alt={`Образ ${n}`} loading="lazy" className="w-full h-full object-cover" />
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* 3. How it works — с Magic Mirror как иллюстрацией */}
       <section id="how-it-works" className="py-24 px-6 bg-white">
         <div className="max-w-7xl mx-auto">
@@ -1619,75 +1659,6 @@ export default function App() {
               <MagicMirror />
             </div>
           </motion.div>
-        </div>
-      </section>
-
-      {/* 4. Lookbook */}
-      <section id="lookbook" className="py-24 px-6">
-        <div className="max-w-7xl mx-auto">
-          <motion.div 
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            className="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6"
-          >
-            <div>
-              <h2 className="text-4xl md:text-5xl mb-4">Lookbook</h2>
-              <p className="text-charcoal/60 text-lg font-light">Примеры генераций нашего ИИ-стилиста.</p>
-            </div>
-            <button className="text-sm font-medium uppercase tracking-widest hover:text-gold transition-colors flex items-center gap-2">
-              Смотреть все <ArrowRight className="w-4 h-4" />
-            </button>
-          </motion.div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {[
-              { before: "/look1.jpg", after: "/look1a.png", label: "Мужской Casual" },
-              { before: "/look2.jpg", after: "/look2a.png", label: "Яркий Летний" },
-              { before: "/look3.jpg", after: "/Look3a.jpg", label: "Стильное Преображение" }
-            ].map((item, idx) => {
-              const [tapped, setTapped] = useState(false);
-              return (
-                <motion.div
-                  key={idx}
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  whileInView={{ opacity: 1, scale: 1 }}
-                  viewport={{ once: true }}
-                  transition={{ delay: idx * 0.1 }}
-                  className="relative group overflow-hidden rounded-2xl aspect-[4/5] cursor-pointer"
-                  onClick={() => setTapped(v => !v)}
-                >
-                  {/* Before Image */}
-                  <img
-                    src={item.before}
-                    alt={`${item.label} До`}
-                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${tapped ? "opacity-0" : "group-hover:opacity-0"}`}
-                  />
-
-                  {/* After Image */}
-                  <img
-                    src={item.after}
-                    alt={`${item.label} После`}
-                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${tapped ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-                  />
-
-                  <div className="absolute inset-0 bg-gradient-to-t from-charcoal/90 via-charcoal/20 to-transparent opacity-80 transition-opacity duration-500 group-hover:opacity-90"></div>
-
-                  <div className="absolute bottom-6 left-6 right-6 flex flex-col items-start gap-3">
-                    <span className="px-4 py-2 bg-white/20 backdrop-blur-md rounded-full text-white text-sm font-medium tracking-wide border border-white/10">
-                      {item.label}
-                    </span>
-
-                    {/* Interactive Hint */}
-                    <div className={`flex items-center gap-2 text-xs font-medium uppercase tracking-wider transition-colors duration-300 ${tapped ? "text-gold" : "text-white/70 group-hover:text-gold"}`}>
-                      <Sparkles className={`w-4 h-4 transition-opacity duration-300 ${tapped ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`} />
-                      <span>{tapped ? "Результат работы ИИ" : "Нажмите, чтобы увидеть магию"}</span>
-                    </div>
-                  </div>
-                </motion.div>
-              );
-            })}
-          </div>
         </div>
       </section>
 

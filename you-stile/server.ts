@@ -7,7 +7,6 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import dotenv from "dotenv";
-import QRCode from "qrcode";
 
 const require = createRequire(import.meta.url);
 const YooCheckout = require("yookassa");
@@ -84,7 +83,7 @@ function computeStats(stats: StatsData, period?: string) {
   return { visits, paidStandardSales, paidPremiumSales, standardPrice: stats.standardPrice, premiumPrice: stats.premiumPrice, revenue: paidStandardSales * stats.standardPrice + paidPremiumSales * stats.premiumPrice };
 }
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // Load fashion knowledge base (2026 trends)
 const knowledgeBasePath = path.join(PROJECT_ROOT, "src", "fashion-knowledge-base.txt");
@@ -349,6 +348,30 @@ function safeJsonParse(text: string): any {
   }
 }
 
+// Helper: retry with exponential backoff
+async function callWithRetry<T>(fn: () => Promise<T>, attempts = 3, delayMs = 3000): Promise<T> {
+  for (let i = 0; i < attempts; i++) {
+    try { return await fn(); }
+    catch (e: any) {
+      console.error(`[Retry] Attempt ${i + 1}/${attempts} failed:`, e.message);
+      if (i === attempts - 1) throw e;
+      await new Promise(r => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw new Error("All attempts failed");
+}
+
+// Helper: fetch with timeout
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 90000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callPolzaChat(options: {
   model: string;
   systemPrompt: string;
@@ -376,14 +399,14 @@ async function callPolzaChat(options: {
     requestBody.response_format = { type: "json_object" };
   }
 
-  const response = await fetch(`${POLZA_BASE_URL}/chat/completions`, {
+  const response = await fetchWithTimeout(`${POLZA_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${POLZA_API_KEY}`,
     },
     body: JSON.stringify(requestBody),
-  });
+  }, 120000);
 
   if (!response.ok) {
     const error = await response.text();
@@ -411,14 +434,14 @@ async function generateImageWithFlux(prompt: string, referenceImageBase64?: stri
 
   console.log("[Flux API] Request body:", JSON.stringify({ ...body, input: { ...body.input, prompt: body.input.prompt.substring(0, 200) + "..." } }));
 
-  const response = await fetch(`${POLZA_BASE_URL}/media`, {
+  const response = await fetchWithTimeout(`${POLZA_BASE_URL}/media`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${POLZA_API_KEY}`,
     },
     body: JSON.stringify(body),
-  });
+  }, 120000);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -1209,7 +1232,7 @@ loadList();
       if (err && err.code === "LIMIT_FILE_SIZE") {
         res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
         res.flushHeaders();
-        res.write(JSON.stringify({ type: "error", error: "Фото слишком большое. Максимум 20 МБ." }) + "\n");
+        res.write(JSON.stringify({ type: "error", error: "Фото слишком большое. Максимум 50 МБ." }) + "\n");
         return res.end();
       }
       if (err) return next(err);
@@ -1324,7 +1347,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       if (err && err.code === "LIMIT_FILE_SIZE") {
         res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
         res.flushHeaders();
-        res.write(JSON.stringify({ type: "error", error: "Фото слишком большое. Пожалуйста, уменьшите размер до 20 МБ или сделайте новое фото." }) + "\n");
+        res.write(JSON.stringify({ type: "error", error: "Фото слишком большое. Пожалуйста, уменьшите размер до 50 МБ или сделайте новое фото." }) + "\n");
         return res.end();
       }
       if (err) return next(err);
@@ -1336,14 +1359,29 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
+    // Track client connection — continue processing even if client disconnects
+    let clientConnected = true;
+    req.on('close', () => { clientConnected = false; });
+    const safeWrite = (data: string) => {
+      if (!res.writableEnded) {
+        try { res.write(data); } catch (e) {}
+      }
+    };
+
     let heartbeat: ReturnType<typeof setInterval> | undefined;
 
+    // Variables for emergency save in catch block
+    let greetingAndAnalysis: string | undefined;
+    let bodyTypeSummary: string | undefined;
+    let astroReading: string | null | undefined;
+    let looksWithImages: any[] | undefined;
+
     try {
-      res.write(JSON.stringify({ type: "progress", step: 0.8, text: "Фотографии получены сервером..." }) + "\n");
+      safeWrite(JSON.stringify({ type: "progress", step: 0.8, text: "Фотографии получены сервером..." }) + "\n");
 
       const files = req.files as MulterFile[];
       if (!files || files.length === 0) {
-        res.write(JSON.stringify({ type: "error", error: "No images uploaded" }) + "\n");
+        safeWrite(JSON.stringify({ type: "error", error: "No images uploaded" }) + "\n");
         return res.end();
       }
 
@@ -1401,12 +1439,12 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       }
 
       if (!POLZA_API_KEY) {
-        res.write(JSON.stringify({ type: "error", error: "API ключ не настроен. Добавьте POLZA_API_KEY в .env" }) + "\n");
+        safeWrite(JSON.stringify({ type: "error", error: "API ключ не настроен. Добавьте POLZA_API_KEY в .env" }) + "\n");
         return res.end();
       }
 
       heartbeat = setInterval(() => {
-        res.write(JSON.stringify({ type: "heartbeat" }) + "\n");
+        safeWrite(JSON.stringify({ type: "heartbeat" }) + "\n");
       }, 15000);
 
       // Use the first image as reference
@@ -1432,7 +1470,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       // Step 0 (premium): если есть wishes — сначала ищем свежие тренды через Perplexity Sonar
       let trendsContext = "";
       if (wishes) {
-        res.write(JSON.stringify({ type: "progress", step: 0.9, text: "Ищем свежие модные тренды по твоему запросу..." }) + "\n");
+        safeWrite(JSON.stringify({ type: "progress", step: 0.9, text: "Ищем свежие модные тренды по твоему запросу..." }) + "\n");
         try {
           const trendsResp = await fetch(`${POLZA_BASE_URL}/chat/completions`, {
             method: "POST",
@@ -1461,7 +1499,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       }
 
       // Step 1: Analyze with Gemini 3.1 Flash Lite
-      res.write(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ фото и подбор образов с помощью AI..." }) + "\n");
+      safeWrite(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ фото и подбор образов с помощью AI..." }) + "\n");
 
       // Высокая температура для разнообразия образов при каждой генерации
       const analysisTemp = 0.95;
@@ -1480,13 +1518,13 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       let analysisData: any;
       let analysisText = "";
       try {
-        analysisText = await callPolzaChat({
+        analysisText = await callWithRetry(() => callPolzaChat({
           model: ANALYSIS_MODEL,
           systemPrompt,
           messages,
           temperature: analysisTemp,
           maxTokens: 8192,
-        });
+        }), 3, 4000);
 
         if (typeof analysisText === "string") {
           analysisData = safeJsonParse(analysisText);
@@ -1501,12 +1539,14 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         } else if (msg.includes("API key not valid") || msg.includes("API_KEY_INVALID") || msg.includes("401")) {
           msg = "Введен неверный API ключ. Пожалуйста, проверьте POLZA_API_KEY в настройках.";
         }
-        res.write(JSON.stringify({ type: "error", error: "Ошибка AI: " + msg }) + "\n");
+        safeWrite(JSON.stringify({ type: "error", error: "Ошибка AI: " + msg }) + "\n");
         return res.end();
       }
 
-      let { greetingAndAnalysis, bodyTypeSummary, looks } = analysisData;
-      let astroReading = analysisData?.astroReading;
+      // Assign to outer variables for emergency save in catch
+      let looks: any[];
+      ({ greetingAndAnalysis, bodyTypeSummary, looks } = analysisData as any);
+      astroReading = analysisData?.astroReading;
 
       // Fallback: искать astroReading в raw-тексте между маркерами
       if (!astroReading && analysisText) {
@@ -1522,27 +1562,27 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
 
       if (!looks || !Array.isArray(looks) || looks.length === 0) {
         clearInterval(heartbeat);
-        res.write(JSON.stringify({ type: "error", error: "AI не смог сгенерировать образы. Попробуйте еще раз." }) + "\n");
+        safeWrite(JSON.stringify({ type: "error", error: "AI не смог сгенерировать образы. Попробуйте еще раз." }) + "\n");
         return res.end();
       }
 
-      res.write(JSON.stringify({ type: "progress", step: 1.5, text: "Анализ и подбор гардероба завершен. Переходим к визуализации..." }) + "\n");
+      safeWrite(JSON.stringify({ type: "progress", step: 1.5, text: "Анализ и подбор гардероба завершен. Переходим к визуализации..." }) + "\n");
 
       // Step 2: Generate images with Nano Banana 2 — IN PARALLEL
-      res.write(JSON.stringify({ type: "progress", step: 2.0, text: `Визуализация ${looks.length} образов параллельно...` }) + "\n");
+      safeWrite(JSON.stringify({ type: "progress", step: 2.0, text: `Визуализация ${looks.length} образов параллельно...` }) + "\n");
 
       // Track completed images for progress updates
       let completedImages = 0;
       const totalImages = looks.length;
 
-      const looksWithImages = await Promise.all(looks.map(async (look: any, idx: number) => {
+      looksWithImages = await Promise.all(looks.map(async (look: any, idx: number) => {
         let generatedImageBase64 = null;
         let imageGenerationError = null;
 
         if (look.editPrompt) {
           let imageDataUrl: string | null = null;
           let lastError = "";
-          for (let attempt = 0; attempt < 2; attempt++) {
+          for (let attempt = 0; attempt < 3; attempt++) {
             try {
               const occasionAtmosphere = getOccasionAtmosphere(wishes, idx);
               const poseInstruction = wishes.toLowerCase().includes("фотосессия")
@@ -1555,7 +1595,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
               lastError = "No image data returned from Flux model.";
             } catch (e: any) {
               lastError = e.message;
-              if (attempt === 0) await new Promise(r => setTimeout(r, 2000));
+              if (attempt < 2) await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
             }
           }
           if (imageDataUrl) {
@@ -1575,7 +1615,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         // Progress update after each image completes
         completedImages++;
         const progressStep = 2.0 + (completedImages / totalImages) * 1.5;
-        res.write(JSON.stringify({
+        safeWrite(JSON.stringify({
           type: "progress",
           step: progressStep,
           text: `Сгенерировано ${completedImages}/${totalImages} образов...`
@@ -1585,7 +1625,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       }));
 
       // Step 3: Send intermediate result with images so user sees greeting + looks immediately
-      res.write(JSON.stringify({
+      safeWrite(JSON.stringify({
         type: "partial_result",
         greetingAndAnalysis,
         bodyTypeSummary,
@@ -1593,9 +1633,35 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         looks: looksWithImages,
       }) + "\n");
 
+      // Save partial result immediately after image generation — survives if shopping URLs fail
+      const paymentId = (req.body.paymentId || "").toString().trim();
+      if (paymentId) {
+        try {
+          const resultDir = path.join(RESULTS_DIR, paymentId);
+          fs.mkdirSync(resultDir, { recursive: true });
+          const looksForPartial = looksWithImages.map((look: any, idx: number) => {
+            let imageRef = look.image;
+            if (look.image && look.image.startsWith("data:")) {
+              const m = look.image.match(/^data:([^;]+);base64,(.+)$/);
+              if (m) {
+                const ext = m[1].includes("png") ? "png" : "jpg";
+                const imgFile = `look_${idx}.${ext}`;
+                fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(m[2], "base64"));
+                imageRef = `/api/result-image/${paymentId}/${imgFile}`;
+              }
+            }
+            return { ...look, image: imageRef };
+          });
+          fs.writeFileSync(
+            path.join(resultDir, "result.json"),
+            JSON.stringify({ greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null, looks: looksForPartial, savedAt: new Date().toISOString() })
+          );
+        } catch (e) { console.error("[Partial save] failed:", e); }
+      }
+
       // Step 4: Build Google Shopping search URLs — универсальный поиск,
       // не привязан к одному магазину, выдаёт товары из десятков площадок РФ
-      res.write(JSON.stringify({ type: "progress", step: 4.0, text: "Формируем поисковые ссылки..." }) + "\n");
+      safeWrite(JSON.stringify({ type: "progress", step: 4.0, text: "Формируем поисковые ссылки..." }) + "\n");
 
       const looksWithImagesAndUrls = looksWithImages.map((look: any) => {
         const enrichedItems = (look.items || []).map((item: any) => {
@@ -1610,21 +1676,11 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         return { ...look, items: enrichedItems };
       });
 
-      res.write(JSON.stringify({
-        type: "result",
-        greetingAndAnalysis,
-        bodyTypeSummary,
-        astroReading: astroReading || null,
-        looks: looksWithImagesAndUrls,
-      }) + "\n");
-
-      // Persist result so it can be recovered if connection dropped
-      const paymentId = (req.body.paymentId || "").toString().trim();
+      // Persist result BEFORE sending to client — update with shopping URLs
       if (paymentId) {
         try {
           const resultDir = path.join(RESULTS_DIR, paymentId);
           fs.mkdirSync(resultDir, { recursive: true });
-          // Save images as separate files, store only paths in JSON
           const looksForStorage = looksWithImagesAndUrls.map((look: any, idx: number) => {
             let imageRef = look.image;
             if (look.image && look.image.startsWith("data:")) {
@@ -1645,14 +1701,54 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         } catch (e) { console.error("[Result] Save failed:", e); }
       }
 
+      safeWrite(JSON.stringify({
+        type: "result",
+        greetingAndAnalysis,
+        bodyTypeSummary,
+        astroReading: astroReading || null,
+        looks: looksWithImagesAndUrls,
+      }) + "\n");
+
       clearInterval(heartbeat);
-      res.end();
+      if (!res.writableEnded) res.end();
 
     } catch (error) {
       clearInterval(heartbeat);
       console.error("Error processing image in /api/stylize:", error);
-      res.write(JSON.stringify({ type: "error", error: (error as Error).message }) + "\n");
-      res.end();
+
+      // Emergency save: persist whatever was generated before the error
+      const paymentIdEmergency = (req.body?.paymentId || "").toString().trim();
+      if (paymentIdEmergency && greetingAndAnalysis && looksWithImages && looksWithImages.length > 0) {
+        try {
+          const resultDir = path.join(RESULTS_DIR, paymentIdEmergency);
+          fs.mkdirSync(resultDir, { recursive: true });
+          // Check if result.json already exists (saved by partial save)
+          const resultFile = path.join(resultDir, "result.json");
+          if (!fs.existsSync(resultFile)) {
+            const emergencyLooks = looksWithImages.map((look: any, idx: number) => {
+              let imageRef = look.image;
+              if (look.image && look.image.startsWith("data:")) {
+                const m = look.image.match(/^data:([^;]+);base64,(.+)$/);
+                if (m) {
+                  const ext = m[1].includes("png") ? "png" : "jpg";
+                  const imgFile = `look_${idx}.${ext}`;
+                  fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(m[2], "base64"));
+                  imageRef = `/api/result-image/${paymentIdEmergency}/${imgFile}`;
+                }
+              }
+              return { ...look, image: imageRef };
+            });
+            fs.writeFileSync(resultFile, JSON.stringify({
+              greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null,
+              looks: emergencyLooks, savedAt: new Date().toISOString()
+            }));
+            console.log("[Emergency save] Saved partial result for", paymentIdEmergency);
+          }
+        } catch (saveErr) { console.error("[Emergency save] failed:", saveErr); }
+      }
+
+      safeWrite(JSON.stringify({ type: "error", error: (error as Error).message }) + "\n");
+      if (!res.writableEnded) res.end();
     }
   });
 

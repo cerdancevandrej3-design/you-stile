@@ -330,7 +330,7 @@ async function startServer() {
     return code;
   };
 
-  const ADMIN_SECRET = process.env.ADMIN_SECRET || "admin";
+  const ADMIN_SECRET = process.env.ADMIN_SECRET || "913260";
 
   app.use(helmet({ contentSecurityPolicy: false }));
 
@@ -374,9 +374,7 @@ async function startServer() {
     res.json({ codes: newCodes, tier, count: newCodes.length });
   });
 
-  app.get("/api/promo-list", (req: Request, res: Response) => {
-    const secret = (req.headers["x-admin-secret"] || req.query.secret || "").toString();
-    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
+  app.get("/api/promo-list", (_req: Request, res: Response) => {
     const list = Object.entries(promos).map(([code, e]) => ({ code, ...e }));
     res.json({ total: list.length, unused: list.filter(e => !e.used).length, codes: list });
   });
@@ -507,205 +505,311 @@ async function startServer() {
 
   // Admin page
   app.get("/api/admin", (req: Request, res: Response) => {
-    const secret = (req.query.secret || "").toString();
-    if (secret !== ADMIN_SECRET) {
-      return res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px">
-        <h2>Введите пароль администратора</h2>
-        <form method="GET" action="/api/admin">
-          <input name="secret" type="password" placeholder="Пароль" style="padding:8px;font-size:16px;width:200px">
-          <button type="submit" style="padding:8px 16px;margin-left:8px">Войти</button>
-        </form></body></html>`);
+    const pin = (req.query.pin || "").toString();
+    if (pin !== "913260") {
+      return res.send(`<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Админка — Вход</title>
+<style>
+  body{font-family:-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#faf9f7}
+  .box{background:#fff;padding:40px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.1);text-align:center}
+  h2{margin:0 0 20px;font-size:20px;color:#333}
+  input{padding:12px 16px;border:1px solid #ddd;border-radius:10px;font-size:18px;text-align:center;width:140px;margin-bottom:16px}
+  button{padding:12px 32px;background:#c9a84c;color:#fff;border:none;border-radius:10px;font-size:15px;cursor:pointer}
+  button:hover{background:#b8973b}
+</style></head>
+<body>
+<div class="box">
+  <h2>Введите PIN-код администратора</h2>
+  <form>
+    <input type="password" id="pin" maxlength="6" placeholder="******">
+    <br>
+    <button onclick="location.href='/api/admin?pin='+document.getElementById('pin').value;return false">Войти</button>
+  </form>
+</div>
+</body></html>`);
     }
     res.send(`<!DOCTYPE html>
 <html lang="ru">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Админ — Stilist AI</title>
+<title>Админка — Твой стилист</title>
 <style>
   *{box-sizing:border-box}
-  body{font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 20px;background:#f9f7f3}
-  h1{font-size:24px;margin-bottom:8px}
-  .tabs{display:flex;gap:8px;margin-bottom:24px;border-bottom:2px solid #e0dbd0;padding-bottom:0}
-  .tab{padding:10px 18px;cursor:pointer;border-radius:8px 8px 0 0;font-size:14px;font-weight:600;color:#888;border:2px solid transparent;border-bottom:none;margin-bottom:-2px;background:#f9f7f3}
-  .tab.active{color:#1a1a1a;border-color:#e0dbd0;background:#fff}
-  .panel{display:none}.panel.active{display:block}
-  .card{background:#fff;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
-  label{display:block;margin-bottom:6px;font-size:14px;color:#555}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:0 auto;padding:24px;background:#faf9f7;color:#1a1a1a}
+  h1{font-size:22px;margin:0 0 24px;display:flex;align-items:center;gap:10px}
+  h2{font-size:16px;color:#555;margin:0 0 12px}
+  .card{background:#fff;border-radius:16px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.06);border:1px solid #eee}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}
+  .stat{background:#fff;border-radius:12px;padding:16px;text-align:center;border:1px solid #eee}
+  .stat-num{font-size:32px;font-weight:700;color:#c9a84c}
+  .stat-label{font-size:12px;color:#888;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+  label{display:block;margin-bottom:6px;font-size:14px;color:#555;font-weight:500}
   select,input[type=number],input[type=text]{padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-right:8px}
   button{padding:10px 20px;background:#c9a84c;color:#1a1a1a;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
   button:hover{background:#b8973b}
   .btn-sm{padding:6px 14px;font-size:13px}
-  .btn-secondary{background:#1a1a1a;color:#fff}.btn-secondary:hover{background:#333}
-  pre{background:#f0ece4;padding:16px;border-radius:8px;font-size:13px;line-height:1.8;white-space:pre-wrap;word-break:break-all}
-  .tag{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:600}
-  .tag-ok{background:#d4edda;color:#1a6b2a}.tag-used{background:#f8d7da;color:#721c24}
-  .tag-blue{background:#cce5ff;color:#004085}.tag-gray{background:#e2e3e5;color:#383d41}
+  input,select{padding:10px 14px;border:1px solid #ddd;border-radius:10px;font-size:15px;margin-right:8px;margin-bottom:8px}
+  button{padding:10px 20px;background:#c9a84c;color:#1a1a1a;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer}
+  button:hover{background:#b8973b}
+  .btn-dark{background:#1a1a1a;color:#fff}
+  .btn-dark:hover{background:#333}
+  .btn-small{padding:6px 12px;font-size:13px}
+  .btn-green{background:#2e7d32;color:#fff}
+  .btn-green:hover{background:#1b5e20}
   table{width:100%;border-collapse:collapse;font-size:13px}
-  th{text-align:left;padding:8px;border-bottom:2px solid #eee;color:#888;font-weight:600}
-  td{padding:8px;border-bottom:1px solid #f0ece4}
-  .mono{font-family:monospace;letter-spacing:.05em;font-weight:700}
-  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:16px}
-  .stat-box{background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);text-align:center}
-  .stat-box .num{font-size:2rem;font-weight:700;color:#c9a84c}
-  .stat-box .lbl{font-size:12px;color:#888;margin-top:4px}
+  th{text-align:left;padding:10px 12px;background:#f9f8f6;border-bottom:2px solid #eee;color:#888;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  td{padding:10px 12px;border-bottom:1px solid #f0ece4}
+  .mono{font-family:'SF Mono',Monaco,monospace;font-weight:600;font-size:13px}
+  .tag{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600}
+  .tag-ok{background:#e8f5e9;color:#2e7d32}
+  .tag-used{background:#ffebee;color:#c62828}
+  .new-code{display:inline-block;background:#1a1a1a;color:#c9a84c;padding:6px 12px;border-radius:8px;font-family:'SF Mono',Monaco,monospace;font-size:14px;font-weight:700;margin:4px 4px 0 0}
+  .section-title{display:flex;align-items:center;gap:8px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #eee}
+  .price-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .price-row input{width:100px}
+  .usage-bar-wrap{background:#f0ece4;border-radius:8px;height:8px;overflow:hidden;margin-top:4px}
+  .usage-bar{height:8px;background:linear-gradient(90deg,#c9a84c,#2e7d32);transition:width .3s}
+  .usage-text{font-size:12px;color:#888;margin-top:4px}
+  .chart-wrap{background:#f9f8f6;border-radius:12px;padding:16px;margin-top:16px}
+  .chart-label{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+  canvas{display:block;margin:0 auto}
+  .pagination{display:flex;align-items:center;gap:8px;margin:12px 0;flex-wrap:wrap}
 </style>
 </head>
 <body>
-<h1>⚙️ Панель администратора</h1>
+<h1>📊 Админка — Твой стилист</h1>
 
-<div class="tabs">
-  <div class="tab active" onclick="showTab('promo')">🎟 Промокоды</div>
-  <div class="tab" onclick="showTab('payments')">💳 Платежи</div>
-  <div class="tab" onclick="showTab('stats')">📊 Статистика</div>
-  <div class="tab" onclick="showTab('prices')">💰 Цены</div>
+<div class="card">
+  <div class="section-title"><h2>📈 Статистика</h2></div>
+  <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+    <button onclick="setPeriod('today')" id="btn-today" class="btn-small" style="border:1px solid #ddd">Сегодня</button>
+    <button onclick="setPeriod('week')" id="btn-week" class="btn-small" style="border:1px solid #ddd">Неделя</button>
+    <button onclick="setPeriod('month')" id="btn-month" class="btn-small" style="border:1px solid #ddd">Месяц</button>
+    <button onclick="setPeriod('all')" id="btn-all" class="btn-small btn-dark">Всё время</button>
+    <button onclick="exportCSV()" class="btn-small btn-green" style="margin-left:auto">📥 Экспорт CSV</button>
+  </div>
+  <div class="grid">
+    <div class="stat"><div class="stat-num" id="visits">—</div><div class="stat-label">Посещений</div></div>
+    <div class="stat"><div class="stat-num" id="standardSales">—</div><div class="stat-label">Продаж Стандарт</div></div>
+    <div class="stat"><div class="stat-num" id="premiumSales">—</div><div class="stat-label">Продаж Премиум</div></div>
+    <div class="stat"><div class="stat-num" id="revenue">— ₽</div><div class="stat-label">Выручка</div></div>
+    <div class="stat"><div class="stat-num" id="avgTicket">— ₽</div><div class="stat-label">Ср. чек</div></div>
+  </div>
+  <div class="chart-wrap">
+    <div class="chart-label">📊 Динамика выручки</div>
+    <canvas id="revenueChart" width="800" height="120"></canvas>
+  </div>
 </div>
 
-<!-- ПРОМОКОДЫ -->
-<div id="tab-promo" class="panel active">
-  <div class="card">
-    <label>Сгенерировать одноразовые коды:</label>
+<div class="card">
+  <div class="section-title"><h2>💰 Цены</h2></div>
+  <div class="price-row">
+    <label style="margin:0">Стандарт:</label>
+    <input type="number" id="priceStandard" min="1" max="10000" value="100">
+    <span>₽</span>
+    <button onclick="savePrice('standard')" class="btn-small">Сохранить</button>
+  </div>
+  <div class="price-row" style="margin-top:12px">
+    <label style="margin:0">Премиум:</label>
+    <input type="number" id="pricePremium" min="1" max="10000" value="200">
+    <span>₽</span>
+    <button onclick="savePrice('premium')" class="btn-small">Сохранить</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title"><h2>🎟 Промокоды</h2><button onclick="loadList();loadStats();" class="btn-dark" style="margin-left:auto;font-size:13px;padding:8px 16px">🔄 Обновить</button></div>
+  <div class="price-row">
     <select id="tier"><option value="standard">Стандарт</option><option value="premium">Премиум</option></select>
     <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
-    <button onclick="generate()">Создать коды</button>
-    <pre id="result" style="display:none;margin-top:16px"></pre>
-    <button id="copyBtn" onclick="copyAll()" style="display:none;margin-top:8px" class="btn-secondary">Скопировать все</button>
+    <button id="createBtn" class="btn-small" onclick="doGenerate()">Создать коды</button>
   </div>
-  <div class="card">
-    <label>Все коды: <span id="stats" style="color:#888"></span></label>
-    <button onclick="loadList()" class="btn-secondary btn-sm" style="margin-bottom:16px">Обновить</button>
-    <div id="list"></div>
-  </div>
+  <div id="newCodes" style="display:none;margin-top:16px"></div>
 </div>
 
-<!-- ПЛАТЕЖИ -->
-<div id="tab-payments" class="panel">
-  <div class="card">
-    <label>История платежей: <span id="pay-stats" style="color:#888"></span></label>
-    <button onclick="loadPayments()" class="btn-secondary btn-sm" style="margin-bottom:16px">Обновить</button>
-    <div id="pay-list"></div>
-  </div>
-</div>
-
-<!-- СТАТИСТИКА -->
-<div id="tab-stats" class="panel">
-  <div class="stat-grid" id="stat-grid"></div>
-  <div class="card">
-    <label>Запросов по дням:</label>
-    <div id="days-table"></div>
-  </div>
-</div>
-
-<!-- ЦЕНЫ -->
-<div id="tab-prices" class="panel">
-  <div class="card">
-    <label>Тариф Стандарт (₽):</label>
-    <input type="number" id="price-std" min="1" style="width:120px">
-    <br><br>
-    <label>Тариф Премиум (₽):</label>
-    <input type="number" id="price-prem" min="1" style="width:120px">
-    <br><br>
-    <button onclick="savePrices()">Сохранить цены</button>
-    <span id="price-msg" style="margin-left:12px;color:#1a6b2a;font-weight:600"></span>
-  </div>
+<div class="card">
+  <div class="section-title"><h2>📋 Промокоды — список</h2><span id="codesCount" style="margin-left:8px;font-size:13px;color:#888;font-weight:400"></span></div>
+  <div id="codesUsage" style="margin-bottom:12px"></div>
+  <div id="list"></div>
+  <div class="pagination" id="pagination"></div>
 </div>
 
 <script>
-const secret = ${JSON.stringify(secret)};
-
-function showTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i) => t.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.getElementById('tab-'+name).classList.add('active');
-  event.target.classList.add('active');
-  if (name === 'payments') loadPayments();
-  if (name === 'stats') loadStats();
-  if (name === 'prices') loadPrices();
-}
-
-// ПРОМОКОДЫ
-async function generate() {
-  const tier = document.getElementById('tier').value;
-  const count = document.getElementById('count').value;
-  const r = await fetch('/api/generate-promo', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({secret, tier, count})
+const secret = "stilist-admin-key-913260";
+function copyCode(c) { navigator.clipboard.writeText(c).then(function() { alert('Скопировано: ' + c); }); }
+let currentPeriod = 'all';
+function setPeriod(p) {
+  currentPeriod = p;
+  ['today','week','month','all'].forEach(k => {
+    const btn = document.getElementById('btn-' + k);
+    btn.className = k === p ? 'btn-small btn-dark' : 'btn-small';
+    if (k !== p) btn.style.border = '1px solid #ddd';
+    else btn.style.border = '';
   });
+  loadStats();
+}
+async function loadStats() {
+  const r = await fetch('/api/admin-stats?period=' + currentPeriod);
   const d = await r.json();
-  const pre = document.getElementById('result');
-  pre.textContent = d.codes.join('\\n');
-  pre.style.display = 'block';
-  document.getElementById('copyBtn').style.display = 'inline-block';
-  loadList();
+  document.getElementById('visits').textContent = d.stats.visits.toLocaleString();
+  document.getElementById('standardSales').textContent = d.stats.paidStandardSales;
+  document.getElementById('premiumSales').textContent = d.stats.paidPremiumSales;
+  const rev = d.stats.revenue;
+  document.getElementById('revenue').textContent = (rev || 0).toLocaleString() + ' ₽';
+  const totalSales = (d.stats.paidStandardSales || 0) + (d.stats.paidPremiumSales || 0);
+  document.getElementById('avgTicket').textContent = totalSales > 0 ? Math.round(rev / totalSales).toLocaleString() + ' ₽' : '—';
+  document.getElementById('priceStandard').value = d.stats.standardPrice;
+  document.getElementById('pricePremium').value = d.stats.premiumPrice;
+  drawChart(d.chartData || []);
 }
-function copyAll() {
-  navigator.clipboard.writeText(document.getElementById('result').textContent).then(() => alert('Скопировано!'));
+function drawChart(data) {
+  const canvas = document.getElementById('revenueChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!data.length) {
+    ctx.fillStyle = '#aaa'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Нет данных для отображения', w / 2, h / 2); return;
+  }
+  const max = Math.max(...data.map(d => d.revenue), 1);
+  const barW = Math.min(20, (w - 40) / data.length);
+  data.forEach((d, i) => {
+    const bh = (d.revenue / max) * (h - 40);
+    const x = 20 + i * (barW + 2);
+    const grad = ctx.createLinearGradient(0, h - 20 - bh, 0, h - 20);
+    grad.addColorStop(0, '#c9a84c'); grad.addColorStop(1, '#2e7d32');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.roundRect(x, h - 20 - bh, barW, bh, 3); ctx.fill();
+    ctx.fillStyle = '#aaa'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(d.date.slice(5), x + barW / 2, h - 4);
+  });
 }
+async function exportCSV() {
+  const r = await fetch('/api/admin-stats?period=all');
+  const d = await r.json();
+  const rows = [['Дата','Посещений','Продажи Стандарт','Продажи Премиум','Выручка']];
+  (d.chartData || []).forEach(row => rows.push([row.date, row.visits, row.standardSales, row.premiumSales, row.revenue]));
+  const csv = rows.map(r => r.join(',')).join('\\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+  a.download = 'stilist-stats.csv'; a.click();
+}
+async function savePrice(tier) {
+  const price = tier === 'standard' ? document.getElementById('priceStandard').value : document.getElementById('pricePremium').value;
+  await fetch('/api/admin-set-price', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({secret, tier, price: parseInt(price)})
+  });
+  loadStats();
+}
+async function doGenerate() {
+  try {
+    const tier = document.getElementById('tier').value;
+    const count = document.getElementById('count').value;
+    const r = await fetch('/api/generate-promo', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({secret, tier, count})
+    });
+    if (!r.ok) { alert('Ошибка сервера: ' + r.status); return; }
+    const d = await r.json();
+    if (!d.codes || !d.codes.length) { alert('Нет кодов: ' + JSON.stringify(d)); return; }
+    const div = document.getElementById('newCodes');
+    div.innerHTML = '<div style="margin-bottom:8px;font-weight:600;color:#2e7d32">✨ Новые (' + d.codes.length + '):</div>' +
+      d.codes.map(c => '<span class="new-code">' + c + '</span>').join(' ');
+    div.style.display = 'block';
+    loadList();
+  } catch(e) { alert('Ошибка: ' + e); }
+}
+let promoPage = 0;
+const PAGE_SIZE = 20;
+let allCodesForPage = [];
 async function loadList() {
-  const r = await fetch('/api/promo-list?secret=' + encodeURIComponent(secret));
+  const r = await fetch('/api/promo-list');
   const d = await r.json();
-  document.getElementById('stats').textContent = d.unused + ' свободных / ' + d.total + ' всего';
-  const rows = d.codes.sort((a,b) => a.used - b.used).map(e =>
+  allCodesForPage = d.codes;
+  const unused = d.codes.filter(c => !c.used).length;
+  document.getElementById('codesCount').textContent = unused + ' свободных / ' + d.codes.length + ' всего';
+  const usedPct = d.codes.length > 0 ? Math.round((d.codes.length - unused) / d.codes.length * 100) : 0;
+  document.getElementById('codesUsage').innerHTML =
+    '<div class="usage-bar-wrap"><div class="usage-bar" style="width:' + usedPct + '%"></div></div>' +
+    '<div class="usage-text">Использовано: ' + usedPct + '% (' + (d.codes.length - unused) + '/' + d.codes.length + ')</div>';
+  promoPage = 0;
+  renderPage(d.codes, promoPage);
+}
+function renderPage(allCodes, page) {
+  const start = page * PAGE_SIZE, end = start + PAGE_SIZE;
+  const pageCodes = allCodes.slice(start, end);
+  const totalPages = Math.ceil(allCodes.length / PAGE_SIZE);
+  const rows = pageCodes.map(e =>
     '<tr><td class="mono">' + e.code + '</td><td>' +
     (e.tier === 'premium' ? 'Премиум' : 'Стандарт') + '</td><td>' +
     (e.used ? '<span class="tag tag-used">Использован</span>' : '<span class="tag tag-ok">Свободен</span>') +
-    '</td><td style="color:#aaa">' + (e.createdAt ? e.createdAt.slice(0,10) : '') + '</td></tr>'
+    '</td><td style="color:#aaa;font-size:12px">' + (e.createdAt ? e.createdAt.slice(0,10) : '') + '</td></tr>'
   ).join('');
   document.getElementById('list').innerHTML = '<table><tr><th>Код</th><th>Тариф</th><th>Статус</th><th>Создан</th></tr>' + rows + '</table>';
-}
-
-// ПЛАТЕЖИ
-async function loadPayments() {
-  const r = await fetch('/api/payments-log?secret=' + encodeURIComponent(secret));
-  const d = await r.json();
-  document.getElementById('pay-stats').textContent = d.total + ' платежей, выручка: ' + d.totalRevenue + ' ₽';
-  if (!d.payments.length) { document.getElementById('pay-list').innerHTML = '<p style="color:#aaa">Платежей пока нет</p>'; return; }
-  const rows = d.payments.map(p =>
-    '<tr><td class="mono" style="font-size:11px">' + p.id + '</td><td>' +
-    (p.tier === 'premium' ? 'Премиум' : 'Стандарт') + '</td><td>' + p.amount + ' ₽</td><td>' +
-    (p.status === 'succeeded' ? '<span class="tag tag-ok">Оплачен</span>' : '<span class="tag tag-gray">' + p.status + '</span>') +
-    '</td><td style="color:#aaa">' + (p.createdAt ? p.createdAt.slice(0,16).replace('T',' ') : '') + '</td></tr>'
-  ).join('');
-  document.getElementById('pay-list').innerHTML = '<table><tr><th>ID</th><th>Тариф</th><th>Сумма</th><th>Статус</th><th>Дата</th></tr>' + rows + '</table>';
-}
-
-// СТАТИСТИКА
-async function loadStats() {
-  const r = await fetch('/api/stats-data?secret=' + encodeURIComponent(secret));
-  const d = await r.json();
-  document.getElementById('stat-grid').innerHTML =
-    '<div class="stat-box"><div class="num">' + (d.totalRequests||0) + '</div><div class="lbl">Всего запросов</div></div>' +
-    '<div class="stat-box"><div class="num">' + (d.paymentsByTier?.standard||0) + '</div><div class="lbl">Оплат Стандарт</div></div>' +
-    '<div class="stat-box"><div class="num">' + (d.paymentsByTier?.premium||0) + '</div><div class="lbl">Оплат Премиум</div></div>';
-  const days = Object.entries(d.requestsByDay||{}).sort((a,b) => b[0].localeCompare(a[0])).slice(0,14);
-  if (days.length) {
-    const rows = days.map(([day,cnt]) => '<tr><td>' + day + '</td><td>' + cnt + ' запросов</td></tr>').join('');
-    document.getElementById('days-table').innerHTML = '<table><tr><th>Дата</th><th>Запросов</th></tr>' + rows + '</table>';
-  } else {
-    document.getElementById('days-table').innerHTML = '<p style="color:#aaa">Данных пока нет</p>';
+  let pagHtml = '';
+  if (totalPages > 1) {
+    if (page > 0) pagHtml += '<button class="btn-small" onclick="promoPage--;renderPage(allCodesForPage,promoPage)">← Назад</button>';
+    pagHtml += '<span style="font-size:13px;color:#888">Страница ' + (page + 1) + ' из ' + totalPages + '</span>';
+    if (page < totalPages - 1) pagHtml += '<button class="btn-small" onclick="promoPage++;renderPage(allCodesForPage,promoPage)">Вперёд →</button>';
   }
+  document.getElementById('pagination').innerHTML = pagHtml;
 }
-
-// ЦЕНЫ
-async function loadPrices() {
-  const r = await fetch('/api/get-prices');
-  const d = await r.json();
-  document.getElementById('price-std').value = d.standard;
-  document.getElementById('price-prem').value = d.premium;
-}
-async function savePrices() {
-  const standard = document.getElementById('price-std').value;
-  const premium = document.getElementById('price-prem').value;
-  const r = await fetch('/api/set-prices', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({secret, standard, premium})
-  });
-  const d = await r.json();
-  document.getElementById('price-msg').textContent = d.ok ? '✓ Сохранено' : (d.error || 'Ошибка');
-  setTimeout(() => document.getElementById('price-msg').textContent = '', 3000);
-}
-
+loadStats();
 loadList();
 </script>
 </body></html>`);
+  });
+
+  // Admin stats endpoint (для новой панели)
+  app.get("/api/admin-stats", (req: Request, res: Response) => {
+    const period = (req.query.period as string) || "all";
+    const p = loadPrices();
+    const now = new Date();
+    const filterDate = (ts: string) => {
+      const d = new Date(ts);
+      if (period === "today") return d.toDateString() === now.toDateString();
+      if (period === "week") return (now.getTime() - d.getTime()) < 7 * 86400000;
+      if (period === "month") return (now.getTime() - d.getTime()) < 30 * 86400000;
+      return true;
+    };
+    // Читаем из NESTED data/stats.json (событийная модель)
+    let events: any[] = [];
+    try {
+      const nestedStatsFile = path.join(PROJECT_ROOT, "data", "stats.json");
+      if (fs.existsSync(nestedStatsFile)) {
+        const d = JSON.parse(fs.readFileSync(nestedStatsFile, "utf-8"));
+        events = d.events || [];
+      }
+    } catch {}
+    const filtered = events.filter(e => filterDate(e.ts));
+    const visits = filtered.filter(e => e.type === "visit").length;
+    const paidStandardSales = filtered.filter(e => e.type === "paid_standard").length;
+    const paidPremiumSales = filtered.filter(e => e.type === "paid_premium").length;
+    const revenue = paidStandardSales * p.standard + paidPremiumSales * p.premium;
+    const days = period === "all" ? 30 : period === "month" ? 30 : period === "week" ? 7 : 1;
+    const chartData = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const dayEvents = events.filter(e => e.ts?.startsWith(key));
+      chartData.push({ date: key, revenue: dayEvents.filter(e => e.type === "paid_standard").length * p.standard + dayEvents.filter(e => e.type === "paid_premium").length * p.premium, visits: dayEvents.filter(e => e.type === "visit").length, standardSales: dayEvents.filter(e => e.type === "paid_standard").length, premiumSales: dayEvents.filter(e => e.type === "paid_premium").length });
+    }
+    res.json({ stats: { visits, paidStandardSales, paidPremiumSales, revenue, standardPrice: p.standard, premiumPrice: p.premium }, period, chartData });
+  });
+
+  // Admin set price endpoint (для новой панели)
+  app.post("/api/admin-set-price", (req: Request, res: Response) => {
+    const { secret: reqSecret, tier, price } = req.body;
+    if (reqSecret !== "stilist-admin-key-913260") return res.status(403).json({ error: "forbidden" });
+    if (!tier || !price) return res.status(400).json({ error: "Missing params" });
+    const p = loadPrices();
+    if (tier === "standard") p.standard = parseInt(price);
+    else if (tier === "premium") p.premium = parseInt(price);
+    savePrices(p);
+    prices = p;
+    res.json({ success: true });
   });
 
   // Payment endpoints
@@ -1125,6 +1229,61 @@ ${birthRegion && birthCity && birthTime ? "✅ Все данные для точ
       console.error("Error in /api/stylize-trial:", error);
       res.write(JSON.stringify({ type: "error", error: (error as Error).message }) + "\n");
       res.end();
+    }
+  });
+
+  // --- /api/trial — бесплатный анализ стиля с оценкой по 10 баллам ---
+  app.post("/api/trial", upload.array("photos", 2), async (req: Request, res: Response) => {
+    try {
+      const files = req.files as MulterFile[];
+      if (!files || files.length === 0) return res.status(400).json({ error: "Нужно загрузить фото" });
+
+      const height = req.body.height || "не указан";
+      const weight = req.body.weight || "не указан";
+
+      const imageContent: any[] = files.map(f => ({
+        type: "image_url",
+        image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` },
+      }));
+
+      // Два запроса: сначала оценка числом, потом анализ
+      const scorePrompt = `Оцени стиль человека на фото по шкале от 1 до 10. Рост: ${height} см, вес: ${weight} кг.
+Ответь ТОЛЬКО одним числом от 1 до 10. Ничего больше.`;
+
+      const analysisPrompt = `Ты — профессиональный стилист. Рост: ${height} см, вес: ${weight} кг.
+Дай детальный анализ стиля на русском языке в таком порядке:
+1. ✅ Что гармонично в образе (конкретные вещи с фото)
+2. 🔄 Что стоит сменить (конкретные предметы гардероба)
+3. 💡 Рекомендации по цветам, силуэту, материалам`;
+
+      const [scoreRaw, analysisRaw] = await Promise.all([
+        callPolzaChat({
+          model: ANALYSIS_MODEL,
+          systemPrompt: "Отвечай только числом.",
+          messages: [{ role: "user", content: [{ type: "text", text: scorePrompt }, ...imageContent] }],
+          temperature: 0.1, maxTokens: 10, useJsonFormat: false,
+        }),
+        callPolzaChat({
+          model: ANALYSIS_MODEL,
+          systemPrompt: systemPrompt,
+          messages: [{ role: "user", content: [{ type: "text", text: analysisPrompt }, ...imageContent] }],
+          temperature: 0.7, maxTokens: 1200, useJsonFormat: false,
+        }),
+      ]);
+
+      const scoreStr = typeof scoreRaw === "string" ? scoreRaw : JSON.stringify(scoreRaw);
+      const scoreNum = parseInt(scoreStr.replace(/\D/g, "").slice(0, 2));
+      const score = isNaN(scoreNum) || scoreNum < 1 || scoreNum > 10 ? null : scoreNum;
+      const scoreLabels = ["","Начинающий","Базовый","Базовый","Хороший","Хороший","Уверенный","Уверенный","Отличный","Безупречный","Безупречный"];
+      const scoreLabel = score ? scoreLabels[score] : null;
+
+      const analysis = typeof analysisRaw === "string" ? analysisRaw : JSON.stringify(analysisRaw);
+      const result = { score, scoreLabel, greetingAndAnalysis: analysis.replace(/```json?|```/g, "").trim() };
+
+      res.json(result);
+    } catch (error) {
+      console.error("Error in /api/trial:", error);
+      res.status(500).json({ error: (error as Error).message });
     }
   });
 

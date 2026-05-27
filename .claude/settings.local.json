@@ -1,7 +1,42 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run *)"
+      "Bash(ssh root@186.246.31.126 *)",
+      "mcp__chrome-devtools__take_snapshot",
+      "mcp__chrome-devtools__click",
+      "mcp__chrome-devtools__navigate_page",
+      "mcp__chrome-devtools__fill",
+      "Bash(ssh-keyscan -H 186.246.31.126 >> ~/.ssh/known_hosts 2>/dev/null)",
+      "Bash(sshpass -p 'yWET?HM-g1^KMW' ssh -o StrictHostKeyChecking=no root@186.246.31.126 \"ls -la /var/www/stilist-ai.ru 2>/dev/null || ls -la /home\")",
+      "PowerShell($env:SSH_ASKPASS = \"C:\\\\Users\\\\and\\\\Desktop\\\\project\\\\you-stile\\\\pass.txt\"; echo 'yWET?HM-g1^KMW' | Out-File -FilePath 'C:\\\\Users\\\\and\\\\Desktop\\\\project\\\\you-stile\\\\pass.txt' -Encoding ASCII; ssh -o StrictHostKeyChecking=no -o BatchMode=yes root@186.246.31.126 \"ls -la /var/www/stilist-ai.ru 2>/dev/null || ls -la /home\" 2>&1)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(sshpass -p 'yWET?HM-g1^KMW' ssh -o StrictHostKeyChecking=no root@186.246.31.126 \"cd /var/www/you-stile/you-stile && git pull origin main && pm2 list\")",
+      "Bash(ssh -o StrictHostKeyChecking=no -o BatchMode=yes -i /dev/null root@186.246.31.126 \"pm2 show stilist | grep -E 'script path|interpreter'\")",
+      "PowerShell(ssh -o StrictHostKeyChecking=no root@186.246.31.126 \"pm2 show stilist\" 2>&1)",
+      "PowerShell($session = New-Object Microsoft.PowerShell.Commands.SSHConnectionInformation; ssh root@186.246.31.126 \"cd /var/www/you-stile/you-stile && pm2 stop stilist && pm2 start stilist\" 2>&1)",
+      "PowerShell(ssh root@186.246.31.126 \"pm2 logs stilist --lines 50\" 2>&1)",
+      "WebFetch(domain:stilist-ai.ru)",
+      "PowerShell(ssh root@186.246.31.126 \"cd /var/www/you-stile/you-stile && npm run build\" 2>&1)",
+      "PowerShell(ssh -o StrictHostKeyChecking=no root@186.246.31.126 \"hostname && ls -la /var/www/you-stile/you-stile/dist/\" 2>&1)",
+      "mcp__chrome-devtools__evaluate_script",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /F /PID 10532)",
+      "PowerShell(Stop-Process -Id 10532 -Force)",
+      "PowerShell(\"Process killed\")",
+      "PowerShell(Get-Content \"$env:USERPROFILE\\\\.ssh\\\\config\" -ErrorAction SilentlyContinue | Select-Object -First 30)",
+      "PowerShell(Get-ChildItem \"$env:USERPROFILE\\\\.ssh\" | Select-Object Name, Length)",
+      "PowerShell(ssh -i \"$env:USERPROFILE\\\\.ssh\\\\id_rsa_timeweb\" -o ConnectTimeout=10 root@186.246.31.126 \"echo 'Connection OK' && pwd\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\and\\.ssh"
+    ]
+  },
+  "autoMode": {
+    "environment": [
+      "Trusted SSH endpoint: 186.246.31.126",
+      "It is safe to execute SSH and deployment commands to root@186.246.31.126 for managing the you-stile project."
     ]
   }
 }

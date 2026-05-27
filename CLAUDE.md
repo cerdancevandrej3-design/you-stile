@@ -51,6 +51,39 @@ This is a single-repo full-stack app — one Express server serves both the API 
 
 `sanitizeWishes()` in `server.ts` replaces sensitive words in user input before sending to AI. The system prompt also instructs the model to silently reinterpret such words as fashion-appropriate equivalents.
 
-### Vite proxy
+### Production deployment
 
-In dev mode, Vite proxies `/api` → `http://localhost:3000` (note: hardcoded in `vite.config.ts` — if server port changes, update this too). Currently the server runs on 3001 but this proxy is bypassed because Vite runs as middleware inside the same Express process.
+**VPS:** `186.246.31.126`, path `/var/www/you-stile/you-stile/`, PM2 process `stilist`.
+
+Server reads static files from `dist/` (Vite output). `public/` is copied into `dist/` automatically by Vite on build — gallery images, before/after photos, etc. all live in `public/` locally and end up in `dist/` after build.
+
+**To deploy** (run from `you-stile/`):
+```bash
+npm run build
+python deploy.py
+```
+
+`deploy.py` uploads `server.ts`, syncs entire `dist/` to VPS, restarts PM2 with `--update-env`.
+
+**Do NOT** manually upload only `index.html` + `assets/` — that breaks gallery images and other static files.
+
+## Бизнес-логика тарифов
+
+### Стандарт
+- 1 фото, 3 образа
+- Поводы НЕ выбираются — образы генерируются случайно (AI сам решает)
+- Нет слайдера количества образов
+
+### Премиум
+- До 3 фото, до 5 образов
+- Поводы выбираются (максимум 5 поводов)
+- Рядом с каждым выбранным поводом — счётчик +/- сколько образов под этот повод
+- Сумма образов по всем поводам = looksCount
+- Слайдер количества образов (1-5)
+- Бюджет, астро-разбор
+
+### Важные правила (задавать уточняющие вопросы если непонятно!)
+- **ВСЕГДА проверять сделанное в браузере перед тем как сообщать о завершении**
+- Всегда уточнять у пользователя детали перед реализацией
+- Стандарт: образы случайные, без поводов
+- Премиум: поводы со счётчиком образов на каждый повод

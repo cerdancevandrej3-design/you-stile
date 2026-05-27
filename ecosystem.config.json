@@ -1,0 +1,15 @@
+{
+  "apps": [{
+    "name": "stilist",
+    "script": "node_modules/.bin/tsx",
+    "args": "server.ts",
+    "cwd": "/var/www/you-stile/you-stile",
+    "instances": 1,
+    "autorestart": true,
+    "watch": false,
+    "max_memory_restart": "500M",
+    "env": {
+      "NODE_ENV": "production"
+    }
+  }]
+}

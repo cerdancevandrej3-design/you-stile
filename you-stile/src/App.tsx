@@ -825,11 +825,11 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
           initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
           className="bg-ivory w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden relative max-h-[90vh] overflow-y-auto"
         >
-          <button onClick={onClose} className="absolute top-5 right-5 p-2 bg-charcoal/5 rounded-full hover:bg-charcoal/10 z-10">
+          <button onClick={onClose} className="absolute top-5 right-5 p-3 bg-charcoal/5 rounded-full hover:bg-charcoal/10 z-10 touch-manipulation">
             <X className="w-5 h-5 text-charcoal" />
           </button>
 
-          <div className="p-8 md:p-10">
+          <div className="p-5 md:p-8 md:p-10">
             {isTrialUsed && userName && (
               <div className="bg-gold/10 border border-gold/30 rounded-xl p-4 mb-6">
                 <p className="text-sm text-charcoal"><span className="font-medium">{userName}</span>, рады снова видеть вас! ✨</p>
@@ -869,7 +869,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
                 </div>
                 <div className={`font-medium mb-3 ${selectedTier === "premium" ? "text-ivory" : "text-charcoal"}`}>Премиум</div>
                 <ul className={`text-sm space-y-1.5 ${selectedTier === "premium" ? "text-ivory/70" : "text-charcoal/60"}`}>
-                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ До 3 фото</li>
+                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ До 5 фото</li>
                   <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ До 5 образов</li>
                   <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ 22 повода (ресторан, свидание...)</li>
                   <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ Бюджет + астро-разбор</li>
@@ -878,6 +878,8 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
                 </ul>
               </button>
             </div>
+
+            <p className="text-xs text-charcoal/50 text-center mb-4">Потребуется фото: JPG или PNG, до 20 МБ</p>
 
             <button onClick={handlePay} disabled={isProcessing}
               className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold text-lg hover:bg-gold/90 transition-colors mb-4 disabled:opacity-60">
@@ -1309,7 +1311,7 @@ const GroupModal = ({ isOpen, onClose, userName }: { isOpen: boolean; onClose: (
 };
 
 // --- Stylize Modal Component ---
-const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier; onToast: (msg: string, type: 'success'|'error'|'info') => void; onNewLooks: () => void }) => {
+const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, recoveredResult, onRecoveredResultShown }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier; onToast: (msg: string, type: 'success'|'error'|'info') => void; onNewLooks: () => void; recoveredResult?: any; onRecoveredResultShown?: () => void }) => {
   const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [height, setHeight] = useState("");
@@ -1321,7 +1323,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
   const [birthRegion, setBirthRegion] = useState("");
   const [birthCity, setBirthCity] = useState("");
   const [birthTime, setBirthTime] = useState("");
-  const [selectedOccasion, setSelectedOccasion] = useState("");
+  const [selectedOccasions, setSelectedOccasions] = useState<string[]>([]);
+  const [occasionCounts, setOccasionCounts] = useState<Record<string, number>>({});
   const [looksCount, setLooksCount] = useState(3);
   const [budget, setBudget] = useState("");
   const [loadingState, setLoadingState] = useState<{ step: number; text: string } | null>(null);
@@ -1371,7 +1374,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       setHeight("");
       setWeight("");
       setWishes("");
-      setSelectedOccasion("");
+      setSelectedOccasions([]);
       setBirthDay("");
       setBirthMonth("");
       setBirthYear("");
@@ -1379,9 +1382,20 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       setBirthCity("");
       setBirthTime("");
       setBudget("");
+      setSelectedOccasions([]);
+      setOccasionCounts({});
       setResult(null);
       setErrorMsg(null);
       setLoadingState(null);
+      if (recoveredResult) {
+        setResult({
+          greetingAndAnalysis: recoveredResult.greetingAndAnalysis,
+          bodyTypeSummary: recoveredResult.bodyTypeSummary,
+          astroReading: recoveredResult.astroReading || null,
+          looks: recoveredResult.looks,
+        });
+        onRecoveredResultShown?.();
+      }
     }
   }, [isOpen]);
   const [result, setResult] = useState<{
@@ -1448,7 +1462,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
   };
 
   const handleUpload = async () => {
-    if (files.length === 0) return;
+    if (files.length === 0) { setErrorMsg("Пожалуйста, загрузите хотя бы одно фото."); return; }
+    if (!height || !height.trim()) { setErrorMsg("Пожалуйста, укажите рост."); return; }
+    if (!weight || !weight.trim()) { setErrorMsg("Пожалуйста, укажите вес."); return; }
     setLoadingState({ step: 0.5, text: "Оптимизация фотографий для нейросети..." });
     setErrorMsg(null);
     
@@ -1459,8 +1475,21 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
           const resizedBlob = await resizeImage(file);
           formData.append("images", resizedBlob, file.name);
         } catch (e) {
-          // fallback if resize fails
-          formData.append("images", file);
+          // fallback if resize fails — retry with lower quality to avoid MulterError
+          try {
+            const canvas = document.createElement('canvas');
+            const img2 = new window.Image();
+            await new Promise<void>((res, rej) => { img2.onload = () => res(); img2.onerror = rej; img2.src = URL.createObjectURL(file); });
+            const max2 = 600;
+            let w2 = img2.width, h2 = img2.height;
+            if (w2 > h2) { if (w2 > max2) { h2 = Math.round(h2 * max2 / w2); w2 = max2; } } else { if (h2 > max2) { w2 = Math.round(w2 * max2 / h2); h2 = max2; } }
+            canvas.width = w2; canvas.height = h2;
+            canvas.getContext('2d')?.drawImage(img2, 0, 0, w2, h2);
+            const blob2 = await new Promise<Blob>((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('blob failed')), 'image/jpeg', 0.6));
+            formData.append("images", blob2, file.name);
+          } catch {
+            formData.append("images", file);
+          }
         }
       }
       
@@ -1468,9 +1497,14 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       
       formData.append("height", height);
       formData.append("weight", weight);
-      const fullWishes = [selectedOccasion, wishes].filter(Boolean).join(". ");
+      const totalOccasionLooks = Object.values(occasionCounts).reduce((a, b) => a + b, 0);
+      const effectiveLooksCount = totalOccasionLooks > 0 ? totalOccasionLooks : looksCount;
+      const occasionText = selectedOccasions.length > 0
+        ? `Создай образы по поводам: ${selectedOccasions.map(o => `${o} — ${occasionCounts[o] || 1} образ(а)`).join(", ")}`
+        : "";
+      const fullWishes = [occasionText, wishes].filter(Boolean).join(". ");
       formData.append("wishes", fullWishes);
-      formData.append("looksCount", String(looksCount));
+      formData.append("looksCount", String(effectiveLooksCount));
       formData.append("userName", userName);
       formData.append("visitCount", String(incrementVisitCount()));
       if (budget) formData.append("budget", budget);
@@ -1488,6 +1522,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
       if (birthTime) {
         formData.append("birthTime", birthTime);
       }
+
+      const pendingId = localStorage.getItem("pending_payment_id");
+      if (pendingId) formData.append("paymentId", pendingId);
 
       const response = await fetch("/api/stylize", {
         method: "POST",
@@ -1558,7 +1595,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
 
     } catch (error: any) {
       console.error("Full error:", error);
-      setErrorMsg(`Упс, произошла ошибка: ${error?.message || JSON.stringify(error)}`);
+      setErrorMsg("Произошла ошибка. Зайдите через 10 минут — ваш заказ будет готов.");
     } finally {
       setLoadingState(null);
     }
@@ -1579,11 +1616,11 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
           initial={{ scale: 0.95, opacity: 0, y: 20 }}
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.95, opacity: 0, y: 20 }}
-          className="bg-ivory w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden relative mb-20"
+          className="bg-ivory w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden overflow-x-hidden relative mb-20"
         >
-          <button 
+          <button
             onClick={onClose}
-            className="absolute top-6 right-6 p-2 bg-charcoal/5 rounded-full hover:bg-charcoal/10 transition-colors z-10"
+            className="absolute top-6 right-6 p-3 bg-charcoal/5 rounded-full hover:bg-charcoal/10 transition-colors z-10 touch-manipulation"
           >
             <X className="w-6 h-6 text-charcoal" />
           </button>
@@ -1661,7 +1698,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
             </AnimatePresence>
 
             <h2 className="text-3xl font-serif text-charcoal mb-2">Создать новый образ</h2>
-            <p className="text-charcoal/60 mb-8">{tier === "standard" ? "Загрузите фото, укажите рост и вес — стилист создаст 3 образа специально для вас." : "Загрузите до 3-х фото, укажите параметры, и наш ИИ подберет идеальный гардероб."}</p>
+            <p className="text-charcoal/60 mb-8">{tier === "standard" ? "Загрузите фото, укажите рост и вес — стилист создаст 3 образа специально для вас." : "Загрузите до 5 фото, укажите параметры, и наш ИИ подберет идеальный гардероб."}</p>
 
             {errorMsg && (
               <div className="bg-red-50 text-red-600 p-4 rounded-xl mb-6 flex items-start gap-3 border border-red-100">
@@ -1672,7 +1709,13 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
 
             {!result ? (
               <div className="flex flex-col items-center">
-                
+
+                {!loadingState && (
+                  <div className="w-full max-w-md mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
+                    ⚠️ Если у вас нестабильный интернет или включён VPN — отключите VPN перед загрузкой. При ошибке зайдите через 10 минут — ваш заказ будет готов.
+                  </div>
+                )}
+
                 {/* Parameters */}
                 <div className="flex gap-4 w-full max-w-md mb-4">
                   <div className="flex-1">
@@ -1726,18 +1769,37 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                       { label: "⛷️ Горнолыжный курорт", value: "Горнолыжный курорт" },
                       { label: "🕯️ Романтический ужин", value: "Романтический ужин" },
                     ].map(({ label, value }) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => setSelectedOccasion(selectedOccasion === value ? "" : value)}
-                        className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
-                          selectedOccasion === value
-                            ? "bg-gold text-charcoal border-gold font-medium"
-                            : "bg-white text-charcoal/70 border-charcoal/20 hover:border-gold"
-                        }`}
-                      >
-                        {label}
-                      </button>
+                      <div key={value} className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (selectedOccasions.includes(value)) {
+                              setSelectedOccasions(prev => prev.filter(v => v !== value));
+                              setOccasionCounts(prev => { const n = {...prev}; delete n[value]; return n; });
+                            } else if (selectedOccasions.length < 5) {
+                              const currentTotal = Object.values(occasionCounts).reduce((a, b) => a + b, 0);
+                              if (currentTotal < 5) {
+                                setSelectedOccasions(prev => [...prev, value]);
+                                setOccasionCounts(prev => ({...prev, [value]: 1}));
+                              }
+                            }
+                          }}
+                          className={`px-2 py-1 sm:px-3 sm:py-1.5 rounded-full text-xs sm:text-sm border transition-colors touch-manipulation ${
+                            selectedOccasions.includes(value)
+                              ? "bg-gold text-charcoal border-gold font-medium"
+                              : "bg-white text-charcoal/70 border-charcoal/20 hover:border-gold"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                        {selectedOccasions.includes(value) && (
+                          <div className="flex items-center gap-0.5">
+                            <button type="button" onClick={() => setOccasionCounts(prev => ({...prev, [value]: Math.max(1, (prev[value]||1)-1)}))} className="w-6 h-6 rounded-full bg-charcoal/10 text-charcoal text-xs flex items-center justify-center hover:bg-charcoal/20 touch-manipulation">−</button>
+                            <span className="text-xs font-medium w-4 text-center">{occasionCounts[value]||1}</span>
+                            <button type="button" onClick={() => { const total = Object.values(occasionCounts).reduce((a,b)=>a+b,0); if(total < 5) setOccasionCounts(prev => ({...prev, [value]: (prev[value]||1)+1})); }} className="w-6 h-6 rounded-full bg-charcoal/10 text-charcoal text-xs flex items-center justify-center hover:bg-charcoal/20 touch-manipulation">+</button>
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -1754,16 +1816,14 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                         Premium
                       </span>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="range"
-                        min={1} max={5}
-                        value={looksCount}
-                        onChange={(e) => setLooksCount(Number(e.target.value))}
-                        className="flex-1 accent-gold"
-                      />
-                      <span className="text-charcoal font-medium w-6 text-center">{looksCount}</span>
-                    </div>
+                    {(() => { const total = Object.values(occasionCounts).reduce((a,b)=>a+b,0); return total > 0 ? (
+                      <p className="text-sm text-charcoal/60">Итого образов: <span className="font-semibold text-charcoal">{total}</span> (по поводам)</p>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <input type="range" min={1} max={5} value={looksCount} onChange={(e) => setLooksCount(Number(e.target.value))} className="flex-1 accent-gold" />
+                        <span className="text-charcoal font-medium w-6 text-center">{looksCount}</span>
+                      </div>
+                    ); })()}
                     <p className="text-[11px] text-charcoal/40 mt-1">От 1 до 5 образов</p>
                   </div>
                 )}
@@ -1838,7 +1898,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                         <Upload className="w-8 h-8 text-charcoal/50 group-hover:text-gold transition-colors" />
                       </div>
                       <span className="font-medium text-charcoal">Нажмите, чтобы загрузить фото</span>
-                      <span className="text-sm text-charcoal/50 mt-2">{tier === "standard" ? "1 фото (JPEG, PNG)" : "До 3 фото (JPEG, PNG)"}</span>
+                      <span className="text-sm text-charcoal/50 mt-2">{tier === "standard" ? "1 фото (JPEG, PNG)" : "До 5 фото (JPEG, PNG)"}</span>
                     </div>
                     {tier === "standard" ? (
                       <div className="mt-3 bg-gold/5 rounded-xl p-3 text-xs text-charcoal/70 space-y-1">
@@ -1854,7 +1914,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks }: 
                       <div className="mt-3 bg-gold/5 rounded-xl p-3 text-xs text-charcoal/70 space-y-1">
                         <p className="font-medium text-charcoal mb-1">📸 Советы по фото для лучшего результата:</p>
                         <p>✓ Фото 1: чёткое лицо анфас, хорошее освещение</p>
-                        <p>✓ Фото 2–3: в полный рост или по пояс в нейтральной одежде</p>
+                        <p>✓ Фото 2–5: в полный рост или по пояс в нейтральной одежде</p>
                         <p>✓ Без фильтров, без очков, волосы убраны от лица</p>
                         <p>✓ Нейтральный фон, дневной свет</p>
                         <p className="text-charcoal/50 mt-1">Больше фото — точнее образ и лучше сходство</p>
@@ -2124,6 +2184,8 @@ export default function App() {
   const [userName, setUserName] = useState(getSavedName);
   const [showWelcome, setShowWelcome] = useState(() => !getSavedName());
   const [prices, setPrices] = useState({ standard: 100, premium: 200 });
+  const [recoveredResult, setRecoveredResult] = useState<any>(null);
+  const [showProcessing, setShowProcessing] = useState(false);
 
   // Telegram Mini App init
   useEffect(() => {
@@ -2164,6 +2226,28 @@ export default function App() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const pendingId = localStorage.getItem("pending_payment_id");
+    if (!pendingId) return;
+    fetch(`/api/result/${pendingId}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.ready && data.looks) {
+          const tier = (localStorage.getItem("pending_payment_tier") as Tier) || "standard";
+          setCurrentTier(tier);
+          setRecoveredResult(data);
+          setModalKey(k => k + 1);
+          setIsModalOpen(true);
+          localStorage.removeItem("pending_payment_id");
+        } else {
+          // Don't show "processing" popup to new visitors — just clear stale pending_payment_id
+          localStorage.removeItem("pending_payment_id");
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState<{message: string; type: 'success'|'error'|'info'}|null>(null);
 
@@ -2262,10 +2346,21 @@ export default function App() {
       <AnimatePresence>
         {showWelcome && <WelcomeScreen key="welcome" onSubmit={handleNameSubmit} />}
       </AnimatePresence>
+      {showProcessing && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-charcoal/80 backdrop-blur-sm">
+          <div className="bg-ivory rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
+            <p className="text-lg font-serif text-charcoal mb-3">Ваш заказ обрабатывается</p>
+            <p className="text-charcoal/60 text-sm mb-6">Пожалуйста, зайдите через 10 минут — результат будет готов.</p>
+            <button onClick={() => setShowProcessing(false)} className="px-6 py-3 rounded-full bg-gold text-charcoal font-medium text-sm">
+              Понятно
+            </button>
+          </div>
+        </div>
+      )}
       <PricingModal key={selectedPricingTier} isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} userName={userName} initialTier={selectedPricingTier} prices={prices} />
       {isTrialOpen && <TrialModalContent isOpen={isTrialOpen} onClose={() => setIsTrialOpen(false)} userName={userName} onUnlock={() => setIsTrialPaymentOpen(true)} />}
       <TrialPaymentModal isOpen={isTrialPaymentOpen} onClose={() => setIsTrialPaymentOpen(false)} onPaid={() => {}} />
-      <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} />
+      <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} recoveredResult={recoveredResult} onRecoveredResultShown={() => setRecoveredResult(null)} />
       <GroupModal isOpen={isGroupOpen} onClose={() => setIsGroupOpen(false)} userName={userName} />
 
       {/* 1. Header */}
@@ -2381,6 +2476,7 @@ export default function App() {
                 Оцени свой стиль
               </button>
             </div>
+            <p className="text-sm text-ivory/60 mt-3 text-center font-medium">⚠️ Отключите VPN перед началом для стабильной работы</p>
           </motion.div>
         </div>
       </section>
@@ -2431,7 +2527,7 @@ export default function App() {
 
           <div className="grid md:grid-cols-3 gap-4 md:gap-8 mb-16 md:mb-20">
             {[
-              { icon: Smartphone, title: "Загрузите фото", desc: "Сделайте селфи в полный рост в простой, облегающей одежде." },
+              { icon: Smartphone, title: "Загрузите фото", desc: "Чёткое фото лица анфас, хорошее освещение, нейтральный фон — без очков, фильтров и теней." },
               { icon: Sparkles, title: "Нейросеть анализирует", desc: "ИИ обучен на миллионах образов от ведущих дизайнеров и подиумов. Учитывает тип фигуры, цветотип и тренды 2026 — подбирает только то, что работает именно для вас." },
               { icon: Shirt, title: "Получите капсулу", desc: "3 готовых образа с подробным разбором одежды, обуви и аксессуаров." }
             ].map((step, idx) => (
@@ -2627,13 +2723,14 @@ export default function App() {
             viewport={{ once: true }}
             className="text-center"
           >
-            <button 
+            <button
               onClick={() => openModal()}
               className="bg-ivory text-charcoal px-10 py-5 rounded-full text-lg font-medium hover:bg-white transition-all hover:scale-105 flex items-center justify-center gap-2 mx-auto group"
             >
               Начать преображение
               <Sparkles className="w-5 h-5 text-gold group-hover:rotate-12 transition-transform" />
             </button>
+            <p className="text-sm text-ivory/60 mt-3 text-center font-medium">⚠️ Отключите VPN перед началом для стабильной работы</p>
           </motion.div>
         </div>
       </section>
