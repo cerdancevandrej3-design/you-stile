@@ -1,0 +1,46 @@
+{
+  "success": 0,
+  "total": 4,
+  "tests": [
+    {
+      "scenario": "1_evening_dress",
+      "success": false,
+      "error": {
+        "traceId": "ee252ced-80db-4a1f-86ba-423a3f2cf361",
+        "message": "Все провайдеры недоступны: grok-imagine/text-to-image",
+        "code": "IMAGE_REQUEST_ERROR"
+      },
+      "time": 1136
+    },
+    {
+      "scenario": "2_mini_dress_club",
+      "success": false,
+      "error": {
+        "traceId": "31e5f915-4354-4906-935c-8495061e9dfc",
+        "message": "Все провайдеры недоступны: grok-imagine/text-to-image",
+        "code": "IMAGE_REQUEST_ERROR"
+      },
+      "time": 819
+    },
+    {
+      "scenario": "3_beach_bikini",
+      "success": false,
+      "error": {
+        "traceId": "ae439759-3126-4ac6-aabe-94cfb65625d3",
+        "message": "Все провайдеры недоступны: grok-imagine/text-to-image",
+        "code": "IMAGE_REQUEST_ERROR"
+      },
+      "time": 811
+    },
+    {
+      "scenario": "4_swimsuit_pool",
+      "success": false,
+      "error": {
+        "traceId": "8b288e3e-270f-4f92-afa0-747d9bcb510b",
+        "message": "Все провайдеры недоступны: grok-imagine/text-to-image",
+        "code": "IMAGE_REQUEST_ERROR"
+      },
+      "time": 674
+    }
+  ]
+}

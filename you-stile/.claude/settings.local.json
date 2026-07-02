@@ -90,7 +90,8 @@
       "WebFetch(domain:wowpedia.fandom.com)",
       "Bash(cd /c/Users/and/Desktop/project/you-stile && md5sum *.py | sort)",
       "Read(//c/c/Users/and/Desktop/project/you-stile/**)",
-      "Bash(cd /c/Users/and/Desktop/project/you-stile && head -5 check_logs.py check_all_logs.py check_pm2.py)"
+      "Bash(cd /c/Users/and/Desktop/project/you-stile && head -5 check_logs.py check_all_logs.py check_pm2.py)",
+      "Bash(curl -s \"https://stilist-ai.ru/api/admin?pin=913260\")"
     ]
   }
 }

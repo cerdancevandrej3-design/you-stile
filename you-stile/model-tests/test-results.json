@@ -1,0 +1,170 @@
+{
+  "timestamp": "2026-06-26T17:54:25.175Z",
+  "models": {
+    "black-forest-labs/flux.2-pro": {
+      "tests": [
+        {
+          "scenario": "1_evening_dress_restaurant",
+          "success": false,
+          "error": {
+            "traceId": "23bb0d2b-ab99-4b9d-9231-a5fd1e1fc6c8",
+            "message": "aspect_ratio is required",
+            "code": "IMAGE_REQUEST_ERROR"
+          },
+          "time": 1128
+        },
+        {
+          "scenario": "2_mini_dress_club",
+          "success": false,
+          "error": {
+            "traceId": "2754ef35-e15b-4b7f-9ecd-63928bdf3852",
+            "message": "aspect_ratio is required",
+            "code": "IMAGE_REQUEST_ERROR"
+          },
+          "time": 803
+        },
+        {
+          "scenario": "3_beach_bikini",
+          "success": false,
+          "error": {
+            "traceId": "ac6e313c-67ea-4521-9de1-bf6941b63156",
+            "message": "aspect_ratio is required",
+            "code": "IMAGE_REQUEST_ERROR"
+          },
+          "time": 796
+        },
+        {
+          "scenario": "4_office_suit",
+          "success": false,
+          "error": {
+            "traceId": "b447652c-551a-40cb-a725-5d4c520b0c57",
+            "message": "aspect_ratio is required",
+            "code": "IMAGE_REQUEST_ERROR"
+          },
+          "time": 748
+        },
+        {
+          "scenario": "5_red_dress_gala",
+          "success": false,
+          "error": {
+            "traceId": "d43f6dea-cd62-444b-b866-897478ed3daa",
+            "message": "aspect_ratio is required",
+            "code": "IMAGE_REQUEST_ERROR"
+          },
+          "time": 853
+        },
+        {
+          "scenario": "6_sportswear_gym",
+          "success": false,
+          "error": {
+            "traceId": "3876ff12-4b4e-40fe-9d46-e56304436d44",
+            "message": "aspect_ratio is required",
+            "code": "IMAGE_REQUEST_ERROR"
+          },
+          "time": 824
+        },
+        {
+          "scenario": "7_date_night_casual",
+          "success": false,
+          "error": {
+            "traceId": "5faf18b8-5e41-4c21-801c-3fbff18450d5",
+            "message": "aspect_ratio is required",
+            "code": "IMAGE_REQUEST_ERROR"
+          },
+          "time": 829
+        },
+        {
+          "scenario": "8_swimsuit_pool",
+          "success": false,
+          "error": {
+            "traceId": "f1a79a34-d137-434c-80ef-44f7a0a0ab81",
+            "message": "aspect_ratio is required",
+            "code": "IMAGE_REQUEST_ERROR"
+          },
+          "time": 752
+        }
+      ],
+      "successCount": 0,
+      "totalTime": 0
+    },
+    "openai/gpt-5.4-image-2": {
+      "tests": [
+        {
+          "scenario": "1_evening_dress_restaurant",
+          "success": false,
+          "error": "Unexpected format",
+          "time": 921,
+          "rawResponse": {
+            "requestId": "gen_2181845422795132929"
+          }
+        },
+        {
+          "scenario": "2_mini_dress_club",
+          "success": false,
+          "error": "Unexpected format",
+          "time": 996,
+          "rawResponse": {
+            "requestId": "gen_2181845441190694913"
+          }
+        },
+        {
+          "scenario": "3_beach_bikini",
+          "success": false,
+          "error": "Unexpected format",
+          "time": 726,
+          "rawResponse": {
+            "requestId": "gen_2181845453756829697"
+          }
+        },
+        {
+          "scenario": "4_office_suit",
+          "success": false,
+          "error": "Unexpected format",
+          "time": 924,
+          "rawResponse": {
+            "requestId": "gen_2181845465240834049"
+          }
+        },
+        {
+          "scenario": "5_red_dress_gala",
+          "success": false,
+          "error": "Unexpected format",
+          "time": 1000,
+          "rawResponse": {
+            "requestId": "gen_2181845475728560129"
+          }
+        },
+        {
+          "scenario": "6_sportswear_gym",
+          "success": false,
+          "error": "Unexpected format",
+          "time": 897,
+          "rawResponse": {
+            "requestId": "gen_2181845490171777025"
+          }
+        },
+        {
+          "scenario": "7_date_night_casual",
+          "success": false,
+          "error": "Unexpected format",
+          "time": 880,
+          "rawResponse": {
+            "requestId": "gen_2181845496229007361"
+          }
+        },
+        {
+          "scenario": "8_swimsuit_pool",
+          "success": false,
+          "error": "Unexpected format",
+          "time": 838,
+          "rawResponse": {
+            "requestId": "gen_2181845508367323137"
+          }
+        }
+      ],
+      "successCount": 0,
+      "totalTime": 0
+    }
+  },
+  "scenarios": []
+}

@@ -40,6 +40,7 @@ function getActiveStageIndex(s: number): number {
 }
 
 // --- localStorage helpers ---
+type Tier = "standard" | "premium";
 function getSavedName(): string { return localStorage.getItem("you-stile-user-name") || ""; }
 function getVisitCount(): number { return parseInt(localStorage.getItem("you-stile-visit-count") || "0"); }
 function incrementVisitCount(): number {
@@ -60,6 +61,29 @@ function saveName(name: string) {
     localStorage.setItem("you-stile-user-id", crypto.randomUUID());
   }
   localStorage.setItem("you-stile-user-name", name.trim());
+}
+
+// --- My paid orders (persistent access to recovered looks) ---
+type MyOrder = { paymentId: string; tier: Tier; createdAt: number };
+function getMyOrders(): MyOrder[] {
+  try { return JSON.parse(localStorage.getItem("you-stile-my-orders") || "[]"); } catch { return []; }
+}
+function saveMyOrder(order: MyOrder) {
+  const all = getMyOrders().filter(o => o.paymentId !== order.paymentId);
+  all.push(order);
+  localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-20)));
+}
+function removeMyOrder(paymentId: string) {
+  const all = getMyOrders().filter(o => o.paymentId !== paymentId);
+  localStorage.setItem("you-stile-my-orders", JSON.stringify(all));
+}
+function clearMyOrders() {
+  localStorage.removeItem("you-stile-my-orders");
+  localStorage.removeItem("pending_payment_id");
+  localStorage.removeItem("pending_payment_tier");
+  for (const k of Object.keys(localStorage)) {
+    if (k.startsWith("paid_")) localStorage.removeItem(k);
+  }
 }
 
 // --- Welcome Screen ---
@@ -188,7 +212,6 @@ const MagicMirror = () => {
 };
 
 // --- Pricing & Payment Modal ---
-type Tier = "standard" | "premium";
 
 const PaymentModal = ({ isOpen, tier, onPaid, onClose }: {
   isOpen: boolean;
@@ -771,15 +794,31 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
         body: JSON.stringify({ code: promoCode.trim() }),
       });
       const data = await res.json();
-      if (data.valid) {
-        setPromoStatus("valid");
-        if (data.tier) setSelectedTier(data.tier);
-        setTimeout(() => { onPaid(data.tier || selectedTier); onClose(); }, 800);
-      } else if (data.reason === "used") {
-        setPromoStatus("used");
-      } else {
-        setPromoStatus("invalid");
+      if (!data.valid) {
+        setPromoStatus(data.reason === "used" ? "used" : "invalid");
+        return;
       }
+      setPromoStatus("valid");
+      if (data.tier) setSelectedTier(data.tier);
+      const tier = data.tier || selectedTier;
+      setTimeout(async () => {
+        try {
+          const rd = await fetch("/api/redeem-promo", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: promoCode.trim() }),
+          });
+          const rj = await rd.json();
+          if (rj.success && !rj.already) {
+            onPaid(rj.tier || tier);
+            onClose();
+          } else {
+            setPromoStatus("used");
+          }
+        } catch {
+          setPromoStatus("invalid");
+        }
+      }, 800);
     } catch {
       setPromoStatus("invalid");
     }
@@ -854,9 +893,10 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
                 <div className="font-medium text-charcoal mb-3">Стандарт</div>
                 <ul className="text-sm space-y-1.5">
                   <li className="font-semibold text-charcoal">✓ 1 фото</li>
-                  <li className="font-semibold text-charcoal">✓ 3 образа от стилиста</li>
+                  <li className="font-semibold text-charcoal">✓ 3 свободных образа от стилиста</li>
                   <li className="text-charcoal/60">✓ Анализ внешности</li>
                   <li className="text-charcoal/60">✓ Список покупок</li>
+                  <li className="text-charcoal/60">✓ Страничка хранится 5 часов</li>
                 </ul>
               </button>
 
@@ -869,12 +909,13 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
                 </div>
                 <div className={`font-medium mb-3 ${selectedTier === "premium" ? "text-ivory" : "text-charcoal"}`}>Премиум</div>
                 <ul className={`text-sm space-y-1.5 ${selectedTier === "premium" ? "text-ivory/70" : "text-charcoal/60"}`}>
-                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ До 5 фото</li>
-                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ До 5 образов</li>
-                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ 22 повода (ресторан, свидание...)</li>
-                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ Бюджет + астро-разбор</li>
+                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ До 5 образов на выбор</li>
+                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ 22 мероприятия (свадьба, романтик, вечеринка...)</li>
+                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ Образ на указанную сумму (бюджет)</li>
+                  <li className={`font-semibold ${selectedTier === "premium" ? "text-gold" : "text-charcoal"}`}>✓ Астро-разбор знака зодиака</li>
                   <li>✓ Анализ внешности</li>
                   <li>✓ Список покупок</li>
+                  <li>✓ Страничка хранится 5 часов</li>
                 </ul>
               </button>
             </div>
@@ -1198,6 +1239,98 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
 };
 
 // --- Group Stylize Modal ---
+const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll }: { isOpen: boolean; onClose: () => void; onOpenOrder: (paymentId: string, tier: Tier) => void; onClearAll: () => void }) => {
+  const [orders, setOrders] = useState<MyOrder[]>([]);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) setOrders(getMyOrders());
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const formatDate = (ts: number) => {
+    const d = new Date(ts);
+    return d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+  };
+
+  const handleOpen = async (o: MyOrder) => {
+    setLoadingId(o.paymentId);
+    await onOpenOrder(o.paymentId, o.tier);
+    setLoadingId(null);
+  };
+
+  const handleClearAll = () => {
+    if (confirm("Удалить все сохранённые образы из списка? Это не вернёт оплату — образы просто исчезнут из этого списка.")) {
+      clearMyOrders();
+      setOrders([]);
+      onClearAll();
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-charcoal/80 backdrop-blur-sm"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <motion.div
+          initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
+          className="bg-ivory w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden relative max-h-[90vh] overflow-y-auto"
+        >
+          <button onClick={onClose} className="absolute top-5 right-5 p-3 bg-charcoal/5 rounded-full hover:bg-charcoal/10 z-10 touch-manipulation">
+            <X className="w-5 h-5 text-charcoal" />
+          </button>
+
+          <div className="p-6 md:p-8">
+            <h2 className="font-serif text-2xl text-charcoal mb-1">Мои образы</h2>
+            <p className="text-sm text-charcoal/60 mb-6">Ваши оплаченные образы хранятся 5 часов после генерации.</p>
+
+            {orders.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-charcoal/50 text-sm">У вас пока нет сохранённых образов.</p>
+                <button onClick={onClose} className="mt-4 px-6 py-3 rounded-full bg-charcoal text-ivory text-sm font-medium">
+                  Создать образ
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-col gap-3">
+                  {[...orders].reverse().map(o => (
+                    <div key={o.paymentId} className="border border-charcoal/10 rounded-2xl p-4 flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-charcoal">
+                          {o.tier === "premium" ? "Премиум" : "Стандарт"}
+                        </p>
+                        <p className="text-xs text-charcoal/50 mt-0.5">{formatDate(o.createdAt)}</p>
+                      </div>
+                      <button
+                        onClick={() => handleOpen(o)}
+                        disabled={loadingId === o.paymentId}
+                        className="px-5 py-2.5 rounded-full bg-charcoal text-ivory text-sm font-medium hover:bg-charcoal/90 transition-colors disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {loadingId === o.paymentId ? "Загрузка…" : "Открыть образы"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={handleClearAll}
+                  className="mt-6 text-xs text-charcoal/40 hover:text-charcoal/70 transition-colors underline"
+                >
+                  Сбросить все мои образы
+                </button>
+              </>
+            )}
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
 const GroupModal = ({ isOpen, onClose, userName }: { isOpen: boolean; onClose: () => void; userName: string }) => {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -1332,6 +1465,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewText, setReviewText] = useState("");
   const [reviewSent, setReviewSent] = useState(false);
+  const [viewMode, setViewMode] = useState<'form' | 'result'>('form');
 
   // Плавная анимация прогресс-бара — ползёт непрерывно, реальный прогресс только ускоряет
   useEffect(() => {
@@ -1387,6 +1521,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
       setResult(null);
       setErrorMsg(null);
       setLoadingState(null);
+      setViewMode('form');
       if (recoveredResult) {
         setResult({
           greetingAndAnalysis: recoveredResult.greetingAndAnalysis,
@@ -1574,6 +1709,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
               astroReading: data.astroReading || null,
               looks: data.looks
             });
+            setViewMode('result');
             setTimeout(() => {
               document.getElementById('modal-scroll-container')?.scrollTo({ top: 0, behavior: 'smooth' });
             }, 100);
@@ -1588,6 +1724,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
               astroReading: data.astroReading || null,
               looks: data.looks
             });
+            setViewMode('result');
           } else if (data.type === "error") {
             throw new Error(data.error);
           }
@@ -1713,7 +1850,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
               </div>
             )}
 
-            {!result ? (
+            {viewMode === 'form' ? (
               <div className="flex flex-col items-center">
 
                 {!loadingState && (
@@ -1953,7 +2090,16 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
               </div>
             ) : (
               <div className="flex flex-col gap-6 md:gap-12">
-                
+
+                {/* Back to form button — critical UX */}
+                <button
+                  onClick={() => setViewMode('form')}
+                  className="flex items-center justify-center gap-2 py-3 rounded-full border border-charcoal/20 text-charcoal/70 text-sm font-medium hover:bg-charcoal/5 hover:text-charcoal transition-colors touch-manipulation"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Вернуться к форме
+                </button>
+
                 {/* Greeting & Analysis */}
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-charcoal/5">
                   <h3 className="text-xl font-serif text-charcoal mb-3 flex items-center gap-3">
@@ -2190,6 +2336,7 @@ export default function App() {
   const [isTrialOpen, setIsTrialOpen] = useState(false);
   const [isTrialPaymentOpen, setIsTrialPaymentOpen] = useState(false);
   const [isGroupOpen, setIsGroupOpen] = useState(false);
+  const [isMyLooksOpen, setIsMyLooksOpen] = useState(false);
   const [modalKey, setModalKey] = useState(0);
   const [currentTier, setCurrentTier] = useState<Tier>("standard");
   const [userName, setUserName] = useState(getSavedName);
@@ -2219,6 +2366,9 @@ export default function App() {
         const paymentId = parts.slice(2).join("_");
         if (tier && paymentId) {
           localStorage.setItem(`paid_${tier}_${paymentId}`, "true");
+          localStorage.setItem("pending_payment_id", paymentId);
+          localStorage.setItem("pending_payment_tier", tier);
+          saveMyOrder({ paymentId, tier, createdAt: Date.now() });
           setCurrentTier(tier);
           setTimeout(() => setIsModalOpen(true), 500);
         }
@@ -2250,11 +2400,24 @@ export default function App() {
           setRecoveredResult(data);
           setModalKey(k => k + 1);
           setIsModalOpen(true);
+          // НЕ удаляем pending_payment_id — пользователь может вернуться ещё раз в течение 5 часов
+        } else if (data.expired) {
+          // Проверяем возраст заказа — если < 15 минут, генерация ещё идёт (папка ещё не создана)
+          const order = getMyOrders().find(o => o.paymentId === pendingId);
+          const ageMin = order ? (Date.now() - order.createdAt) / 60000 : Infinity;
+          if (ageMin < 15) {
+            // Генерация ещё не завершилась — оставляем ключ, не показываем ошибку
+            return;
+          }
+          // Образы удалены сервером (старше 5 часов) — чистим всё
+          removeMyOrder(pendingId);
           localStorage.removeItem("pending_payment_id");
-        } else {
-          // Don't show "processing" popup to new visitors — just clear stale pending_payment_id
-          localStorage.removeItem("pending_payment_id");
+          localStorage.removeItem("pending_payment_tier");
+          localStorage.removeItem(`paid_standard_${pendingId}`);
+          localStorage.removeItem(`paid_premium_${pendingId}`);
+          setToast({ message: "Срок хранения ваших образов истёк (5 часов). Создайте новые образы.", type: "info" });
         }
+        // если data.ready=false и не expired — генерация ещё идёт, ключ оставляем
       })
       .catch(() => {});
   }, []);
@@ -2275,6 +2438,37 @@ export default function App() {
     const t = tier || "standard";
     setSelectedPricingTier(t);
     setIsPricingOpen(true);
+  };
+
+  const openMyOrder = async (paymentId: string, tier: Tier) => {
+    try {
+      const res = await fetch(`/api/result/${paymentId}`);
+      const data = await res.json();
+      if (data.ready && data.looks) {
+        setCurrentTier(tier);
+        setRecoveredResult(data);
+        setModalKey(k => k + 1);
+        setIsMyLooksOpen(false);
+        setIsModalOpen(true);
+      } else if (data.expired) {
+        const order = getMyOrders().find(o => o.paymentId === paymentId);
+        const ageMin = order ? (Date.now() - order.createdAt) / 60000 : Infinity;
+        if (ageMin < 15) {
+          setToast({ message: "Образы ещё генерируются. Зайдите через 10 минут.", type: "info" });
+        } else {
+          removeMyOrder(paymentId);
+          localStorage.removeItem("pending_payment_id");
+          localStorage.removeItem("pending_payment_tier");
+          localStorage.removeItem(`paid_standard_${paymentId}`);
+          localStorage.removeItem(`paid_premium_${paymentId}`);
+          setToast({ message: "Срок хранения этих образов истёк (5 часов). Создайте новые.", type: "info" });
+        }
+      } else {
+        setToast({ message: "Образы ещё генерируются. Зайдите через 10 минут.", type: "info" });
+      }
+    } catch {
+      setToast({ message: "Не удалось загрузить образы. Попробуйте позже.", type: "error" });
+    }
   };
 
   const openTrialModal = () => {
@@ -2301,6 +2495,7 @@ export default function App() {
       localStorage.setItem(`paid_${tier}_${paymentId}`, "true");
       localStorage.setItem("pending_payment_id", paymentId);
       localStorage.setItem("pending_payment_tier", tier);
+      saveMyOrder({ paymentId, tier: tier as Tier, createdAt: Date.now() });
 
       // Убираем параметры из URL
       window.history.replaceState({}, "", "/");
@@ -2373,6 +2568,7 @@ export default function App() {
       <TrialPaymentModal isOpen={isTrialPaymentOpen} onClose={() => setIsTrialPaymentOpen(false)} onPaid={() => {}} />
       <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} recoveredResult={recoveredResult} onRecoveredResultShown={() => setRecoveredResult(null)} />
       <GroupModal isOpen={isGroupOpen} onClose={() => setIsGroupOpen(false)} userName={userName} />
+      <MyLooksModal isOpen={isMyLooksOpen} onClose={() => setIsMyLooksOpen(false)} onOpenOrder={openMyOrder} onClearAll={() => { /* список уже обновлён внутри */ }} />
 
       {/* 1. Header */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-ivory/70 backdrop-blur-lg border-b border-charcoal/5 transition-all">
@@ -2395,6 +2591,14 @@ export default function App() {
               <a href="#lookbook" className="hover:text-charcoal transition-colors">Лукбук</a>
               <a href="#pricing" className="hover:text-charcoal transition-colors">Тарифы</a>
             </nav>
+            {getMyOrders().length > 0 && (
+              <button
+                onClick={() => setIsMyLooksOpen(true)}
+                className="text-sm font-medium text-charcoal/70 hover:text-charcoal transition-colors"
+              >
+                Мои образы
+              </button>
+            )}
             <button
               onClick={() => setIsGroupOpen(true)}
               className="hidden border border-charcoal/20 text-charcoal px-6 py-2.5 rounded-full text-sm font-medium hover:bg-charcoal/5 transition-colors"
@@ -2431,6 +2635,14 @@ export default function App() {
               <a href="#how-it-works" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Как это работает</a>
               <a href="#lookbook" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Лукбук</a>
               <a href="#pricing" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Тарифы</a>
+              {getMyOrders().length > 0 && (
+                <button
+                  onClick={() => { setMenuOpen(false); setIsMyLooksOpen(true); }}
+                  className="text-left text-charcoal/70 font-medium py-2 border-b border-charcoal/5"
+                >
+                  Мои образы
+                </button>
+              )}
               <button
                 onClick={() => { setMenuOpen(false); setIsGroupOpen(true); }}
               className="hidden border border-charcoal/20 text-charcoal px-6 py-3 rounded-full text-sm font-medium w-full mt-1"
@@ -2470,9 +2682,10 @@ export default function App() {
               <span className="italic text-gold">лучшую версию.</span> <br />
               За секунды.
             </h1>
-            <p className="text-base md:text-xl text-ivory/70 mb-10 leading-relaxed font-light max-w-2xl mx-auto">
+            <p className="text-base md:text-xl text-ivory/70 mb-6 leading-relaxed font-light max-w-2xl mx-auto">
               Загрузи чёткое фото лица — стилист воссоздаст образ именно с вашей внешностью. Рост и вес вводятся вручную для идеальной посадки одежды.
             </p>
+
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <button
                 onClick={() => openModal()}
@@ -2662,12 +2875,27 @@ export default function App() {
           <div className="grid md:grid-cols-2 gap-8 max-w-3xl mx-auto mb-16">
             {[
               {
+                title: "Премиум",
+                tier: "premium" as Tier,
+                price: `${prices.premium} ₽`,
+                desc: "Образы под ваш повод, бюджет и знак зодиака.",
+                features: [
+                  "Всё из тарифа Стандарт",
+                  "До 5 образов на выбор",
+                  "22 мероприятия (свадьба, романтик, вечеринка...)",
+                  "Образ на указанную сумму (бюджет)",
+                  "Астро-разбор вашего знака зодиака",
+                ],
+                highlighted: true,
+                badge: "Популярный",
+              },
+              {
                 title: "Стандарт",
                 tier: "standard" as Tier,
                 price: `${prices.standard} ₽`,
-                desc: "Один запрос — три готовых образа с визуализацией.",
+                desc: "Три готовых образа от стилиста с визуализацией.",
                 features: [
-                  "3 полных образа под вашу фигуру",
+                  "3 свободных образа от стилиста",
                   "ИИ-визуализация каждого образа",
                   "Подбор цвета и стиля",
                   "Список вещей со ссылками",
@@ -2675,21 +2903,6 @@ export default function App() {
                 ],
                 highlighted: false,
                 badge: null,
-              },
-              {
-                title: "Премиум",
-                tier: "premium" as Tier,
-                price: `${prices.premium} ₽`,
-                desc: "Персональный разбор: внешность × знак зодиака × этот месяц.",
-                features: [
-                  "Всё из тарифа Стандарт",
-                  "Произвольный запрос стилисту",
-                  "Образы под конкретный повод",
-                  "Астро-разбор вашего знака зодиака",
-                  "Силовые цвета и стиль этого месяца",
-                ],
-                highlighted: true,
-                badge: "Популярный",
               },
             ].map((plan, idx) => (
               <motion.div 
@@ -2747,7 +2960,7 @@ export default function App() {
       </section>
 
       {/* Footer */}
-      <footer className="py-8 px-6 border-t border-charcoal/10 text-center text-sm text-charcoal/50">
+      <footer className="py-8 px-6 border-t border-charcoal/10 text-center text-sm text-charcoal/70">
         <p>© 2026 Твой личный стилист. Все права защищены.</p>
         <div className="mt-4 space-y-1">
           <p>ИП Черданцев А.В.</p>

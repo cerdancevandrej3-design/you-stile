@@ -67,6 +67,11 @@ python deploy.py
 
 **Do NOT** manually upload only `index.html` + `assets/` — that breaks gallery images and other static files.
 
+**После изменений ОБЯЗАТЕЛЬНО проверить в браузере:**
+- https://stilist-ai.ru/admin?pin=913260 — админка you-stile
+- https://stilist-ai.ru/soulmate-admin?pin=913260 — админка Soulmate
+- https://stilist-ai.ru/api/soulmate/users?pin=913260 — API возвращает JSON
+
 ## Бизнес-логика тарифов
 
 ### Стандарт
@@ -82,7 +87,26 @@ python deploy.py
 - Слайдер количества образов (1-5)
 - Бюджет, астро-разбор
 
-### Важные правила (задавать уточняющие вопросы если непонятно!)
+## Задачи на завтра (промпт для генерации образов)
+
+### 1. Убрать улыбку если её нет на исходном фото
+- Проблема: Flux генерирует улыбку даже если на загруженном фото человек серьёзный — лицо становится непохожим
+- Решение: добавить в fluxPrompt инструкцию `EXPRESSION: Match the facial expression from the reference photo exactly. If person is not smiling in reference, do NOT add smile. Preserve natural expression.`
+- Файл: server.ts, строка ~1592 (fluxPrompt)
+
+### 2. Учитывать тип фигуры в образах
+- Худой комплекции → больше образов с короткой юбкой, мини
+- Есть грудь → можно декольте (формулировка для прохождения цензуры Flux)
+- Решение: в системном промпте анализа (ANALYSIS_MODEL) добавить инструкцию учитывать bodyType при выборе длины юбок и выреза
+- Формулировка для цензуры: `elegant neckline`, `tasteful décolletage`, `sophisticated low-cut neckline` — НЕ использовать прямые слова
+- Файл: src/system-prompt.txt + server.ts fluxPrompt
+
+### Текущее состояние сайта (коммит 7e6ccb2)
+- Работает стабильно на stilist-ai.ru
+- Кнопка "Повторить генерацию" при сбое Polza.ai
+- Лимит файла 50MB, retry 3 попытки
+- Поводы: максимум 5 суммарно, счётчик на каждый повод
+- Слайдер количества образов убран
 - **ВСЕГДА проверять сделанное в браузере перед тем как сообщать о завершении**
 - Всегда уточнять у пользователя детали перед реализацией
 - Стандарт: образы случайные, без поводов

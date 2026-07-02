@@ -1,0 +1,58 @@
+[
+  {
+    "name": "01_beach_sunset",
+    "prompt": "Photorealistic photo of the same person from the reference image. Professional fashion photography. Elegant woman wearing a stylish beach outfit - flowing maxi dress in coral or turquoise colors, standing on a tropical beach at golden hour sunset. Turquoise ocean water, palm trees, warm sunlight. 85mm lens, shallow DOF, sharp face. Natural skin texture. Ultra-realistic photograph.",
+    "success": true,
+    "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_d4cfb693519b88e8.jpg",
+    "time": 32759
+  },
+  {
+    "name": "02_city_street",
+    "prompt": "Photorealistic photo of the same person from the reference image. Professional fashion photography. Stylish woman wearing a chic urban outfit - designer coat, boots, carrying a luxury handbag, standing on a fashionable city street with autumn leaves. Natural daylight, bokeh background. 85mm lens. Natural skin texture. Ultra-realistic photograph.",
+    "success": true,
+    "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_09d2d946d7e5b43e.jpg",
+    "time": 35034
+  },
+  {
+    "name": "03_restaurant",
+    "prompt": "Photorealistic photo of the same person from the reference image. Professional fashion photography. Elegant woman wearing a sophisticated black evening dress with elegant neckline, sitting at a luxury restaurant table. Warm candlelight, elegant interior, wine glasses in background. 85mm lens, shallow DOF, sharp face. Natural skin texture. Ultra-realistic photograph.",
+    "success": true,
+    "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_b67efb1ba4b26240.jpg",
+    "time": 30562
+  },
+  {
+    "name": "04_garden",
+    "prompt": "Photorealistic photo of the same person from the reference image. Professional fashion photography. Beautiful woman wearing a romantic floral dress, standing in a blooming garden with roses and flowers. Soft spring sunlight, butterflies. 85mm lens, shallow DOF, sharp face. Natural skin texture. Ultra-realistic photograph.",
+    "success": true,
+    "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_a892e2b9462f202b.jpg",
+    "time": 37845
+  },
+  {
+    "name": "05_office",
+    "prompt": "Photorealistic photo of the same person from the reference image. Professional fashion photography. Confident business woman wearing a tailored power suit in navy or cream color, standing in a modern glass office with city skyline through floor-to-ceiling windows. Natural business lighting. 85mm lens. Natural skin texture. Ultra-realistic photograph.",
+    "success": true,
+    "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_1ab8d2128f1e3da6.jpg",
+    "time": 52553
+  },
+  {
+    "name": "06_nightclub",
+    "prompt": "Photorealistic photo of the same person from the reference image. Professional fashion photography. Glamorous woman wearing a sparkly short party dress with high heels, standing in a luxury nightclub with purple and blue neon lights. Dramatic lighting, bokeh disco lights in background. 85mm lens. Natural skin texture. Ultra-realistic photograph.",
+    "success": true,
+    "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_43fcde39d55c5222.jpg",
+    "time": 40513
+  },
+  {
+    "name": "07_pool_luxury",
+    "prompt": "Photorealistic photo of the same person from the reference image. Professional fashion photography. Beautiful woman wearing an elegant one-piece swimsuit or bikini, lounging on a sunbed by a luxury infinity pool at a Mediterranean resort. Crystal clear water, stone terrace, sunlight. 85mm lens, shallow DOF. Natural skin texture. Ultra-realistic photograph.",
+    "success": true,
+    "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_c74933ca75b1ce06.jpg",
+    "time": 33052
+  },
+  {
+    "name": "08_cafe_paris",
+    "prompt": "Photorealistic photo of the same person from the reference image. Professional fashion photography. Stylish woman wearing a chic Parisian outfit - beret, trench coat, sitting at a cozy sidewalk cafe in Paris. Croissants, espresso, Eiffel Tower in distance. Warm morning light. 85mm lens. Natural skin texture. Ultra-realistic photograph.",
+    "success": true,
+    "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_898f845e8103fb8d.jpg",
+    "time": 36070
+  }
+]

@@ -15,7 +15,9 @@
       "Bash(npm run lint)",
       "Bash(npm run clean)",
       "Bash(taskkill //PID *)",
-      "Bash(taskkill /PID *)"
+      "Bash(taskkill /PID *)",
+      "WebFetch(domain:www.treatwell.es)",
+      "WebFetch(domain:www.treatwell.fr)"
     ]
   }
 }

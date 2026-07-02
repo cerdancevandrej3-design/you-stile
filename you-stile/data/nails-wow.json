@@ -1,0 +1,871 @@
+[
+  {
+    "thumb": "thumb_198.jpg",
+    "original": "t_c2f3f8c1d9588103.png",
+    "wow": 10,
+    "realism": 9,
+    "category": "3d_aquarium",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "blue",
+      "orange"
+    ],
+    "desc": "Потрясающий 3D дизайн с рыбками кои и лотосом в аквариумной технике."
+  },
+  {
+    "thumb": "thumb_001.jpg",
+    "original": "t_011663025900d65e.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "animal_print",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "brown",
+      "black"
+    ],
+    "desc": "Элегантный черепаховый принт на миндалевидных ногтях"
+  },
+  {
+    "thumb": "thumb_004.jpg",
+    "original": "t_0425855c2d2b6ccb.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "french",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "burgundy",
+      "nude"
+    ],
+    "desc": "Элегантный глубокий винный френч на длинных миндалевидных ногтях."
+  },
+  {
+    "thumb": "thumb_008.jpg",
+    "original": "t_07afdc88b7d9d698.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "3d_aquarium",
+    "shape": "coffin",
+    "length": "extra_long",
+    "colors": [
+      "pink",
+      "neon_green"
+    ],
+    "desc": "Эффектный аквариумный дизайн с неоновыми акцентами и 3D-деталями."
+  },
+  {
+    "thumb": "thumb_019.jpg",
+    "original": "t_12a9b48f6ffad366.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "coffin",
+    "length": "long",
+    "colors": [
+      "black",
+      "purple"
+    ],
+    "desc": "Эффектный маникюр с объемными сердцами и глубоким переливом"
+  },
+  {
+    "thumb": "thumb_030.jpg",
+    "original": "t_21902df08dfa8327.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "floral",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "black",
+      "pink"
+    ],
+    "desc": "Элегантный матовый дизайн с изящным розовым принтом листьев"
+  },
+  {
+    "thumb": "thumb_036.jpg",
+    "original": "t_29f01c3a95178699.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "animal_print",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "olive",
+      "black"
+    ],
+    "desc": "Элегантный змеиный принт в оливковых тонах с профессиональной подачей"
+  },
+  {
+    "thumb": "thumb_040.jpg",
+    "original": "t_2e09ebb9b3c9b0c1.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "other",
+    "shape": "coffin",
+    "length": "extra_long",
+    "colors": [
+      "pink",
+      "neon green"
+    ],
+    "desc": "Эффектные длинные ногти с неоновым градиентом и текстурой"
+  },
+  {
+    "thumb": "thumb_048.jpg",
+    "original": "t_380872b6a649e881.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "black",
+      "purple"
+    ],
+    "desc": "Эффектный космический дизайн с мерцающими звездами на длинных ногтях."
+  },
+  {
+    "thumb": "thumb_051.jpg",
+    "original": "t_3a4a1df6ec7f7aae.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "chrome",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "emerald",
+      "lime"
+    ],
+    "desc": "Эффектный изумрудный хром с объемными каплями"
+  },
+  {
+    "thumb": "thumb_055.jpg",
+    "original": "t_3ab9d76a0af14dab.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "red",
+      "black"
+    ],
+    "desc": "Эффектный готический дизайн с металлическими элементами и кружевом"
+  },
+  {
+    "thumb": "thumb_058.jpg",
+    "original": "t_3f7a2c693b90f6ab.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "other",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "teal",
+      "bronze"
+    ],
+    "desc": "Эффектный маникюр с текстурой патины и глубоким переходом цвета."
+  },
+  {
+    "thumb": "thumb_060.jpg",
+    "original": "t_40f3b867900d1228.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "french",
+    "shape": "stiletto",
+    "length": "long",
+    "colors": [
+      "burgundy",
+      "nude"
+    ],
+    "desc": "Элегантный винный френч на длинных стилетных ногтях"
+  },
+  {
+    "thumb": "thumb_062.jpg",
+    "original": "t_432066827dd13e7f.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "geometric",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "dark green",
+      "neon green"
+    ],
+    "desc": "Эффектный темно-зеленый маникюр с неоновыми геометрическими линиями"
+  },
+  {
+    "thumb": "thumb_063.jpg",
+    "original": "t_447b9e528fb21f8d.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "floral",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "green",
+      "pink"
+    ],
+    "desc": "Изысканный восточный дизайн с ручной росписью и золотыми элементами"
+  },
+  {
+    "thumb": "thumb_064.jpg",
+    "original": "t_4539fba4e4014c9f.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "chrome",
+    "shape": "coffin",
+    "length": "extra_long",
+    "colors": [
+      "red",
+      "black"
+    ],
+    "desc": "Эффектный красный хром на длинных ногтях формы балерина"
+  },
+  {
+    "thumb": "thumb_066.jpg",
+    "original": "t_455b9628256cf74d.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "cat_eye",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "blue",
+      "black"
+    ],
+    "desc": "Эффектный глубокий кошачий глаз на длинных миндалевидных ногтях"
+  },
+  {
+    "thumb": "thumb_068.jpg",
+    "original": "t_465bfce52b8a34e9.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "animal_print",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "orange",
+      "black"
+    ],
+    "desc": "Эффектный леопардовый принт с золотой фольгой на длинных миндалевидных ногтях."
+  },
+  {
+    "thumb": "thumb_070.jpg",
+    "original": "t_4992251a3f67449b.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "stiletto",
+    "length": "long",
+    "colors": [
+      "black",
+      "gold"
+    ],
+    "desc": "Эффектный черный матовый маникюр с золотыми объемными элементами"
+  },
+  {
+    "thumb": "thumb_073.jpg",
+    "original": "t_4aceb04fd36b712f.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "cat_eye",
+    "shape": "oval",
+    "length": "long",
+    "colors": [
+      "blue",
+      "purple"
+    ],
+    "desc": "Элегантный космический дизайн с эффектом кошачий глаз"
+  },
+  {
+    "thumb": "thumb_078.jpg",
+    "original": "t_545b67281757ebb2.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "chrome",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "silver",
+      "grey"
+    ],
+    "desc": "Эффектный объемный дизайн с жидким металлом на полупрозрачной базе"
+  },
+  {
+    "thumb": "thumb_083.jpg",
+    "original": "t_59a440ae4c54ceb4.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "cat_eye",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "blue",
+      "black"
+    ],
+    "desc": "Эффектный глубокий синий кошачий глаз на длинных миндалевидных ногтях"
+  },
+  {
+    "thumb": "thumb_084.jpg",
+    "original": "t_5bae27eb26cfac09.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "3d_aquarium",
+    "shape": "coffin",
+    "length": "long",
+    "colors": [
+      "pink",
+      "white"
+    ],
+    "desc": "Элегантный дизайн с 3D-пузырьками и нежным жемчужным сиянием."
+  },
+  {
+    "thumb": "thumb_085.jpg",
+    "original": "t_605db7f8b369cb38.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "stiletto",
+    "length": "extra_long",
+    "colors": [
+      "gold",
+      "black"
+    ],
+    "desc": "Эффектный золотой текстурный дизайн на длинных стилетных ногтях"
+  },
+  {
+    "thumb": "thumb_092.jpg",
+    "original": "t_669116235bb94146.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "cat_eye",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "green",
+      "black"
+    ],
+    "desc": "Эффектный неоновый кошачий глаз с графичным черным узором"
+  },
+  {
+    "thumb": "thumb_096.jpg",
+    "original": "t_66f7eb6a7ca0b36d.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "minimalism",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "grey",
+      "silver"
+    ],
+    "desc": "Элегантный серый маникюр с минималистичным серебряным 3D-декором"
+  },
+  {
+    "thumb": "thumb_104.jpg",
+    "original": "t_6d4e4527472354ea.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "3d_aquarium",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "blue",
+      "gold"
+    ],
+    "desc": "Изысканный аквариумный дизайн с элементами 3D-декора и золотыми акцентами."
+  },
+  {
+    "thumb": "thumb_105.jpg",
+    "original": "t_6e95783534c32b00.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "3d_aquarium",
+    "shape": "coffin",
+    "length": "extra_long",
+    "colors": [
+      "neon pink",
+      "neon green"
+    ],
+    "desc": "Яркий неоновый аквариумный дизайн на длинных ногтях формы балерина"
+  },
+  {
+    "thumb": "thumb_112.jpg",
+    "original": "t_71a64aa9fae4d739.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "3d_aquarium",
+    "shape": "stiletto",
+    "length": "extra_long",
+    "colors": [
+      "blue",
+      "clear"
+    ],
+    "desc": "Эффектный аквариумный дизайн с синими переливами на длинных стилетто."
+  },
+  {
+    "thumb": "thumb_114.jpg",
+    "original": "t_7318cb76ef5ce41a.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "3d_aquarium",
+    "shape": "oval",
+    "length": "long",
+    "colors": [
+      "blue",
+      "orange"
+    ],
+    "desc": "Изысканный 3D-дизайн с эффектом аквариума и золотыми рыбками"
+  },
+  {
+    "thumb": "thumb_121.jpg",
+    "original": "t_7f15d051f45beb21.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "french",
+    "shape": "stiletto",
+    "length": "long",
+    "colors": [
+      "burgundy",
+      "nude"
+    ],
+    "desc": "Элегантный бордовый френч на длинных стилетных ногтях"
+  },
+  {
+    "thumb": "thumb_130.jpg",
+    "original": "t_88e5e43b3a29f4a5.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "3d_aquarium",
+    "shape": "coffin",
+    "length": "long",
+    "colors": [
+      "silver",
+      "pink"
+    ],
+    "desc": "Эффектный 3D дизайн с жемчужными акцентами и блестками"
+  },
+  {
+    "thumb": "thumb_131.jpg",
+    "original": "t_88ec56ca50079276.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "french",
+    "shape": "stiletto",
+    "length": "long",
+    "colors": [
+      "burgundy",
+      "nude"
+    ],
+    "desc": "Элегантный бордовый V-образный френч на длинных стилетных ногтях."
+  },
+  {
+    "thumb": "thumb_138.jpg",
+    "original": "t_8f05428551c7f22d.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "other",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "silver",
+      "white"
+    ],
+    "desc": "Эффектный объемный дизайн с серебряными элементами и текстурой камня."
+  },
+  {
+    "thumb": "thumb_146.jpg",
+    "original": "t_947d19f3fd01f4aa.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "floral",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "sage green",
+      "cream"
+    ],
+    "desc": "Элегантный оливковый маникюр с изящным рельефным цветочным узором"
+  },
+  {
+    "thumb": "thumb_150.jpg",
+    "original": "t_9658ddd8a24de6d1.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "3d_aquarium",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "transparent",
+      "pink"
+    ],
+    "desc": "Эффектный 3D-дизайн с прозрачными каплями и жемчужным сиянием"
+  },
+  {
+    "thumb": "thumb_152.jpg",
+    "original": "t_97449d74aa9dd6a8.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "other",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "black",
+      "red"
+    ],
+    "desc": "Эффектный готический дизайн с объемными элементами и кошачьим глазом"
+  },
+  {
+    "thumb": "thumb_153.jpg",
+    "original": "t_977bd8b824a93374.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "chrome",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "magenta",
+      "silver"
+    ],
+    "desc": "Эффектный ярко-розовый маникюр с объемным серебряным декором"
+  },
+  {
+    "thumb": "thumb_154.jpg",
+    "original": "t_98275ad4db22cb65.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "marble",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "green",
+      "gold"
+    ],
+    "desc": "Изысканный дизайн под зеленый мрамор с золотыми прожилками"
+  },
+  {
+    "thumb": "thumb_157.jpg",
+    "original": "t_995093632afcf028.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "chrome",
+    "shape": "coffin",
+    "length": "long",
+    "colors": [
+      "red",
+      "black"
+    ],
+    "desc": "Эффектный красный хром с градиентом на длинных ногтях формы балерина"
+  },
+  {
+    "thumb": "thumb_164.jpg",
+    "original": "t_9fc3d3c58754d571.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "gemstone",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "red",
+      "gold"
+    ],
+    "desc": "Эффектный красный маникюр с золотыми вкраплениями и ювелирными деталями."
+  },
+  {
+    "thumb": "thumb_171.jpg",
+    "original": "t_a37999c611eb792b.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "3d_aquarium",
+    "shape": "coffin",
+    "length": "long",
+    "colors": [
+      "pink",
+      "yellow",
+      "green"
+    ],
+    "desc": "Стильный дизайн с желейными мишками на длинных ногтях"
+  },
+  {
+    "thumb": "thumb_180.jpg",
+    "original": "t_ae36ebdc78c86651.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "cat_eye",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "magenta",
+      "black"
+    ],
+    "desc": "Элегантный кошачий глаз в глубоком пурпурном оттенке"
+  },
+  {
+    "thumb": "thumb_185.jpg",
+    "original": "t_b1cbfee8f72a9e2c.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "nude",
+      "gold"
+    ],
+    "desc": "Элегантный нюдовый маникюр с изысканным золотым 3D-декором"
+  },
+  {
+    "thumb": "thumb_190.jpg",
+    "original": "t_b89dbda743b43f50.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "minimalism",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "nude",
+      "black"
+    ],
+    "desc": "Элегантный нюдовый маникюр с изящным черным кружевным дизайном"
+  },
+  {
+    "thumb": "thumb_191.jpg",
+    "original": "t_bad6cd84943cb759.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "other",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "black",
+      "gold"
+    ],
+    "desc": "Элегантный черный маникюр с золотыми объемными элементами"
+  },
+  {
+    "thumb": "thumb_192.jpg",
+    "original": "t_bbcb1bd831f7c2c9.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "3d_aquarium",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "blue",
+      "white"
+    ],
+    "desc": "Эффектный аквариумный дизайн с жемчугом и нежными голубыми переливами"
+  },
+  {
+    "thumb": "thumb_195.jpg",
+    "original": "t_c0d23eded22394c3.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "animal_print",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "olive",
+      "black"
+    ],
+    "desc": "Эффектный змеиный принт с глубоким градиентом и идеальной прорисовкой."
+  },
+  {
+    "thumb": "thumb_197.jpg",
+    "original": "t_c22da7ac87587e3f.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "gemstone",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "pink",
+      "iridescent"
+    ],
+    "desc": "Элегантный нюдовый дизайн с нежными жемчужными акцентами"
+  },
+  {
+    "thumb": "thumb_203.jpg",
+    "original": "t_c65b4b5e15dfd979.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "stiletto",
+    "length": "long",
+    "colors": [
+      "clear",
+      "iridescent"
+    ],
+    "desc": "Эффектный прозрачный дизайн с голографическими осколками"
+  },
+  {
+    "thumb": "thumb_208.jpg",
+    "original": "t_c8dbd889ff33472d.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "marble",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "white",
+      "silver"
+    ],
+    "desc": "Элегантный мраморный дизайн с серебряными акцентами в профессиональном исполнении"
+  },
+  {
+    "thumb": "thumb_219.jpg",
+    "original": "t_d389acb23ef23d4b.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "coffin",
+    "length": "extra_long",
+    "colors": [
+      "blue",
+      "silver"
+    ],
+    "desc": "Эффектный полупрозрачный дизайн с серебряным декором на длинных ногтях"
+  },
+  {
+    "thumb": "thumb_223.jpg",
+    "original": "t_d46cf5e32a1c45fb.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "other",
+    "shape": "coffin",
+    "length": "long",
+    "colors": [
+      "neon green",
+      "neon pink"
+    ],
+    "desc": "Эффектный неоновый дизайн с глиттером на длинных ногтях формы балерина"
+  },
+  {
+    "thumb": "thumb_229.jpg",
+    "original": "t_dc6b02d54624c927.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "chrome",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "gold",
+      "turquoise"
+    ],
+    "desc": "Эффектный золотой хром с минималистичным акцентом"
+  },
+  {
+    "thumb": "thumb_230.jpg",
+    "original": "t_dc79c73c03413324.png",
+    "wow": 9,
+    "realism": 10,
+    "category": "floral",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "pink",
+      "gold"
+    ],
+    "desc": "Изысканный цветочный дизайн с нежным декором и профессиональной подачей"
+  },
+  {
+    "thumb": "thumb_239.jpg",
+    "original": "t_e7c28fc0d5534d20.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "gemstone",
+    "shape": "stiletto",
+    "length": "long",
+    "colors": [
+      "gold",
+      "pink"
+    ],
+    "desc": "Роскошный золотой дизайн с эффектом драгоценных камней и сиянием."
+  },
+  {
+    "thumb": "thumb_240.jpg",
+    "original": "t_e86193b30190db27.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "black",
+      "silver"
+    ],
+    "desc": "Эффектный черный маникюр с объемным серебряным декором в стиле жидкого металла"
+  },
+  {
+    "thumb": "thumb_242.jpg",
+    "original": "t_e9b3672b8f00ca59.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "geometric",
+    "shape": "stiletto",
+    "length": "long",
+    "colors": [
+      "iridescent",
+      "pink"
+    ],
+    "desc": "Эффектный зеркальный дизайн с острыми гранями на длинных стилетных ногтях"
+  },
+  {
+    "thumb": "thumb_243.jpg",
+    "original": "t_e9c670bd5e26d466.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "dark green",
+      "gold"
+    ],
+    "desc": "Эффектный матовый дизайн с объемными золотыми каплями"
+  },
+  {
+    "thumb": "thumb_249.jpg",
+    "original": "t_f1a313af7dfd2503.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "chrome",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "purple",
+      "orange"
+    ],
+    "desc": "Эффектный градиентный хром на длинных миндалевидных ногтях"
+  },
+  {
+    "thumb": "thumb_251.jpg",
+    "original": "t_f2cf1a90ec028e48.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "minimalism",
+    "shape": "almond",
+    "length": "long",
+    "colors": [
+      "black",
+      "blue"
+    ],
+    "desc": "Элегантный матовый черный дизайн с изящными синими линиями."
+  },
+  {
+    "thumb": "thumb_253.jpg",
+    "original": "t_f541171d7121c253.png",
+    "wow": 9,
+    "realism": 9,
+    "category": "other",
+    "shape": "stiletto",
+    "length": "long",
+    "colors": [
+      "black",
+      "silver"
+    ],
+    "desc": "Эффектный готический дизайн с объемными серебряными сердцами и хромом."
+  }
+]

@@ -1,0 +1,62 @@
+{
+  "black-forest-labs/flux.2-flex": {
+    "success": 4,
+    "total": 4,
+    "tests": [
+      {
+        "scenario": "1_evening_dress",
+        "success": true,
+        "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_dbbcb4d4d329347d.png",
+        "time": 25765
+      },
+      {
+        "scenario": "2_mini_dress_club",
+        "success": true,
+        "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_16e23b6f5b904bc7.png",
+        "time": 22427
+      },
+      {
+        "scenario": "3_beach_bikini",
+        "success": true,
+        "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_193b50d701a91aa9.png",
+        "time": 21396
+      },
+      {
+        "scenario": "4_swimsuit_pool",
+        "success": true,
+        "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_f10d4d5122475332.png",
+        "time": 26947
+      }
+    ]
+  },
+  "bytedance/seedream-4.5": {
+    "success": 4,
+    "total": 4,
+    "tests": [
+      {
+        "scenario": "1_evening_dress",
+        "success": true,
+        "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_ca4ae853dda31c0b.jpg",
+        "time": 46104
+      },
+      {
+        "scenario": "2_mini_dress_club",
+        "success": true,
+        "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_5bd15ec3f8659471.jpg",
+        "time": 39128
+      },
+      {
+        "scenario": "3_beach_bikini",
+        "success": true,
+        "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_8426f3a7322e082e.jpg",
+        "time": 36447
+      },
+      {
+        "scenario": "4_swimsuit_pool",
+        "success": true,
+        "imageUrl": "https://s3.polza.ai/f/215851/2026/06/t_3c67a2d15da65632.jpg",
+        "time": 36490
+      }
+    ]
+  }
+}

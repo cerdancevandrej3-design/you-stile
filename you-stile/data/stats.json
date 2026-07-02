@@ -407,6 +407,14 @@
     {
       "type": "visit",
       "ts": "2026-05-22T02:17:15.936Z"
+    },
+    {
+      "type": "paid_promo_standard",
+      "ts": "2026-06-27T03:47:09.932Z"
+    },
+    {
+      "type": "paid_promo_standard",
+      "ts": "2026-06-27T03:49:35.900Z"
     }
   ],
   "standardPrice": 100,

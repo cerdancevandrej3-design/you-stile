@@ -1,0 +1,1511 @@
+[
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "black",
+      "silver"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный дизайн с объемными металлическими сердцами и переливающейся базой.",
+    "_thumb": "STIL-26-001_thumb.jpg",
+    "_original": "STIL-26-001.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Slightly unnatural skin texture and cuticle blending characteristic of AI generation",
+    "design_category": "cat_eye",
+    "dominant_colors": [
+      "navy",
+      "blue"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный кошачий глаз, но заметны следы генерации ИИ на коже.",
+    "_thumb": "STIL-26-003_thumb.jpg",
+    "_original": "STIL-26-003.jpg\r"
+  },
+  {
+    "nail_length": "extra_long",
+    "nail_shape": "coffin",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Slight blending inconsistencies in the smoke effect and cuticle area typical of AI generation.",
+    "design_category": "3d_aquarium",
+    "dominant_colors": [
+      "neon_pink",
+      "neon_green"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный неоновый аквариумный дизайн, но заметны следы ИИ-генерации.",
+    "_thumb": "STIL-26-005_thumb.jpg",
+    "_original": "STIL-26-005.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "AI-generated skin texture and cuticle blending issues",
+    "design_category": "other",
+    "dominant_colors": [
+      "nude",
+      "black"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Элегантный кружевной дизайн, но заметны признаки ИИ-генерации",
+    "_thumb": "STIL-26-006_thumb.jpg",
+    "_original": "STIL-26-006.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor anatomical inconsistencies in finger structure typical of AI generation",
+    "design_category": "cat_eye",
+    "dominant_colors": [
+      "magenta",
+      "black"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный кошачий глаз в пурпурных тонах, но с признаками ИИ-генерации",
+    "_thumb": "STIL-26-010_thumb.jpg",
+    "_original": "STIL-26-010.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "coffin",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "marble",
+    "dominant_colors": [
+      "emerald",
+      "silver"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Роскошный изумрудный мрамор с серебряными прожилками на длинных ногтях.",
+    "_thumb": "STIL-26-012_thumb.jpg",
+    "_original": "STIL-26-012.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Slight blending issues on the cuticle area and thumb nail structure",
+    "design_category": "marble",
+    "dominant_colors": [
+      "brown",
+      "gold"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный мраморный дизайн в шоколадных тонах с золотым шиммером.",
+    "_thumb": "STIL-26-019_thumb.jpg",
+    "_original": "STIL-26-019.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "french",
+    "dominant_colors": [
+      "nude",
+      "black",
+      "blue"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Элегантный двойной френч на длинных миндалевидных ногтях",
+    "_thumb": "STIL-26-021_thumb.jpg",
+    "_original": "STIL-26-021.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "floral",
+    "dominant_colors": [
+      "grey",
+      "pink"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Элегантный серый маникюр с изящным розовым принтом листьев",
+    "_thumb": "STIL-26-022_thumb.jpg",
+    "_original": "STIL-26-022.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "marble",
+    "dominant_colors": [
+      "white",
+      "blue"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный мраморный дизайн с неоновыми прожилками и серебряной фольгой",
+    "_thumb": "STIL-26-023_thumb.jpg",
+    "_original": "STIL-26-023.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 6,
+    "realism": 5,
+    "has_artifacts": true,
+    "artifact_notes": "AI-generated skin texture, unnatural cuticle blending, and inconsistent water droplet physics.",
+    "design_category": "floral",
+    "dominant_colors": [
+      "sage green",
+      "white"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Искусственный дизайн с каплями, выдающий нейросетевую генерацию.",
+    "_thumb": "STIL-26-024_thumb.jpg",
+    "_original": "STIL-26-024.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "coffin",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "pink",
+      "lime"
+    ],
+    "verdict": "good",
+    "one_line_description": "Милый дизайн с желейными мишками и розовым полупрозрачным покрытием",
+    "_thumb": "STIL-26-026_thumb.jpg",
+    "_original": "STIL-26-026.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "gold",
+      "black"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Роскошный золотой хром с текстурным эффектом на длинных миндалевидных ногтях.",
+    "_thumb": "STIL-26-030_thumb.jpg",
+    "_original": "STIL-26-030.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "cat_eye",
+    "dominant_colors": [
+      "black",
+      "purple",
+      "blue"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный космический дизайн с глубоким переливом кошачий глаз.",
+    "_thumb": "STIL-26-032_thumb.jpg",
+    "_original": "STIL-26-032.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Slight anatomical inconsistencies in finger structure and cuticle blending typical of AI generation.",
+    "design_category": "cat_eye",
+    "dominant_colors": [
+      "black",
+      "emerald green"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный матовый кошачий глаз, но заметны следы нейросетевой генерации.",
+    "_thumb": "STIL-26-034_thumb.jpg",
+    "_original": "STIL-26-034.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor inconsistencies in line work and cuticle blending typical of AI generation",
+    "design_category": "geometric",
+    "dominant_colors": [
+      "orange",
+      "magenta"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Яркий геометрический дизайн в оранжево-розовых тонах.",
+    "_thumb": "STIL-26-035_thumb.jpg",
+    "_original": "STIL-26-035.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "coffin",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "marble",
+    "dominant_colors": [
+      "navy",
+      "blue"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Элегантный дизайн с сочетанием глубокого синего мрамора и золотой графики",
+    "_thumb": "STIL-26-036_thumb.jpg",
+    "_original": "STIL-26-036.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "stiletto",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "minor anatomical inconsistencies in finger structure and cuticle blending typical of AI generation",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "black",
+      "silver"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Футуристичный хромированный дизайн с акцентами, но с признаками ИИ-генерации",
+    "_thumb": "STIL-26-038_thumb.jpg",
+    "_original": "STIL-26-038.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor inconsistencies in metal texture and cuticle blending typical of AI generation",
+    "design_category": "marble",
+    "dominant_colors": [
+      "white",
+      "silver"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Элегантный мраморный дизайн с серебряными акцентами",
+    "_thumb": "STIL-26-041_thumb.jpg",
+    "_original": "STIL-26-041.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "black",
+      "teal"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный матовый дизайн с объемными глянцевыми элементами",
+    "_thumb": "STIL-26-044_thumb.jpg",
+    "_original": "STIL-26-044.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor skin texture smoothing and unnatural cuticle blending typical of AI generation.",
+    "design_category": "floral",
+    "dominant_colors": [
+      "pink",
+      "gold"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Нежный цветочный дизайн с эффектом капель росы, но с признаками ИИ.",
+    "_thumb": "STIL-26-046_thumb.jpg",
+    "_original": "STIL-26-046.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "gemstone",
+    "dominant_colors": [
+      "pink",
+      "white"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Изысканный жемчужный дизайн с объемными кристаллами и нежным сиянием.",
+    "_thumb": "STIL-26-049_thumb.jpg",
+    "_original": "STIL-26-049.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "3d_aquarium",
+    "dominant_colors": [
+      "blue",
+      "teal"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный морской дизайн с аквариумным наполнением и жемчугом.",
+    "_thumb": "STIL-26-051_thumb.jpg",
+    "_original": "STIL-26-051.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Slight AI-generated texture on skin and cuticle blending",
+    "design_category": "other",
+    "dominant_colors": [
+      "black",
+      "purple"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный космический дизайн с голографическими звездами",
+    "_thumb": "STIL-26-053_thumb.jpg",
+    "_original": "STIL-26-053.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor skin texture smoothing and unnatural cuticle blending typical of AI generation",
+    "design_category": "other",
+    "dominant_colors": [
+      "black",
+      "gold"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный матовый дизайн с золотыми каплями, но с признаками ИИ",
+    "_thumb": "STIL-26-055_thumb.jpg",
+    "_original": "STIL-26-055.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor inconsistencies in the metallic drip texture and cuticle blending typical of AI generation.",
+    "design_category": "other",
+    "dominant_colors": [
+      "dark teal",
+      "gold"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный дизайн с золотыми каплями, но заметны следы ИИ-генерации.",
+    "_thumb": "STIL-26-056_thumb.jpg",
+    "_original": "STIL-26-056.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "pink",
+      "silver"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Яркий неоновый маникюр с эффектным 3D хромированным дизайном капель",
+    "_thumb": "STIL-26-057_thumb.jpg",
+    "_original": "STIL-26-057.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "orange",
+      "pink"
+    ],
+    "verdict": "good",
+    "one_line_description": "Яркий летний дизайн с градиентом, золотым декором и текстурными элементами.",
+    "_thumb": "STIL-26-062_thumb.jpg",
+    "_original": "STIL-26-062.jpg\r"
+  },
+  {
+    "nail_length": "extra_long",
+    "nail_shape": "stiletto",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "black",
+      "silver"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный матовый черный дизайн с зеркальными хромированными кончиками.",
+    "_thumb": "STIL-26-065_thumb.jpg",
+    "_original": "STIL-26-065.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "nude",
+      "gold"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Элегантный нюдовый маникюр с изящной золотой линией",
+    "_thumb": "STIL-26-067_thumb.jpg",
+    "_original": "STIL-26-067.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "animal_print",
+    "dominant_colors": [
+      "lime green",
+      "nude"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный лаймовый френч с текстурой кожи рептилии",
+    "_thumb": "STIL-26-068_thumb.jpg",
+    "_original": "STIL-26-068.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "gold",
+      "turquoise"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Безупречный золотой хром с акцентной бирюзовой линией.",
+    "_thumb": "STIL-26-069_thumb.jpg",
+    "_original": "STIL-26-069.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 6,
+    "has_artifacts": true,
+    "artifact_notes": "AI-generated skin texture and unnatural glowing line connectivity",
+    "design_category": "geometric",
+    "dominant_colors": [
+      "nude",
+      "neon_blue"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эстетичный дизайн с созвездиями, но заметны следы нейросети",
+    "_thumb": "STIL-26-074_thumb.jpg",
+    "_original": "STIL-26-074.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 10,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "3d_aquarium",
+    "dominant_colors": [
+      "blue",
+      "white"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Потрясающий аквариумный дизайн с медузами в макро-съемке",
+    "_thumb": "STIL-26-076_thumb.jpg",
+    "_original": "STIL-26-076.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "purple",
+      "orange"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный градиентный хром на длинных миндалевидных ногтях",
+    "_thumb": "STIL-26-077_thumb.jpg",
+    "_original": "STIL-26-077.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 6,
+    "realism": 5,
+    "has_artifacts": true,
+    "artifact_notes": "AI-generated text patterns on nails and unnatural skin texture/finger structure",
+    "design_category": "other",
+    "dominant_colors": [
+      "green",
+      "black"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Искусственный дизайн с матричным эффектом, заметны артефакты генерации.",
+    "_thumb": "STIL-26-080_thumb.jpg",
+    "_original": "STIL-26-080.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "AI-generated skin texture and cuticle blending issues",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "nude",
+      "silver"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Элегантный минимализм с металлическими сферами, но заметны следы ИИ.",
+    "_thumb": "STIL-26-083_thumb.jpg",
+    "_original": "STIL-26-083.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "white",
+      "cream"
+    ],
+    "verdict": "good",
+    "one_line_description": "Элегантный молочный маникюр в стиле минимализм с профессиональной съемкой.",
+    "_thumb": "STIL-26-085_thumb.jpg",
+    "_original": "STIL-26-085.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "nude",
+      "white"
+    ],
+    "verdict": "good",
+    "one_line_description": "Элегантный нюдовый маникюр с жемчужным акцентом",
+    "_thumb": "STIL-26-089_thumb.jpg",
+    "_original": "STIL-26-089.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "almond",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 7,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "nude",
+      "gold"
+    ],
+    "verdict": "good",
+    "one_line_description": "Элегантный нюдовый маникюр с золотой поталью",
+    "_thumb": "STIL-26-090_thumb.jpg",
+    "_original": "STIL-26-090.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "french",
+    "dominant_colors": [
+      "nude",
+      "white"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Элегантный нюдовый френч с деликатным акцентом из страз",
+    "_thumb": "STIL-26-093_thumb.jpg",
+    "_original": "STIL-26-093.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "3d_aquarium",
+    "dominant_colors": [
+      "white",
+      "gold"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Изысканный маникюр с объемными бабочками и жемчужным сиянием",
+    "_thumb": "STIL-26-097_thumb.jpg",
+    "_original": "STIL-26-097.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "coffin",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "cat_eye",
+    "dominant_colors": [
+      "emerald",
+      "black"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный изумрудный кошачий глаз на длинных ногтях формы балерина.",
+    "_thumb": "STIL-26-008_thumb.jpg",
+    "_original": "STIL-26-008.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Slight blending issues in the cuticle area and skin texture typical of AI generation.",
+    "design_category": "animal_print",
+    "dominant_colors": [
+      "orange",
+      "black",
+      "gold"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный леопардовый принт с золотой фольгой, но заметны следы ИИ.",
+    "_thumb": "STIL-26-011_thumb.jpg",
+    "_original": "STIL-26-011.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor anatomical inconsistencies in finger joints and skin texture typical of AI generation.",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "nude",
+      "black"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Элегантный минималистичный дизайн с тонкими линиями и акцентами.",
+    "_thumb": "STIL-26-013_thumb.jpg",
+    "_original": "STIL-26-013.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "coffin",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "red",
+      "black"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный красный хром с идеальным градиентом на длинных ногтях.",
+    "_thumb": "STIL-26-014_thumb.jpg",
+    "_original": "STIL-26-014.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "square",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "AI-generated skin texture and cuticle blending issues",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "black",
+      "neon_yellow"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Стильный минимализм с неоновыми полосками, но заметны следы ИИ.",
+    "_thumb": "STIL-26-015_thumb.jpg",
+    "_original": "STIL-26-015.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "pink",
+      "lime",
+      "yellow",
+      "blue",
+      "orange"
+    ],
+    "verdict": "good",
+    "one_line_description": "Яркий разноцветный хром на миндалевидных ногтях средней длины",
+    "_thumb": "STIL-26-017_thumb.jpg",
+    "_original": "STIL-26-017.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "cat_eye",
+    "dominant_colors": [
+      "green",
+      "black"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный изумрудный кошачий глаз с графичным узором на длинных ногтях.",
+    "_thumb": "STIL-26-020_thumb.jpg",
+    "_original": "STIL-26-020.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "red",
+      "gold"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный красный маникюр с золотой поталью и глянцевым финишем",
+    "_thumb": "STIL-26-028_thumb.jpg",
+    "_original": "STIL-26-028.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "animal_print",
+    "dominant_colors": [
+      "emerald green",
+      "gold"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Изумрудный маникюр с текстурой кожи крокодила и золотыми акцентами",
+    "_thumb": "STIL-26-029_thumb.jpg",
+    "_original": "STIL-26-029.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 6,
+    "realism": 5,
+    "has_artifacts": true,
+    "artifact_notes": "AI-generated anatomy issues with fingers and cuticle blending",
+    "design_category": "other",
+    "dominant_colors": [
+      "purple",
+      "yellow"
+    ],
+    "verdict": "reject",
+    "one_line_description": "ИИ-генерация с анатомическими ошибками, не подходит для портфолио",
+    "_thumb": "STIL-26-033_thumb.jpg",
+    "_original": "STIL-26-033.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "terracotta",
+      "olive_green"
+    ],
+    "verdict": "good",
+    "one_line_description": "Стильный осенний дизайн в теплых тонах с абстрактными мазками",
+    "_thumb": "STIL-26-037_thumb.jpg",
+    "_original": "STIL-26-037.jpg\r"
+  },
+  {
+    "nail_length": "extra_long",
+    "nail_shape": "stiletto",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 10,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "3d_aquarium",
+    "dominant_colors": [
+      "blue",
+      "orange"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Потрясающий аквариумный дизайн с рыбками кои и 3D-деталями.",
+    "_thumb": "STIL-26-039_thumb.jpg",
+    "_original": "STIL-26-039.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "animal_print",
+    "dominant_colors": [
+      "green",
+      "gold"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный дизайн с текстурой змеиной кожи в глубоких зеленых тонах",
+    "_thumb": "STIL-26-040_thumb.jpg",
+    "_original": "STIL-26-040.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "3d_aquarium",
+    "dominant_colors": [
+      "pink",
+      "iridescent"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный 3D-дизайн с голографическими элементами и аквариумным сиянием",
+    "_thumb": "STIL-26-042_thumb.jpg",
+    "_original": "STIL-26-042.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 6,
+    "realism": 4,
+    "has_artifacts": true,
+    "artifact_notes": "AI-generated skin texture, unnatural finger anatomy and cuticle blending.",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "neon pink",
+      "neon orange",
+      "electric blue"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Яркий неоновый хром, но заметны явные артефакты ИИ.",
+    "_thumb": "STIL-26-045_thumb.jpg",
+    "_original": "STIL-26-045.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor blending issues on cuticle area and skin texture typical of AI generation",
+    "design_category": "geometric",
+    "dominant_colors": [
+      "olive green",
+      "cream"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Стильный оливковый дизайн с геометрией и мазками, но заметны следы ИИ.",
+    "_thumb": "STIL-26-048_thumb.jpg",
+    "_original": "STIL-26-048.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "stiletto",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "orange",
+      "pink"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный оранжевый дизайн с голографическими хлопьями и аквариумным эффектом.",
+    "_thumb": "STIL-26-052_thumb.jpg",
+    "_original": "STIL-26-052.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Slight anatomical inconsistencies in finger joints and cuticle blending typical of AI generation.",
+    "design_category": "other",
+    "dominant_colors": [
+      "grey",
+      "silver"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Стильный серый маникюр с металлическими каплями, но заметны следы ИИ.",
+    "_thumb": "STIL-26-054_thumb.jpg",
+    "_original": "STIL-26-054.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor blending inconsistencies in the circuit board texture and digital glow effects.",
+    "design_category": "geometric",
+    "dominant_colors": [
+      "black",
+      "neon_pink",
+      "cyan"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Футуристичный киберпанк-дизайн с неоновыми линиями и 3D-элементами.",
+    "_thumb": "STIL-26-060_thumb.jpg",
+    "_original": "STIL-26-060.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "french",
+    "dominant_colors": [
+      "nude",
+      "gold"
+    ],
+    "verdict": "good",
+    "one_line_description": "Элегантный нюдовый френч с золотой текстурой под рептилию.",
+    "_thumb": "STIL-26-066_thumb.jpg",
+    "_original": "STIL-26-066.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "black",
+      "gold"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Элегантный черный маникюр с минималистичными акцентами",
+    "_thumb": "STIL-26-071_thumb.jpg",
+    "_original": "STIL-26-071.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 8,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "silver",
+      "white"
+    ],
+    "verdict": "good",
+    "one_line_description": "Эффектный зеркальный хром с жемчужным акцентом.",
+    "_thumb": "STIL-26-073_thumb.jpg",
+    "_original": "STIL-26-073.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "black",
+      "white"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Изысканный черный маникюр с детальной белой кружевной росписью",
+    "_thumb": "STIL-26-078_thumb.jpg",
+    "_original": "STIL-26-078.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Minor AI-generated texture inconsistencies in the cuticle area and flower details",
+    "design_category": "floral",
+    "dominant_colors": [
+      "blue",
+      "silver"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Нежный голубой дизайн с сухоцветами и серебряной фольгой",
+    "_thumb": "STIL-26-081_thumb.jpg",
+    "_original": "STIL-26-081.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 8,
+    "has_artifacts": true,
+    "artifact_notes": "Slightly unnatural blending in the cat-eye effect and cuticle area typical of AI generation",
+    "design_category": "cat_eye",
+    "dominant_colors": [
+      "navy blue",
+      "silver"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Эффектный глубокий кошачий глаз на длинных миндалевидных ногтях",
+    "_thumb": "STIL-26-082_thumb.jpg",
+    "_original": "STIL-26-082.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "pink",
+      "pearl"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Идеальный жемчужный хром на длинных миндалевидных ногтях",
+    "_thumb": "STIL-26-084_thumb.jpg",
+    "_original": "STIL-26-084.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "almond",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 6,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "nude",
+      "white"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Классический нюдовый маникюр, слишком простой для премиум-сегмента.",
+    "_thumb": "STIL-26-086_thumb.jpg",
+    "_original": "STIL-26-086.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 7,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "pink",
+      "nude"
+    ],
+    "verdict": "good",
+    "one_line_description": "Элегантный нюдовый маникюр в форме миндаль",
+    "_thumb": "STIL-26-087_thumb.jpg",
+    "_original": "STIL-26-087.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "oval",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 6,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "brown"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Классический коричневый маникюр, слишком просто для WOW-эффекта.",
+    "_thumb": "STIL-26-088_thumb.jpg",
+    "_original": "STIL-26-088.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "oval",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 6,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "french",
+    "dominant_colors": [
+      "white",
+      "gold"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Классический молочный френч с золотым кончиком, слишком простой дизайн.",
+    "_thumb": "STIL-26-091_thumb.jpg",
+    "_original": "STIL-26-091.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "nude",
+      "silver"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Элегантный нюдовый маникюр с деликатным шиммером и идеальной формой.",
+    "_thumb": "STIL-26-092_thumb.jpg",
+    "_original": "STIL-26-092.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "chrome",
+    "dominant_colors": [
+      "purple",
+      "blue"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Эффектный голографический хром на длинных миндалевидных ногтях",
+    "_thumb": "STIL-26-094_thumb.jpg",
+    "_original": "STIL-26-094.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "oval",
+    "shot_type": "standard",
+    "lighting": "professional_softbox",
+    "wow_factor": 6,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "minimalism",
+    "dominant_colors": [
+      "pastel purple",
+      "pastel peach"
+    ],
+    "verdict": "reject",
+    "one_line_description": "Аккуратный, но слишком простой и короткий маникюр в пастельных тонах.",
+    "_thumb": "STIL-26-095_thumb.jpg",
+    "_original": "STIL-26-095.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "floral",
+    "dominant_colors": [
+      "clear",
+      "gold",
+      "pink"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Изысканный прозрачный дизайн с сухоцветами и золотой поталью",
+    "_thumb": "STIL-26-096_thumb.jpg",
+    "_original": "STIL-26-096.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 10,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "black",
+      "gold"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Роскошный черный маникюр с золотым барельефным декором в стиле барокко.",
+    "_thumb": "STIL-26-098_thumb.jpg",
+    "_original": "STIL-26-098.jpg\r"
+  },
+  {
+    "nail_length": "medium",
+    "nail_shape": "almond",
+    "shot_type": "standard",
+    "lighting": "natural",
+    "wow_factor": 7,
+    "realism": 10,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "white",
+      "red"
+    ],
+    "verdict": "good",
+    "one_line_description": "Милый маникюр с объемными вишенками на нюдовой базе.",
+    "_thumb": "STIL-26-099_thumb.jpg",
+    "_original": "STIL-26-099.jpg\r"
+  },
+  {
+    "nail_length": "long",
+    "nail_shape": "almond",
+    "shot_type": "macro_closeup",
+    "lighting": "professional_softbox",
+    "wow_factor": 9,
+    "realism": 9,
+    "has_artifacts": false,
+    "artifact_notes": "",
+    "design_category": "other",
+    "dominant_colors": [
+      "navy blue",
+      "gold"
+    ],
+    "verdict": "wow",
+    "one_line_description": "Элегантный темно-синий маникюр с изысканным золотым барочным узором",
+    "_thumb": "STIL-26-100_thumb.jpg",
+    "_original": "STIL-26-100.jpg\r"
+  }
+]
