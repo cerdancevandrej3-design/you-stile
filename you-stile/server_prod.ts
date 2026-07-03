@@ -585,13 +585,27 @@ async function startServer() {
     if (!code) return res.json({ success: false, reason: "no_code" });
     const entry = promos[code];
     if (!entry) return res.json({ success: false, reason: "not_found" });
-    if (entry.used) return res.json({ success: true, tier: entry.tier, already: true });
-    entry.used = true;
-    entry.redeemedAt = new Date().toISOString();
-    savePromos(promos);
-    incPromoSale(entry.tier);
-    return res.json({ success: true, tier: entry.tier });
+    if (entry.used) return res.json({ success: false, reason: "used" });
+    // НЕ помечаем как использованный здесь — только после успешной генерации в /api/stylize.
+    return res.json({ success: true, tier: entry.tier, code });
   });
+
+  // Помечает промокод как использованный. Вызывается ТОЛЬКО после успешной генерации образов.
+  const markPromoUsed = (code: string): boolean => {
+    try {
+      const key = (code || "").toString().trim().toUpperCase();
+      if (!key) return false;
+      const store = loadPromos();
+      const entry = store[key];
+      if (!entry) return false;
+      if (entry.used) return true;
+      entry.used = true;
+      entry.redeemedAt = new Date().toISOString();
+      savePromos(store);
+      incPromoSale(entry.tier);
+      return true;
+    } catch { return false; }
+  };
 
   app.post("/api/generate-promo", (req: Request, res: Response) => {
     if ((req.body.secret || "") !== "stilist-admin-key-913260") {
@@ -1582,6 +1596,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         ? `\n🗓️ Пользователь запросил образы для сезона: ${detectedSeason}. Все 3 образа должны соответствовать этому сезону.`
         : "";
       const wishes = sanitizeWishes(rawWishes);
+      const promoCode = (req.body.promoCode || "").toString().trim().toUpperCase();
       const budgetRaw = parseInt((req.body.budget || "").toString()) || 0;
       const budgetInstruction = budgetRaw > 0
         ? `\n\n💰 БЮДЖЕТ ПОЛЬЗОВАТЕЛЯ: ${budgetRaw.toLocaleString("ru-RU")} ₽ на один образ. КРИТИЧЕСКИ ВАЖНО: сумма всех items[] в каждом образе НЕ должна превышать ${budgetRaw.toLocaleString("ru-RU")} ₽. Подбирай реальные вещи в этом ценовом диапазоне. Расставляй приоритеты: сначала ключевые вещи образа, потом аксессуары. Указывай честные цены — не занижай и не завышай.`
@@ -1883,6 +1898,12 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
             JSON.stringify({ greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null, looks: looksForStorage, savedAt: new Date().toISOString() })
           );
         } catch (e) { console.error("[Result] Save failed:", e); }
+      }
+
+      // Промокод помечаем использованным ТОЛЬКО после успешной генерации.
+      // Если упадём в catch ниже — код останется "не использован", пользователь сможет повторить.
+      if (promoCode) {
+        try { markPromoUsed(promoCode); } catch (e) { console.error("[Promo] markPromoUsed failed:", e); }
       }
 
       safeWrite(JSON.stringify({

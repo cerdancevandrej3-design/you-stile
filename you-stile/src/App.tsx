@@ -809,11 +809,13 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
             body: JSON.stringify({ code: promoCode.trim() }),
           });
           const rj = await rd.json();
-          if (rj.success && !rj.already) {
+          if (rj.success) {
+            // Сохраняем промокод — он будет помечен "used" на сервере только после успешной генерации.
+            localStorage.setItem("you-stile-promo-code", promoCode.trim().toUpperCase());
             onPaid(rj.tier || tier);
             onClose();
           } else {
-            setPromoStatus("used");
+            setPromoStatus(rj.reason === "used" ? "used" : "invalid");
           }
         } catch {
           setPromoStatus("invalid");
@@ -1450,9 +1452,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
   const [height, setHeight] = useState("");
   const [weight, setWeight] = useState("");
   const [wishes, setWishes] = useState("");
-  const [birthDay, setBirthDay] = useState("");
-  const [birthMonth, setBirthMonth] = useState("");
-  const [birthYear, setBirthYear] = useState("");
+  const [birthDay, setBirthDay] = useState(() => localStorage.getItem("you-stile-birth-day") || "");
+  const [birthMonth, setBirthMonth] = useState(() => localStorage.getItem("you-stile-birth-month") || "");
+  const [birthYear, setBirthYear] = useState(() => localStorage.getItem("you-stile-birth-year") || "");
   const [birthRegion, setBirthRegion] = useState("");
   const [birthCity, setBirthCity] = useState("");
   const [birthTime, setBirthTime] = useState("");
@@ -1466,6 +1468,10 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
   const [reviewText, setReviewText] = useState("");
   const [reviewSent, setReviewSent] = useState(false);
   const [viewMode, setViewMode] = useState<'form' | 'result'>('form');
+
+  useEffect(() => { localStorage.setItem("you-stile-birth-day", birthDay); }, [birthDay]);
+  useEffect(() => { localStorage.setItem("you-stile-birth-month", birthMonth); }, [birthMonth]);
+  useEffect(() => { localStorage.setItem("you-stile-birth-year", birthYear); }, [birthYear]);
 
   // Плавная анимация прогресс-бара — ползёт непрерывно, реальный прогресс только ускоряет
   useEffect(() => {
@@ -1568,32 +1574,39 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
   };
 
   const resizeImage = (file: File): Promise<Blob> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = new window.Image();
-        img.src = e.target?.result as string;
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          let { width, height } = img;
-          const max = 800; // Shrink to save AI tokens
-          if (width > height) {
-            if (width > max) { height = Math.round((height * max) / width); width = max; }
-          } else {
-            if (height > max) { width = Math.round((width * max) / height); height = max; }
-          }
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          ctx?.drawImage(img, 0, 0, width, height);
-          canvas.toBlob((blob) => {
-            if (blob) resolve(blob); else reject(new Error('Resize failed'));
-          }, 'image/jpeg', 0.8);
+    return new Promise((resolve) => {
+      try {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const img = new window.Image();
+            img.src = e.target?.result as string;
+            img.onload = () => {
+              try {
+                const canvas = document.createElement('canvas');
+                let { width, height } = img;
+                const max = 800; // Shrink to save AI tokens
+                if (width > height) {
+                  if (width > max) { height = Math.round((height * max) / width); width = max; }
+                } else {
+                  if (height > max) { width = Math.round((width * max) / height); height = max; }
+                }
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) { resolve(file); return; }
+                ctx.drawImage(img, 0, 0, width, height);
+                canvas.toBlob((blob) => {
+                  if (blob) resolve(blob); else resolve(file);
+                }, 'image/jpeg', 0.8);
+              } catch { resolve(file); }
+            };
+            img.onerror = () => resolve(file);
+          } catch { resolve(file); }
         };
-        img.onerror = reject;
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
+        reader.onerror = () => resolve(file);
+        reader.readAsDataURL(file);
+      } catch { resolve(file); }
     });
   };
 
@@ -1662,6 +1675,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
       const pendingId = localStorage.getItem("pending_payment_id");
       if (pendingId) formData.append("paymentId", pendingId);
 
+      const promoCode = localStorage.getItem("you-stile-promo-code");
+      if (promoCode) formData.append("promoCode", promoCode);
+
       const response = await fetch("/api/stylize", {
         method: "POST",
         body: formData,
@@ -1715,6 +1731,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
             }, 100);
           } else if (data.type === "result") {
             setLoadingState({ step: 5, text: "Готово!" });
+            // Промокод успешно "сгорел" на сервере — очищаем, чтобы не передавать повторно.
+            localStorage.removeItem("you-stile-promo-code");
             // Save look names to history
             if (data.looks?.length) savePastLooks(data.looks.map((l: any) => l.lookName).filter(Boolean));
             // Update with enriched items (real products)
