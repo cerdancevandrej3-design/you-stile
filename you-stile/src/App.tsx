@@ -2520,9 +2520,21 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
             </AnimatePresence>
 
             <h2 className="text-3xl font-serif text-charcoal mb-2">Создать новый образ</h2>
-            <p className="text-charcoal/60 mb-8">{tier === "standard" ? "Загрузите фото, укажите рост и вес — стилист создаст 3 образа специально для вас." : "Загрузите до 5 фото, укажите параметры, и наш ИИ подберет идеальный гардероб."}</p>
+            <p className="text-charcoal/60 mb-4">{tier === "standard" ? "Загрузите фото, укажите рост и вес — стилист создаст 3 образа специально для вас." : "Загрузите до 5 фото, укажите параметры, и наш ИИ подберет идеальный гардероб."}</p>
+
+            {!loadingState && viewMode === 'form' && (
+              <div className="w-full max-w-md mx-auto mb-6 bg-gold/10 border border-gold/30 rounded-xl p-3 text-sm text-charcoal/80 flex items-start gap-2.5">
+                <Sparkles className="w-4 h-4 text-gold flex-shrink-0 mt-0.5" />
+                <span>
+                  {tier === "premium"
+                    ? "Подождите 4–7 минут — стилист внимательно оценит вашу фактуру и лицо, подберёт лучшие образы под ваш повод и бюджет. Можно налить кофе или почитать новости ☕"
+                    : "Подождите 2–4 минуты — стилист анализирует все ваши данные и создаёт образы. Можно немного отдохнуть ☕"}
+                </span>
+              </div>
+            )}
 
             {errorMsg && (
+
               <div className="bg-red-50 text-red-600 p-4 rounded-xl mb-6 flex items-start gap-3 border border-red-100">
                 <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                 <p className="text-sm font-medium leading-relaxed">{errorMsg}</p>
