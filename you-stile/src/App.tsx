@@ -6,7 +6,7 @@
 import { useState, useRef, useEffect, ChangeEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download, Star, Share2 } from 'lucide-react';
+import { Menu, Smartphone, Sparkles, Shirt, ArrowRight, Check, ChevronLeft, ChevronRight, Upload, X, ShoppingBag, AlertCircle, Camera, Download, Star, Share2, Heart } from 'lucide-react';
 
 // --- Category emoji mapping ---
 const CATEGORY_EMOJI: Record<string, string> = {
@@ -22,6 +22,53 @@ const CATEGORY_EMOJI: Record<string, string> = {
   "shoes": "👟", "footwear": "👟",
 };
 
+const CATEGORY_STYLES: Record<string, { bg: string; text: string; border: string }> = {
+  "верх": { bg: "bg-amber-100", text: "text-amber-900", border: "border-amber-300" },
+  "верхняя одежда": { bg: "bg-stone-200", text: "text-stone-900", border: "border-stone-400" },
+  "низ": { bg: "bg-blue-100", text: "text-blue-900", border: "border-blue-300" },
+  "обувь": { bg: "bg-emerald-100", text: "text-emerald-900", border: "border-emerald-300" },
+  "сумка": { bg: "bg-rose-100", text: "text-rose-900", border: "border-rose-300" },
+  "украшения": { bg: "bg-fuchsia-100", text: "text-fuchsia-900", border: "border-fuchsia-300" },
+  "аксессуары": { bg: "bg-purple-100", text: "text-purple-900", border: "border-purple-300" },
+  "головной убор": { bg: "bg-orange-100", text: "text-orange-900", border: "border-orange-300" },
+  "пиджак": { bg: "bg-stone-200", text: "text-stone-900", border: "border-stone-400" },
+  "платье": { bg: "bg-amber-100", text: "text-amber-900", border: "border-amber-300" },
+  "брюки": { bg: "bg-blue-100", text: "text-blue-900", border: "border-blue-300" },
+  "юбка": { bg: "bg-amber-100", text: "text-amber-900", border: "border-amber-300" },
+  "аксессуар": { bg: "bg-purple-100", text: "text-purple-900", border: "border-purple-300" },
+};
+const getCategoryStyle = (cat: string) => CATEGORY_STYLES[cat.toLowerCase()] || { bg: "bg-charcoal", text: "text-ivory", border: "border-gold" };
+
+const getDetailSectionKey = (header: string) => {
+  const lower = header.toLowerCase();
+  if (lower.includes("концепц")) return "концепци";
+  if (lower.includes("одежд") || lower.includes("верх") || lower.includes("пиджак") || lower.includes("платье") || lower.includes("брюки") || lower.includes("юбка")) return "одежд";
+  if (lower.includes("обув")) return "обув";
+  if (lower.includes("аксесс")) return "аксессуар";
+  if (lower.includes("украш")) return "аксессуар";
+  if (lower.includes("причёск") || lower.includes("причес")) return "причёск";
+  if (lower.includes("груминг")) return "груминг";
+  if (lower.includes("парф")) return "аромат";
+  if (lower.includes("почему")) return "почему";
+  if (lower.includes("совет")) return "совет";
+  if (lower.includes("покуп")) return "покупк";
+  return "";
+};
+
+const getDetailSectionEmoji = (header: string) => {
+  const lower = header.toLowerCase();
+  if (lower.includes("концепц")) return "🎨";
+  if (lower.includes("пиджак") || lower.includes("верх") || lower.includes("платье") || lower.includes("брюки") || lower.includes("юбка") || lower.includes("одежд")) return "👕";
+  if (lower.includes("обув")) return "👟";
+  if (lower.includes("аксесс")) return "💎";
+  if (lower.includes("украш")) return "💍";
+  if (lower.includes("причёск") || lower.includes("причес")) return "💇";
+  if (lower.includes("парф")) return "🌸";
+  if (lower.includes("почему")) return "✨";
+  if (lower.includes("совет") || lower.includes("покуп")) return "🛍";
+  return "🎨";
+};
+
 // --- Progress stages ---
 const PROGRESS_STAGES = [
   { step: 0.5, label: "Оптимизация фото" },
@@ -31,6 +78,13 @@ const PROGRESS_STAGES = [
   { step: 3.0, label: "Создание образов" },
   { step: 4.0, label: "Поиск товаров" },
   { step: 5.0, label: "Готово!" },
+];
+
+// --- Demo gallery images (public/gallery/) ---
+const GALLERY_IMAGES = [
+  "/gallery/gen1.jpg","/gallery/gen2.jpg","/gallery/gen3.jpg","/gallery/gen4.jpg",
+  "/gallery/gen5.jpg","/gallery/gen6.jpg","/gallery/gen7.jpg","/gallery/gen8.jpg",
+  "/gallery/gen9.jpg","/gallery/gen10.jpg","/gallery/gen11.jpg","/gallery/gen12.jpg",
 ];
 function getActiveStageIndex(s: number): number {
   for (let i = PROGRESS_STAGES.length - 1; i >= 0; i--) {
@@ -64,13 +118,17 @@ function saveName(name: string) {
 }
 
 // --- My paid orders (persistent access to recovered looks) ---
-type MyOrder = { paymentId: string; tier: Tier; createdAt: number };
+type MyOrder = { paymentId: string; tier: Tier; createdAt: number; thumbnail?: string };
 function getMyOrders(): MyOrder[] {
   try { return JSON.parse(localStorage.getItem("you-stile-my-orders") || "[]"); } catch { return []; }
 }
 function saveMyOrder(order: MyOrder) {
   const all = getMyOrders().filter(o => o.paymentId !== order.paymentId);
   all.push(order);
+  localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-20)));
+}
+function updateMyOrderThumbnail(paymentId: string, thumbnail: string) {
+  const all = getMyOrders().map(o => o.paymentId === paymentId ? { ...o, thumbnail } : o);
   localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-20)));
 }
 function removeMyOrder(paymentId: string) {
@@ -1240,13 +1298,592 @@ const ShareMenu = ({ look, lookIdx: _lookIdx }: { look: any; lookIdx: number }) 
   );
 };
 
+// --- Lightbox: fullscreen image viewer with zoom/nav/download ---
+type LightboxImage = { src: string; alt?: string; lookName?: string };
+type LightboxState = { images: LightboxImage[]; index: number } | null;
+
+const Lightbox = ({ state, onClose, onNavigate }: { state: LightboxState; onClose: () => void; onNavigate: (index: number) => void }) => {
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragStart = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+
+  useEffect(() => {
+    if (!state) return;
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [state, state?.index]);
+
+  useEffect(() => {
+    if (!state) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowRight") onNavigate((state.index + 1) % state.images.length);
+      else if (e.key === "ArrowLeft") onNavigate((state.index - 1 + state.images.length) % state.images.length);
+      else if (e.key === "+" || e.key === "=") setZoom(z => Math.min(z + 0.25, 4));
+      else if (e.key === "-") setZoom(z => Math.max(z - 0.25, 1));
+      else if (e.key === "0") { setZoom(1); setPan({ x: 0, y: 0 }); }
+    };
+    window.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = ""; };
+  }, [state, onClose, onNavigate]);
+
+  if (!state) return null;
+  const current = state.images[state.index];
+
+  const handleDownload = async () => {
+    try {
+      const safeName = (current.lookName || `look-${state.index + 1}`).replace(/[^а-яa-z0-9\-_ ]/gi, '').trim() || `look-${state.index + 1}`;
+      const resp = await fetch(current.src);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${safeName}.jpg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      window.open(current.src, '_blank');
+    }
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (zoom === 1) return;
+    dragStart.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragStart.current) return;
+    setPan({ x: dragStart.current.px + (e.clientX - dragStart.current.x), y: dragStart.current.py + (e.clientY - dragStart.current.y) });
+  };
+  const onPointerUp = () => { dragStart.current = null; };
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[300] bg-charcoal/95 backdrop-blur-sm flex items-center justify-center select-none"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ touchAction: zoom > 1 ? 'none' : 'pinch-zoom' }}
+    >
+      {/* Top bar */}
+      <div className="absolute top-0 left-0 right-0 z-10 px-4 py-3 flex items-center justify-between bg-gradient-to-b from-black/40 to-transparent">
+        <div className="text-ivory/80 text-sm font-medium truncate max-w-[60%]">
+          {current.lookName ? `Образ: ${current.lookName}` : `${state.index + 1} / ${state.images.length}`}
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setZoom(z => Math.max(z - 0.25, 1))} className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-ivory transition-colors" aria-label="Уменьшить">
+            <span className="text-xl leading-none">−</span>
+          </button>
+          <span className="text-ivory/70 text-xs w-12 text-center">{Math.round(zoom * 100)}%</span>
+          <button onClick={() => setZoom(z => Math.min(z + 0.25, 4))} className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-ivory transition-colors" aria-label="Увеличить">
+            <span className="text-xl leading-none">+</span>
+          </button>
+          <button onClick={handleDownload} className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-ivory transition-colors" aria-label="Скачать">
+            <Download className="w-5 h-5" />
+          </button>
+          <button onClick={onClose} className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-ivory transition-colors" aria-label="Закрыть">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Prev / Next */}
+      {state.images.length > 1 && (
+        <>
+          <button
+            onClick={(e) => { e.stopPropagation(); onNavigate((state.index - 1 + state.images.length) % state.images.length); }}
+            className="absolute left-2 md:left-4 z-10 p-3 rounded-full bg-white/10 hover:bg-white/20 text-ivory transition-colors"
+            aria-label="Предыдущий"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onNavigate((state.index + 1) % state.images.length); }}
+            className="absolute right-2 md:right-4 z-10 p-3 rounded-full bg-white/10 hover:bg-white/20 text-ivory transition-colors"
+            aria-label="Следующий"
+          >
+            <ChevronRight className="w-6 h-6" />
+          </button>
+        </>
+      )}
+
+      {/* Image */}
+      <div
+        className="flex items-center justify-center w-full h-full overflow-hidden"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onDoubleClick={() => { if (zoom === 1) { setZoom(2); } else { setZoom(1); setPan({ x: 0, y: 0 }); } }}
+      >
+        <img
+          src={current.src}
+          alt={current.alt || current.lookName || ''}
+          draggable={false}
+          className="max-w-[92vw] max-h-[88vh] object-contain transition-transform duration-150"
+          style={{
+            transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+            cursor: zoom > 1 ? (dragStart.current ? 'grabbing' : 'grab') : 'zoom-in',
+          }}
+          onClick={(e) => { e.stopPropagation(); if (zoom === 1) setZoom(2); }}
+        />
+      </div>
+
+      {/* Hint */}
+      <div className="absolute bottom-3 left-0 right-0 text-center text-ivory/40 text-xs pointer-events-none">
+        {zoom > 1 ? 'Перетаскивайте для перемещения · двойной клик — сброс' : 'Клик — увеличить · двойной клик — 2× · ←/→ — навигация · Esc — закрыть'}
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+type NailRecord = {
+  id: number;
+  filename: string;
+  originalPath: string | null;
+  thumbPath: string | null;
+  source: string;
+  color: string;
+  complexity: string;
+  tags: string[];
+  verdict: string;
+  wow_factor: number | null;
+  design_category: string | null;
+  shape: string | null;
+  length: string | null;
+  description: string | null;
+};
+
+const QUIZ_DECK_SIZE = 30;
+const QUIZ_SWIPE_THRESHOLD = 120;
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function pickQuizDeck(pool: NailRecord[]): NailRecord[] {
+  const good = pool.filter(r => r.thumbPath && r.originalPath);
+  return shuffleArray(good).slice(0, QUIZ_DECK_SIZE);
+}
+
+function computeTop3(pool: NailRecord[], deck: NailRecord[], likedIds: Set<number>): NailRecord[] {
+  const liked = deck.filter(d => likedIds.has(d.id));
+  if (liked.length === 0) {
+    const top = [...pool].filter(r => r.verdict === "wow" && !deck.includes(r) && r.thumbPath && r.originalPath)
+      .sort((a, b) => (b.wow_factor || 0) - (a.wow_factor || 0));
+    const seen = new Set<string>();
+    const out: NailRecord[] = [];
+    for (const r of top) {
+      const cat = r.design_category || "other";
+      if (seen.has(cat)) continue;
+      seen.add(cat);
+      out.push(r);
+      if (out.length >= 3) break;
+    }
+    return out;
+  }
+  const tagFreq = new Map<string, number>();
+  const colorFreq = new Map<string, number>();
+  const catFreq = new Map<string, number>();
+  const shapeFreq = new Map<string, number>();
+  const lengthFreq = new Map<string, number>();
+  liked.forEach(r => {
+    r.tags.forEach(t => tagFreq.set(t, (tagFreq.get(t) || 0) + 1));
+    colorFreq.set(r.color, (colorFreq.get(r.color) || 0) + 1);
+    if (r.design_category) catFreq.set(r.design_category, (catFreq.get(r.design_category) || 0) + 1);
+    if (r.shape) shapeFreq.set(r.shape, (shapeFreq.get(r.shape) || 0) + 1);
+    if (r.length) lengthFreq.set(r.length, (lengthFreq.get(r.length) || 0) + 1);
+  });
+  const deckIds = new Set(deck.map(d => d.id));
+  const scored = pool
+    .filter(r => (r.verdict === "wow" || r.verdict === "good") && !deckIds.has(r.id) && r.thumbPath && r.originalPath)
+    .map(r => {
+      const tagScore = 2 * r.tags.reduce((s, t) => s + (tagFreq.get(t) || 0), 0);
+      const colorScore = 3 * (colorFreq.get(r.color) || 0);
+      const catScore = 5 * (r.design_category ? (catFreq.get(r.design_category) || 0) : 0);
+      const shapeScore = 2 * (r.shape ? (shapeFreq.get(r.shape) || 0) : 0);
+      const lengthScore = 1 * (r.length ? (lengthFreq.get(r.length) || 0) : 0);
+      const wowScore = (r.wow_factor || 0) * 0.5;
+      return { r, score: tagScore + colorScore + catScore + shapeScore + lengthScore + wowScore };
+    })
+    .sort((a, b) => b.score - a.score);
+  const seenCats = new Set<string>();
+  const out: NailRecord[] = [];
+  for (const { r } of scored) {
+    const cat = r.design_category || "other";
+    if (seenCats.has(cat)) continue;
+    seenCats.add(cat);
+    out.push(r);
+    if (out.length >= 3) break;
+  }
+  if (out.length < 3) {
+    for (const { r } of scored) {
+      if (out.includes(r)) continue;
+      out.push(r);
+      if (out.length >= 3) break;
+    }
+  }
+  return out;
+}
+
+async function downloadImage(url: string, filename: string) {
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(objUrl);
+  } catch {
+    window.open(url, "_blank");
+  }
+}
+
+async function shareImage(url: string, title: string) {
+  try {
+    if (navigator.share) {
+      await navigator.share({ title, text: "Посмотри какой дизайн ногтей мне подобрал ИИ-стилист!", url });
+    } else {
+      await navigator.clipboard.writeText(url);
+      alert("Ссылка скопирована — вставь её куда хочешь поделиться.");
+    }
+  } catch {}
+}
+
+const NailsQuizModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => {
+  const [step, setStep] = useState<"intro" | "swipe" | "result">("intro");
+  const [pool, setPool] = useState<NailRecord[]>([]);
+  const [deck, setDeck] = useState<NailRecord[]>([]);
+  const [index, setIndex] = useState(0);
+  const [liked, setLiked] = useState<Set<number>>(new Set());
+  const [top3, setTop3] = useState<NailRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [dragX, setDragX] = useState(0);
+  const [exitDir, setExitDir] = useState<null | "left" | "right">(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setStep("intro"); setDeck([]); setIndex(0); setLiked(new Set()); setTop3([]); setError(null);
+      setDragX(0); setExitDir(null);
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (step === "swipe" && index < deck.length) {
+      const next = deck[index + 1];
+      if (next?.thumbPath) {
+        const img = new Image();
+        img.src = next.thumbPath;
+      }
+    }
+  }, [step, index, deck]);
+
+  if (!isOpen) return null;
+
+  const startQuiz = async () => {
+    setLoading(true); setError(null);
+    try {
+      const res = await fetch("/nails/all/index.json").catch(() => null);
+      let data: NailRecord[];
+      if (res && res.ok) {
+        const rawFiles: string[] = await res.json();
+        const files = rawFiles.filter(f => f !== 'index.json' && /\.(jpe?g|png|webp)$/i.test(f));
+        data = files.map((filename, idx) => ({
+          id: idx,
+          filename,
+          originalPath: `/nails/all/${filename}`,
+          thumbPath: `/nails/all/${filename}`,
+          source: "nails-all",
+          color: "",
+          complexity: "",
+          tags: [],
+          verdict: "good",
+          wow_factor: null,
+          design_category: null,
+          shape: null,
+          length: null,
+          description: null,
+        }));
+      } else {
+        const res2 = await fetch("/nails/nails-data.json");
+        if (!res2.ok) throw new Error("Не удалось загрузить базу дизайнов");
+        const raw = await res2.json();
+        const entries = Object.entries(raw) as [string, any][];
+        data = entries.map(([filename, val], idx) => {
+          const base = filename.replace(/\.[^.]+$/, "");
+          const thumbFile = `t_${base}.png`;
+          return {
+            id: idx,
+            filename,
+            originalPath: `/nails/all/${thumbFile}`,
+            thumbPath: `/nails/all/${thumbFile}`,
+            source: "nails-data",
+            color: (val.colors || []).join(", "),
+            complexity: val.complexity || "",
+            tags: val.tags || [],
+            verdict: val.verdict || "good",
+            wow_factor: val.wow_factor ?? null,
+            design_category: val.design_category || null,
+            shape: val.shape || null,
+            length: val.length || null,
+            description: val.description || null,
+          };
+        });
+        if (data.length === 0) throw new Error("Нет дизайнов для квиза");
+      }
+      if (data.length === 0) throw new Error("Нет дизайнов для квиза");
+      setPool(data);
+      const newDeck = pickQuizDeck(data.length >= 10 ? data : data);
+      if (newDeck.length === 0) throw new Error("Нет дизайнов для квиза");
+      setDeck(newDeck);
+      setIndex(0); setLiked(new Set()); setStep("swipe");
+    } catch (e: any) {
+      setError(e.message || "Ошибка загрузки");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerdict = (isLike: boolean) => {
+    const current = deck[index];
+    if (!current) return;
+    if (isLike) {
+      setLiked(prev => { const n = new Set(prev); n.add(current.id); return n; });
+    }
+    setExitDir(isLike ? "right" : "left");
+    setTimeout(() => {
+      setExitDir(null);
+      setDragX(0);
+      if (index + 1 >= deck.length) {
+        const top = computeTop3(pool.length ? pool : deck, deck,
+          new Set([...liked, ...(isLike ? [current.id] : [])]));
+        setTop3(top);
+        setStep("result");
+      } else {
+        setIndex(i => i + 1);
+      }
+    }, 250);
+  };
+
+  const restart = () => {
+    const newDeck = pickQuizDeck(pool);
+    setDeck(newDeck); setIndex(0); setLiked(new Set()); setStep("swipe");
+  };
+
+  const current = deck[index];
+  const progress = deck.length ? Math.round(((index) / deck.length) * 100) : 0;
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-charcoal/80 backdrop-blur-sm"
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
+        <motion.div
+          initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
+          className="bg-ivory w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden relative max-h-[90vh] overflow-y-auto"
+        >
+          <button onClick={onClose} className="absolute top-5 right-5 p-3 bg-charcoal/5 rounded-full hover:bg-charcoal/10 z-10 touch-manipulation">
+            <X className="w-5 h-5 text-charcoal" />
+          </button>
+
+          {step === "intro" && (
+            <div className="p-6 md:p-10 text-center">
+              <p className="font-serif text-gold text-xs tracking-[0.2em] uppercase mb-3">База маникюра</p>
+              <h2 className="font-serif text-3xl md:text-4xl text-charcoal mb-4">Подобрать ногти за 30 свайпов</h2>
+              <p className="text-charcoal/60 mb-8 leading-relaxed">
+                Оцени 30 дизайнов — лайк ❤️ или пропустить ✕. ИИ-стилист найдёт паттерн в твоём вкусе и предложит топ-3 идеальных вариантов.
+              </p>
+              <button
+                onClick={startQuiz}
+                disabled={loading}
+                className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold text-lg hover:bg-gold/90 disabled:opacity-40 transition-colors flex items-center justify-center gap-2"
+              >
+                {loading ? "Загружаем базу…" : (<>Начать <ArrowRight className="w-5 h-5" /></>)}
+              </button>
+              {error && <p className="text-red-600 text-sm mt-4">{error}</p>}
+              <p className="text-xs text-charcoal/40 mt-6">Бесплатно • 30 дизайнов • топ-3 в HD</p>
+            </div>
+          )}
+
+          {step === "swipe" && current && (
+            <div className="p-6 md:p-8">
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-sm font-medium text-charcoal/70">{index + 1} / {deck.length}</span>
+                <span className="text-sm text-charcoal/50">❤️ {liked.size}</span>
+              </div>
+              <div className="w-full h-2 bg-charcoal/10 rounded-full mb-6 overflow-hidden">
+                <div className="h-full bg-gold transition-all duration-300" style={{ width: `${progress}%` }} />
+              </div>
+
+              <div className="relative mx-auto" style={{ maxWidth: 360, height: 480 }}>
+                {deck.slice(index, index + 3).reverse().map((nail, i) => {
+                  const isTop = i === 2;
+                  const offset = (2 - i) * 8;
+                  return (
+                    <motion.div
+                      key={nail.id}
+                      className="absolute inset-0 rounded-3xl overflow-hidden shadow-2xl bg-charcoal/5"
+                      style={{ y: offset, zIndex: i }}
+                      drag={isTop ? "x" : false}
+                      dragConstraints={{ left: 0, right: 0 }}
+                      dragElastic={0.6}
+                      onDrag={(e, info) => { if (isTop) setDragX(info.offset.x); }}
+                      onDragEnd={(e, info) => {
+                        if (!isTop) return;
+                        if (info.offset.x > QUIZ_SWIPE_THRESHOLD) handleVerdict(true);
+                        else if (info.offset.x < -QUIZ_SWIPE_THRESHOLD) handleVerdict(false);
+                        setDragX(0);
+                      }}
+                      animate={
+                        isTop && exitDir
+                          ? { x: exitDir === "right" ? 500 : -500, opacity: 0, rotate: exitDir === "right" ? 20 : -20 }
+                          : { x: isTop ? dragX : 0, opacity: 1, rotate: isTop ? dragX * 0.05 : 0 }
+                      }
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                    >
+                      {nail.thumbPath && (
+                        <img src={nail.thumbPath} alt={nail.description || "Дизайн ногтей"} className="w-full h-full object-cover" draggable={false} />
+                      )}
+                      {isTop && dragX > 30 && (
+                        <div className="absolute top-6 left-6 px-4 py-2 bg-green-500/90 text-white rounded-2xl font-bold text-lg rotate-[-12deg]">ЛАЙК</div>
+                      )}
+                      {isTop && dragX < -30 && (
+                        <div className="absolute top-6 right-6 px-4 py-2 bg-red-500/90 text-white rounded-2xl font-bold text-lg rotate-[12deg]">ПРОПУСК</div>
+                      )}
+                    </motion.div>
+                  );
+                })}
+              </div>
+
+              {current.description && (
+                <p className="text-center text-sm text-charcoal/60 mt-5 px-4 leading-relaxed">{current.description}</p>
+              )}
+
+              <div className="flex items-center justify-center gap-6 mt-6">
+                <button
+                  onClick={() => handleVerdict(false)}
+                  className="w-16 h-16 rounded-full bg-charcoal/5 hover:bg-charcoal/10 flex items-center justify-center transition-colors touch-manipulation"
+                  aria-label="Пропустить"
+                >
+                  <X className="w-7 h-7 text-charcoal/70" />
+                </button>
+                <button
+                  onClick={() => handleVerdict(true)}
+                  className="w-16 h-16 rounded-full bg-gold/20 hover:bg-gold/30 flex items-center justify-center transition-colors touch-manipulation"
+                  aria-label="Лайк"
+                >
+                  <Heart className="w-7 h-7 text-gold fill-gold" />
+                </button>
+              </div>
+              <p className="text-center text-xs text-charcoal/40 mt-4">Свайп вправо = лайк • влево = пропустить</p>
+            </div>
+          )}
+
+          {step === "result" && (
+            <div className="p-6 md:p-8">
+              <p className="font-serif text-gold text-xs tracking-[0.2em] uppercase mb-2 text-center">Ваш топ-3</p>
+              <h2 className="font-serif text-2xl md:text-3xl text-charcoal mb-2 text-center">Идеально под ваш вкус</h2>
+              <p className="text-sm text-charcoal/60 mb-6 text-center">
+                {liked.size > 0 ? `На основе ${liked.size} ${liked.size === 1 ? "лайка" : "лайков"}` : "Подобрано по популярности"}
+              </p>
+
+              {top3.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-charcoal/60 mb-4">Не удалось подобрать — попробуйте ещё раз.</p>
+                  <button onClick={restart} className="px-6 py-3 rounded-full bg-gold text-charcoal font-medium">Пройти заново</button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  {top3.map((nail, i) => (
+                    <div key={nail.id} className="border border-charcoal/10 rounded-2xl overflow-hidden bg-white">
+                      {nail.originalPath && (
+                        <div className="relative aspect-[3/4] bg-charcoal/5">
+                          <img src={nail.originalPath} alt={nail.description || "Дизайн ногтей"} className="w-full h-full object-cover" loading="lazy" />
+                          <div className="absolute top-3 left-3 px-3 py-1 bg-charcoal/80 text-ivory rounded-full text-xs font-medium">#{i + 1}</div>
+                        </div>
+                      )}
+                      <div className="p-4">
+                        {nail.description && <p className="text-sm text-charcoal/80 mb-3 leading-relaxed">{nail.description}</p>}
+                        <div className="flex gap-2">
+                          {nail.originalPath && (
+                            <button
+                              onClick={() => downloadImage(nail.originalPath!, nail.filename)}
+                              className="flex-1 py-2.5 rounded-full bg-charcoal text-ivory text-sm font-medium hover:bg-charcoal/90 flex items-center justify-center gap-2 transition-colors"
+                            >
+                              <Download className="w-4 h-4" /> Скачать
+                            </button>
+                          )}
+                          {nail.originalPath && (
+                            <button
+                              onClick={() => shareImage(window.location.origin + nail.originalPath, "Мой идеальный маникюр")}
+                              className="flex-1 py-2.5 rounded-full border border-charcoal/20 text-charcoal text-sm font-medium hover:bg-charcoal/5 flex items-center justify-center gap-2 transition-colors"
+                            >
+                              <Share2 className="w-4 h-4" /> Поделиться
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-3 mt-6">
+                <button onClick={restart} className="flex-1 py-3 rounded-full border border-charcoal/20 text-charcoal font-medium hover:bg-charcoal/5 transition-colors">
+                  Пройти заново
+                </button>
+                <button onClick={onClose} className="flex-1 py-3 rounded-full bg-gold text-charcoal font-semibold hover:bg-gold/90 transition-colors">
+                  Готово
+                </button>
+              </div>
+            </div>
+          )}
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
 // --- Group Stylize Modal ---
 const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll }: { isOpen: boolean; onClose: () => void; onOpenOrder: (paymentId: string, tier: Tier) => void; onClearAll: () => void }) => {
   const [orders, setOrders] = useState<MyOrder[]>([]);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isOpen) setOrders(getMyOrders());
+    if (isOpen) {
+      const fresh = getMyOrders();
+      setOrders(fresh);
+      // Background-load thumbnails for orders that don't have one yet
+      fresh.forEach(o => {
+        if (o.thumbnail) return;
+        fetch(`/api/result/${o.paymentId}`)
+          .then(r => r.json())
+          .then(data => {
+            if (data.ready && data.looks?.length) {
+              const firstLook = data.looks.find((l: any) => l.image);
+              if (firstLook?.image) {
+                updateMyOrderThumbnail(o.paymentId, firstLook.image);
+                setOrders(getMyOrders());
+              }
+            }
+          })
+          .catch(() => {});
+      });
+    }
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -1301,11 +1938,20 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll }: { isOpen: bo
                 <div className="flex flex-col gap-3">
                   {[...orders].reverse().map(o => (
                     <div key={o.paymentId} className="border border-charcoal/10 rounded-2xl p-4 flex items-center justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-charcoal">
-                          {o.tier === "premium" ? "Премиум" : "Стандарт"}
-                        </p>
-                        <p className="text-xs text-charcoal/50 mt-0.5">{formatDate(o.createdAt)}</p>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-14 h-14 rounded-xl overflow-hidden bg-charcoal/5 flex items-center justify-center flex-shrink-0">
+                          {o.thumbnail ? (
+                            <img src={o.thumbnail} alt="" className="w-full h-full object-cover" loading="lazy" />
+                          ) : (
+                            <Shirt className="w-6 h-6 text-charcoal/30" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-charcoal">
+                            {o.tier === "premium" ? "Премиум" : "Стандарт"}
+                          </p>
+                          <p className="text-xs text-charcoal/50 mt-0.5">{formatDate(o.createdAt)}</p>
+                        </div>
                       </div>
                       <button
                         onClick={() => handleOpen(o)}
@@ -1446,7 +2092,7 @@ const GroupModal = ({ isOpen, onClose, userName }: { isOpen: boolean; onClose: (
 };
 
 // --- Stylize Modal Component ---
-const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, recoveredResult, onRecoveredResultShown }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier; onToast: (msg: string, type: 'success'|'error'|'info') => void; onNewLooks: () => void; recoveredResult?: any; onRecoveredResultShown?: () => void }) => {
+const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, recoveredResult, onRecoveredResultShown, onOpenLightbox }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier; onToast: (msg: string, type: 'success'|'error'|'info') => void; onNewLooks: () => void; recoveredResult?: any; onRecoveredResultShown?: () => void; onOpenLightbox?: (state: LightboxState) => void }) => {
   const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [height, setHeight] = useState("");
@@ -1527,7 +2173,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
       setResult(null);
       setErrorMsg(null);
       setLoadingState(null);
-      setViewMode('form');
+      // Если есть сохранённый результат (моложе 5 часов) — сразу показываем образы,
+      // а не форму загрузки. Пользователь может запустить новую генерацию кнопкой "Создать новые образы".
       if (recoveredResult) {
         setResult({
           greetingAndAnalysis: recoveredResult.greetingAndAnalysis,
@@ -1535,7 +2182,10 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
           astroReading: recoveredResult.astroReading || null,
           looks: recoveredResult.looks,
         });
+        setViewMode('result');
         onRecoveredResultShown?.();
+      } else {
+        setViewMode('form');
       }
     }
   }, [isOpen]);
@@ -1733,6 +2383,11 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
             setLoadingState({ step: 5, text: "Готово!" });
             // Промокод успешно "сгорел" на сервере — очищаем, чтобы не передавать повторно.
             localStorage.removeItem("you-stile-promo-code");
+            // Сбрасываем pending_payment_id — генерация по этой оплате завершена.
+            // При следующей генерации пользователь оплатит заново и получит новый paymentId.
+            // Сам order остаётся в MyOrders — образы доступны через «Мои образы» 5 часов.
+            localStorage.removeItem("pending_payment_id");
+            localStorage.removeItem("pending_payment_tier");
             // Save look names to history
             if (data.looks?.length) savePastLooks(data.looks.map((l: any) => l.lookName).filter(Boolean));
             // Update with enriched items (real products)
@@ -1810,9 +2465,15 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                     <Sparkles className="w-20 h-20 text-gold relative z-10" />
                   </motion.div>
                   
-                  <h3 className="text-3xl font-serif mb-6 text-center px-4 tracking-wide">Создаем магию...</h3>
-                  
+                  <h3 className="text-3xl font-serif mb-3 text-center px-4 tracking-wide">Создаем магию...</h3>
+                  <p className="text-sm text-white/50 mb-6 text-center px-6 max-w-[320px] leading-relaxed">
+                    {tier === "premium"
+                      ? "Генерация займёт 4–7 минут — наш стилист внимательно оценит вашу фактуру и лицо, подберёт лучшие образы под ваш повод и бюджет. Можно налить кофе или почитать новости — мы напишем, как только всё будет готово."
+                      : "Генерация займёт 2–4 минуты — стилист анализирует ваше фото и создаёт образы. Можно немного отдохнуть — результат появится совсем скоро."}
+                  </p>
+
                   <div className="w-full max-w-[288px] bg-white/10 rounded-full h-2.5 mb-4 overflow-hidden relative">
+
                     <motion.div
                       className="absolute top-0 left-0 h-full bg-gradient-to-r from-gold/50 via-gold to-gold/50"
                       initial={{ width: "0%" }}
@@ -2150,7 +2811,12 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                       <div className="flex flex-col gap-3 md:sticky md:top-8">
                         <div className="rounded-2xl overflow-hidden shadow-xl relative">
                           {look.image ? (
-                            <img src={look.image} alt={look.lookName} className="w-full h-auto" />
+                            <button type="button" onClick={() => onOpenLightbox?.({ images: result.looks.filter((l: any) => l.image).map((l: any) => ({ src: l.image, alt: l.lookName, lookName: l.lookName })), index: result.looks.filter((l: any) => l.image).findIndex((l: any) => l === look) })} className="block w-full touch-manipulation cursor-zoom-in group">
+                              <img src={look.image} alt={look.lookName} className="w-full h-auto transition-transform duration-500 group-hover:scale-[1.02]" />
+                              <span className="absolute bottom-3 right-3 px-3 py-1.5 rounded-full bg-charcoal/70 text-ivory text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none flex items-center gap-1.5">
+                                <Sparkles className="w-3.5 h-3.5" /> Открыть
+                              </span>
+                            </button>
                           ) : (
                             <div className="w-full aspect-[3/4] bg-charcoal/5 flex flex-col p-6 items-center justify-center text-center text-charcoal/50">
                               <Camera className="w-12 h-12 mb-4 opacity-50 text-charcoal/40" />
@@ -2234,9 +2900,90 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                           <span className="text-lg">📝</span>
                           Детали образа
                         </h3>
-                        <p className="text-sm text-charcoal/75 leading-relaxed mb-8 whitespace-pre-wrap">
-                          {look.description}
-                        </p>
+                        {(() => {
+                          const desc = look.description || "";
+                          const sectionEmoji: Record<string, string> = {
+                            "концепци": "🎨", "одежд": "👕", "обув": "👞", "аксессуар": "💎",
+                            "причёск": "💇", "груминг": "💇", "парфюм": "🌸", "аромат": "🌸",
+                            "почему": "✨", "совет": "🛍", "покупк": "🛍",
+                          };
+                          const sectionColor: Record<string, { bg: string; text: string; border: string }> = {
+                            "концепци": { bg: "bg-charcoal", text: "text-ivory", border: "border-gold" },
+                            "одежд": { bg: "bg-amber-100", text: "text-amber-900", border: "border-amber-300" },
+                            "обув": { bg: "bg-emerald-100", text: "text-emerald-900", border: "border-emerald-300" },
+                            "аксессуар": { bg: "bg-fuchsia-100", text: "text-fuchsia-900", border: "border-fuchsia-300" },
+                            "причёск": { bg: "bg-purple-100", text: "text-purple-900", border: "border-purple-300" },
+                            "груминг": { bg: "bg-purple-100", text: "text-purple-900", border: "border-purple-300" },
+                            "парфюм": { bg: "bg-rose-100", text: "text-rose-900", border: "border-rose-300" },
+                            "аромат": { bg: "bg-rose-100", text: "text-rose-900", border: "border-rose-300" },
+                            "почему": { bg: "bg-gold", text: "text-charcoal", border: "border-gold" },
+                            "совет": { bg: "bg-blue-100", text: "text-blue-900", border: "border-blue-300" },
+                            "покупк": { bg: "bg-blue-100", text: "text-blue-900", border: "border-blue-300" },
+                          };
+                          const getSectionKey = (header: string) => {
+                            const key = getDetailSectionKey(header);
+                            if (key) return key;
+                            const lower = header.toLowerCase();
+                            for (const k of Object.keys(sectionEmoji)) {
+                              if (lower.includes(k)) return k;
+                            }
+                            return "";
+                          };
+                          const lines = desc.split("\n");
+                          const blocks: { emoji: string; title: string; body: string; color: { bg: string; text: string; border: string } }[] = [];
+                          let current: { emoji: string; title: string; body: string; color: { bg: string; text: string; border: string } } | null = null;
+                          for (const line of lines) {
+                            const trimmed = line.trim();
+                            const emojiMatch = trimmed.match(/^([🎨👕👞💎💇🌸✨🛍🧥👖👟👜💍🧣🧢👔👗🩱👢🩴👒🕶️⌚📿])\s*(.+)$/);
+                            const titleMatch = !emojiMatch && trimmed.match(/^(.+?):\s*(.*)$/);
+                            if (emojiMatch || titleMatch) {
+                              if (current) blocks.push(current);
+                              const title = (emojiMatch ? emojiMatch[2] : titleMatch![1]).trim();
+                              const bodyLine = titleMatch ? titleMatch[2].trim() : "";
+                              const emoji = emojiMatch ? emojiMatch[1] : getDetailSectionEmoji(title);
+                              const key = getSectionKey(title);
+                              current = {
+                                emoji,
+                                title,
+                                body: bodyLine || "",
+                                color: sectionColor[key] || { bg: "bg-charcoal", text: "text-ivory", border: "border-gold" },
+                              };
+                              if (bodyLine && !emojiMatch && current.body && bodyLine !== current.body) {
+                                current.body = bodyLine;
+                              }
+                            } else if (current) {
+                              current.body += (current.body ? "\n" : "") + line;
+                            } else {
+                              if (!blocks.length && trimmed) {
+                                current = { emoji: "🎨", title: "Концепция образа", body: line, color: sectionColor["концепци"] };
+                              } else if (current) {
+                                current.body += (current.body ? "\n" : "") + line;
+                              }
+                            }
+                          }
+                          if (current) blocks.push(current);
+                          if (!blocks.length) {
+                            return <p className="text-sm text-charcoal/75 leading-relaxed mb-8 whitespace-pre-wrap">{desc}</p>;
+                          }
+                          return (
+                            <div className="space-y-4 mb-8">
+                              {blocks.map((b, i) => (
+                                <div key={i} className="flex flex-col gap-2">
+                                  <div className={`inline-flex items-center gap-2 self-start ${b.color.bg} ${b.color.text} ${b.color.border} border-2 px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide shadow-sm`}>
+                                    <span className="text-sm">{b.emoji}</span>
+                                    <span>{b.title}</span>
+                                  </div>
+                                  {b.body.trim() && (
+                                    <p className="text-sm text-charcoal/75 leading-relaxed whitespace-pre-wrap pl-1">
+                                      {b.body.trim()}
+                                    </p>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+
 
                         <h4 className="text-lg font-serif text-charcoal mb-5 flex items-center gap-3">
                           <ShoppingBag className="w-4 h-4 text-gold" />
@@ -2246,10 +2993,22 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                         <div className="space-y-3">
                           {look.items.map((item, idx) => (
                             <div key={idx} className="p-3 bg-white rounded-2xl border border-charcoal/5 shadow-sm hover:shadow-md transition-shadow flex flex-col gap-2">
-                              {/* Product Image */}
+                              {/* Product Image with category sticker */}
                               {item.imageUrl && (
-                                <div className="w-full aspect-[4/3] rounded-xl overflow-hidden bg-charcoal/5">
+                                <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden bg-charcoal/5">
                                   <img src={item.imageUrl} alt={item.name} className="w-full h-full object-cover" />
+                                  {item.category && (
+                                    <div className={`absolute top-2 left-2 ${getCategoryStyle(item.category).bg} ${getCategoryStyle(item.category).text} ${getCategoryStyle(item.category).border} border-2 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide shadow-md backdrop-blur-sm flex items-center gap-1.5`}>
+                                      <span className="text-sm">{CATEGORY_EMOJI[item.category.toLowerCase()] || "✨"}</span>
+                                      <span>{item.category}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {item.category && !item.imageUrl && (
+                                <div className={`flex items-center gap-2 ${getCategoryStyle(item.category).bg} ${getCategoryStyle(item.category).text} ${getCategoryStyle(item.category).border} border-2 px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide self-start`}>
+                                  <span className="text-sm">{CATEGORY_EMOJI[item.category.toLowerCase()] || "✨"}</span>
+                                  <span>{item.category}</span>
                                 </div>
                               )}
                               <div className="flex justify-between items-start gap-3">
@@ -2299,7 +3058,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                     </div>
                   ))}
                 </div>
-                  
+
                 <button
                   onClick={onNewLooks}
                   className="mt-8 w-full max-w-md mx-auto py-4 rounded-full border border-charcoal/20 text-charcoal font-medium hover:bg-charcoal/5 transition-colors"
@@ -2355,6 +3114,7 @@ export default function App() {
   const [isTrialPaymentOpen, setIsTrialPaymentOpen] = useState(false);
   const [isGroupOpen, setIsGroupOpen] = useState(false);
   const [isMyLooksOpen, setIsMyLooksOpen] = useState(false);
+  const [isNailsQuizOpen, setIsNailsQuizOpen] = useState(false);
   const [modalKey, setModalKey] = useState(0);
   const [currentTier, setCurrentTier] = useState<Tier>("standard");
   const [userName, setUserName] = useState(getSavedName);
@@ -2362,6 +3122,7 @@ export default function App() {
   const [prices, setPrices] = useState({ standard: 100, premium: 200 });
   const [recoveredResult, setRecoveredResult] = useState<any>(null);
   const [showProcessing, setShowProcessing] = useState(false);
+  const [lightbox, setLightbox] = useState<LightboxState>(null);
 
   // Telegram Mini App init
   useEffect(() => {
@@ -2584,9 +3345,13 @@ export default function App() {
       <PricingModal key={selectedPricingTier} isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} userName={userName} initialTier={selectedPricingTier} prices={prices} />
       {isTrialOpen && <TrialModalContent isOpen={isTrialOpen} onClose={() => setIsTrialOpen(false)} userName={userName} onUnlock={() => setIsTrialPaymentOpen(true)} />}
       <TrialPaymentModal isOpen={isTrialPaymentOpen} onClose={() => setIsTrialPaymentOpen(false)} onPaid={() => {}} />
-      <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} recoveredResult={recoveredResult} onRecoveredResultShown={() => setRecoveredResult(null)} />
+      <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} recoveredResult={recoveredResult} onRecoveredResultShown={() => setRecoveredResult(null)} onOpenLightbox={setLightbox} />
       <GroupModal isOpen={isGroupOpen} onClose={() => setIsGroupOpen(false)} userName={userName} />
       <MyLooksModal isOpen={isMyLooksOpen} onClose={() => setIsMyLooksOpen(false)} onOpenOrder={openMyOrder} onClearAll={() => { /* список уже обновлён внутри */ }} />
+      <NailsQuizModal isOpen={isNailsQuizOpen} onClose={() => setIsNailsQuizOpen(false)} />
+
+      {/* Lightbox — fullscreen image viewer */}
+      <Lightbox state={lightbox} onClose={() => setLightbox(null)} onNavigate={(index) => setLightbox(s => s ? { ...s, index } : s)} />
 
       {/* 1. Header */}
       <header className="fixed top-0 left-0 right-0 z-50 bg-ivory/70 backdrop-blur-lg border-b border-charcoal/5 transition-all">
@@ -2717,6 +3482,13 @@ export default function App() {
                 className="border border-gold/40 text-gold px-8 py-3 sm:py-4 rounded-full text-base font-medium hover:bg-gold/10 transition-colors">
                 Оцени свой стиль
               </button>
+              <button
+                onClick={() => setIsNailsQuizOpen(true)}
+                className="bg-ivory text-charcoal px-8 py-3 sm:py-4 rounded-full text-base font-semibold hover:bg-white transition-all flex items-center justify-center gap-2 group shadow-lg shadow-charcoal/20"
+              >
+                <Heart className="w-4 h-4 text-gold fill-gold group-hover:scale-110 transition-transform" />
+                Подобрать ногти
+              </button>
             </div>
             <p className="text-sm text-ivory/60 mt-3 text-center font-medium">⚠️ Отключите VPN перед началом для стабильной работы</p>
           </motion.div>
@@ -2738,14 +3510,12 @@ export default function App() {
             </div>
           </motion.div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {[
-              "/gallery/gen1.jpg","/gallery/gen2.jpg","/gallery/gen3.jpg","/gallery/gen4.jpg",
-              "/gallery/gen5.jpg","/gallery/gen6.jpg","/gallery/gen7.jpg","/gallery/gen8.jpg",
-              "/gallery/gen9.jpg","/gallery/gen10.jpg","/gallery/gen11.jpg","/gallery/gen12.jpg",
-            ].map((src, idx) => (
+            {GALLERY_IMAGES.map((src, idx) => (
               <motion.div key={idx} initial={{ opacity: 0, scale: 0.95 }} whileInView={{ opacity: 1, scale: 1 }}
                 viewport={{ once: true }} transition={{ delay: idx * 0.05 }} className="overflow-hidden rounded-2xl aspect-[3/4]">
-                <img src={src} alt={`Образ ${idx + 1}`} loading="lazy" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
+                <button type="button" onClick={() => setLightbox({ images: GALLERY_IMAGES.map(s => ({ src: s, alt: 'Образ стилиста' })), index: idx })} className="block w-full h-full touch-manipulation cursor-zoom-in">
+                  <img src={src} alt={`Образ ${idx + 1}`} loading="lazy" className="w-full h-full object-cover hover:scale-105 transition-transform duration-500" />
+                </button>
               </motion.div>
             ))}
           </div>
