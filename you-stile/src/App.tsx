@@ -2450,22 +2450,24 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="absolute inset-0 bg-charcoal/95 backdrop-blur-xl flex flex-col items-center justify-center text-white z-50 rounded-3xl overflow-hidden"
+                  className="fixed inset-0 bg-charcoal/95 backdrop-blur-xl flex flex-col items-center text-white z-50 overflow-y-auto py-10"
                 >
                   {/* Animated background elements */}
-                  <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-gold/20 rounded-full mix-blend-screen filter blur-[80px] animate-pulse"></div>
-                  <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-blue-500/20 rounded-full mix-blend-screen filter blur-[80px] animate-pulse" style={{ animationDelay: '1s' }}></div>
+                  <div className="fixed top-1/4 left-1/4 w-64 h-64 bg-gold/20 rounded-full mix-blend-screen filter blur-[80px] animate-pulse"></div>
+                  <div className="fixed bottom-1/4 right-1/4 w-64 h-64 bg-blue-500/20 rounded-full mix-blend-screen filter blur-[80px] animate-pulse" style={{ animationDelay: '1s' }}></div>
 
+                  <div className="flex flex-col items-center m-auto">
                   <motion.div
                     animate={{ scale: [1, 1.2, 1], rotate: [0, 180, 360] }}
                     transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
-                    className="mb-12 relative"
+                    className="mb-8 relative"
                   >
                     <div className="absolute inset-0 bg-gold/40 blur-2xl rounded-full"></div>
-                    <Sparkles className="w-20 h-20 text-gold relative z-10" />
+                    <Sparkles className="w-16 h-16 text-gold relative z-10" />
                   </motion.div>
                   
                   <h3 className="text-3xl font-serif mb-3 text-center px-4 tracking-wide">Создаем магию...</h3>
+
                   <p className="text-sm text-white/50 mb-6 text-center px-6 max-w-[320px] leading-relaxed">
                     {tier === "premium"
                       ? "Генерация займёт 4–7 минут — наш стилист внимательно оценит вашу фактуру и лицо, подберёт лучшие образы под ваш повод и бюджет. Можно налить кофе или почитать новости — мы напишем, как только всё будет готово."
@@ -2515,11 +2517,13 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                       );
                     })}
                   </div>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
 
             <h2 className="text-3xl font-serif text-charcoal mb-2">Создать новый образ</h2>
+
             <p className="text-charcoal/60 mb-4">{tier === "standard" ? "Загрузите фото, укажите рост и вес — стилист создаст 3 образа специально для вас." : "Загрузите до 5 фото, укажите параметры, и наш ИИ подберет идеальный гардероб."}</p>
 
             {!loadingState && viewMode === 'form' && (
