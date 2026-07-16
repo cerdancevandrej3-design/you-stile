@@ -136,8 +136,8 @@ if (!POLZA_API_KEY) {
 const POLZA_BASE_URL = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
 
 const ANALYSIS_MODEL = "google/gemini-3.1-flash-lite-preview";
-// Seedream 4.5 — генерация изображений с сохранением лица и идентичности пользователя
-const IMAGE_MODEL = "bytedance/seedream-4.5";
+// Seedream 5 Pro — генерация изображений с сохранением лица и идентичности пользователя
+const IMAGE_MODEL = "seedream/5-pro-text-to-image";
 
 function getOccasionStyleGuide(wishes: string): string {
   const w = wishes.toLowerCase();
@@ -449,8 +449,7 @@ async function generateImageWithFlux(prompt: string, referenceImageBase64?: stri
   const input: any = {
     prompt: prompt,
     aspect_ratio: "3:4",
-    quality: "high",
-    output_format: "png",
+    quality: "medium",
   };
 
   if (referenceImageBase64) {
@@ -503,7 +502,7 @@ async function generateImageWithFlux(prompt: string, referenceImageBase64?: stri
   const syncUrl = extractImageUrl(data);
   if (syncUrl) return syncUrl;
 
-  // Async polling (Seedream 4.5 may return id + status)
+  // Async polling (Seedream 5 Pro may return id + status)
   if (data.id) {
     console.log("[Image API] Async job, polling id:", data.id);
     const maxWait = 120000;
@@ -602,6 +601,8 @@ async function startServer() {
       entry.used = true;
       entry.redeemedAt = new Date().toISOString();
       savePromos(store);
+      // Синхронизируем кэш promos в памяти.
+      promos[key] = entry;
       incPromoSale(entry.tier);
       return true;
     } catch { return false; }
@@ -1583,6 +1584,22 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       const height = req.body.height || "не указан";
       const weight = req.body.weight || "не указан";
       const rawWishes = (req.body.wishes || "").toString().slice(0, 500).trim();
+
+      // Блокировка повторной генерации: если для этого paymentId уже есть сохранённый
+      // результат (моложе 5 часов) — не запускаем новую генерацию, сразу возвращаем ошибку.
+      const earlyPaymentId = (req.body.paymentId || "").toString().trim();
+      if (earlyPaymentId) {
+        try {
+          const existingResult = path.join(RESULTS_DIR, earlyPaymentId, "result.json");
+          if (fs.existsSync(existingResult)) {
+            const st = fs.statSync(existingResult);
+            if (Date.now() - st.mtimeMs < RESULTS_TTL_MS) {
+              safeWrite(JSON.stringify({ type: "error", error: "У вас уже есть сгенерированные образы. Откройте раздел «Мои образы», чтобы посмотреть их. Создать новые можно через 5 часов." }) + "\n");
+              return res.end();
+            }
+          }
+        } catch {}
+      }
       // Detect season from wishes to pass explicitly to AI
       const wishesLower = rawWishes.toLowerCase();
       const seasonMap: Record<string, string> = {

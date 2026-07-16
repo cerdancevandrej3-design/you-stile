@@ -136,8 +136,8 @@ if (!POLZA_API_KEY) {
 const POLZA_BASE_URL = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
 
 const ANALYSIS_MODEL = "google/gemini-3.1-flash-lite-preview";
-// Seedream 4.5 — генерация изображений с сохранением лица и идентичности пользователя
-const IMAGE_MODEL = "bytedance/seedream-4.5";
+// Seedream 5 Pro — генерация изображений с сохранением лица и идентичности пользователя
+const IMAGE_MODEL = "seedream/5-pro-text-to-image";
 
 function getOccasionStyleGuide(wishes: string): string {
   const w = wishes.toLowerCase();
@@ -449,8 +449,7 @@ async function generateImageWithFlux(prompt: string, referenceImageBase64?: stri
   const input: any = {
     prompt: prompt,
     aspect_ratio: "3:4",
-    quality: "high",
-    output_format: "png",
+    quality: "medium",
   };
 
   if (referenceImageBase64) {
@@ -503,7 +502,7 @@ async function generateImageWithFlux(prompt: string, referenceImageBase64?: stri
   const syncUrl = extractImageUrl(data);
   if (syncUrl) return syncUrl;
 
-  // Async polling (Seedream 4.5 may return id + status)
+  // Async polling (Seedream 5 Pro may return id + status)
   if (data.id) {
     console.log("[Image API] Async job, polling id:", data.id);
     const maxWait = 120000;
@@ -603,6 +602,9 @@ async function startServer() {
       entry.used = true;
       entry.redeemedAt = new Date().toISOString();
       savePromos(store);
+      // Синхронизируем кэш promos в памяти, чтобы promo-list и другие роуты
+      // видели актуальное состояние (и не перезаписали файл старым кэшем).
+      promos[key] = entry;
       incPromoSale(entry.tier);
       return true;
     } catch { return false; }
@@ -1584,6 +1586,23 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       const height = req.body.height || "не указан";
       const weight = req.body.weight || "не указан";
       const rawWishes = (req.body.wishes || "").toString().slice(0, 500).trim();
+
+      // Блокировка повторной генерации: если для этого paymentId уже есть сохранённый
+      // результат (моложе 5 часов) — не запускаем новую генерацию, сразу возвращаем ошибку.
+      // Пользователь должен смотреть свои уже сгенерированные образы, а не тратить токены заново.
+      const earlyPaymentId = (req.body.paymentId || "").toString().trim();
+      if (earlyPaymentId) {
+        try {
+          const existingResult = path.join(RESULTS_DIR, earlyPaymentId, "result.json");
+          if (fs.existsSync(existingResult)) {
+            const st = fs.statSync(existingResult);
+            if (Date.now() - st.mtimeMs < RESULTS_TTL_MS) {
+              safeWrite(JSON.stringify({ type: "error", error: "У вас уже есть сгенерированные образы. Откройте раздел «Мои образы», чтобы посмотреть их. Создать новые можно через 5 часов." }) + "\n");
+              return res.end();
+            }
+          }
+        } catch {}
+      }
       // Detect season from wishes to pass explicitly to AI
       const wishesLower = rawWishes.toLowerCase();
       const seasonMap: Record<string, string> = {
@@ -1765,6 +1784,38 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
 
       safeWrite(JSON.stringify({ type: "progress", step: 1.5, text: "Анализ и подбор гардероба завершен. Переходим к визуализации..." }) + "\n");
 
+      // Determine gender from photo BEFORE image generation to avoid wrong-gender renders
+      let detectedGender: "man" | "woman" = "woman"; // safe default
+      try {
+        const genderResp = await fetchWithTimeout(`${POLZA_BASE_URL}/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${POLZA_API_KEY}` },
+          body: JSON.stringify({
+            model: ANALYSIS_MODEL,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "Look at the photo and answer with ONE word only: 'man' or 'woman'. This is the gender of the person in the photo. Answer based ONLY on what you see in the photo, not on any name. If unclear, answer 'woman'." },
+                  { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
+                ],
+              },
+            ],
+            temperature: 0,
+            max_tokens: 10,
+          }),
+        }, 30000);
+        if (genderResp.ok) {
+          const gd = await genderResp.json();
+          const gtext = (gd?.choices?.[0]?.message?.content || "").toString().toLowerCase();
+          if (gtext.includes("man") && !gtext.includes("woman")) detectedGender = "man";
+          else detectedGender = "woman";
+          console.log("[Gender] Detected:", detectedGender, "raw:", gtext.trim());
+        }
+      } catch (e: any) {
+        console.error("[Gender] Detection failed, using default:", e.message);
+      }
+
       // Step 2: Generate images with Nano Banana 2 — IN PARALLEL
       safeWrite(JSON.stringify({ type: "progress", step: 2.0, text: `Визуализация ${looks.length} образов параллельно...` }) + "\n");
 
@@ -1787,9 +1838,52 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
                 : " POSE: Natural confident pose — slight body angle to camera, weight on one leg, one hand in pocket or relaxed at side with slight elbow bend, shoulders relaxed back, chin parallel to ground, genuine expression. Avoid symmetry, create natural angles.";
               const qualityInstruction = " QUALITY: Maximum resolution, ultra-sharp details, professional studio lighting or perfect natural light, magazine cover quality, WOW factor — image must make viewer want to look twice. Shot on Phase One IQ4, 8K resolution.";
               const expressionInstruction = " EXPRESSION: Preserve the exact facial expression from the reference photo. Do NOT add a smile if the person is not smiling in the reference. Match the natural expression precisely.";
-              const identityInstruction = " IDENTITY: The person in the generated image MUST be the SAME person as in the reference photo. Preserve their gender, face, facial features, skin tone, hair color, eye color, jawline, and body type EXACTLY. Do NOT change gender. Do NOT swap to a different person. The reference photo is a woman — generate a woman with the same face.";
+              const identityInstruction = ` IDENTITY: The person in the generated image MUST be the SAME person as in the reference photo. Preserve their gender, face, facial features, skin tone, hair color, eye color, jawline, and body type EXACTLY. Do NOT change gender. Do NOT swap to a different person. The reference photo is a ${detectedGender} — generate a ${detectedGender} with the same face.`;
               const bodyFacingInstruction = " BODY: The person's full body must face the CAMERA DIRECTLY — torso, hips, and legs are FRONT-FACING toward the viewer. Avoid 3/4 turns, side profiles, or angled body poses. The subject should face the camera head-on.";
-              const fluxPrompt = `High-end fashion editorial photography. Single person only, one subject in frame. Youthful appearance, fresh glowing skin, natural healthy complexion, smooth skin texture — person looks approximately 5 years younger than their actual age, vibrant and energetic. No tired look, no aging signs.${identityInstruction}${bodyFacingInstruction}${occasionAtmosphere}${poseInstruction}${qualityInstruction}${expressionInstruction} ${sanitizeEditPrompt(look.editPrompt)}`;
+              const heightNum = parseFloat(String(height).replace(",", "."));
+              const weightNum = parseFloat(String(weight).replace(",", "."));
+              let bodyBuildInstruction = "";
+              if (!isNaN(heightNum) && !isNaN(weightNum) && heightNum > 100 && heightNum < 230 && weightNum > 30 && weightNum < 250) {
+                const bmi = weightNum / Math.pow(heightNum / 100, 2);
+                // Для полных людей — генерируем тело "минус 15-20 кг" от реального веса,
+                // но не ниже здорового минимума (BMI не ниже 22). Одинаково для всех трёх образов.
+                let targetWeight = weightNum;
+                let buildDesc = "";
+                let buildShort = "";
+                if (bmi >= 40) {
+                  // Очень полный — минус 20 кг, но не ниже BMI 22
+                  const minWeight = 22 * Math.pow(heightNum / 100, 2);
+                  targetWeight = Math.max(weightNum - 20, minWeight);
+                } else if (bmi >= 35) {
+                  // Очень полный — минус 18 кг
+                  const minWeight = 22 * Math.pow(heightNum / 100, 2);
+                  targetWeight = Math.max(weightNum - 18, minWeight);
+                } else if (bmi >= 30) {
+                  // Полный — минус 15 кг
+                  const minWeight = 22 * Math.pow(heightNum / 100, 2);
+                  targetWeight = Math.max(weightNum - 15, minWeight);
+                } else if (bmi >= 27) {
+                  // Слегка полный — минус 8 кг
+                  const minWeight = 22 * Math.pow(heightNum / 100, 2);
+                  targetWeight = Math.max(weightNum - 8, minWeight);
+                }
+                const targetBmi = targetWeight / Math.pow(heightNum / 100, 2);
+                // Описание целевого тела (после лёгкого "стройнения" для полных)
+                if (targetBmi >= 35) { buildDesc = `very large plus-size heavy-set person, full round midsection, thick torso, wide hips, thick limbs, large frame`; buildShort = `very large heavy-set`; }
+                else if (targetBmi >= 30) { buildDesc = `plus-size heavy-set person, full midsection, broad frame, thick torso`; buildShort = `plus-size heavy-set`; }
+                else if (targetBmi >= 27) { buildDesc = `slightly fuller person with a soft midsection, fuller frame`; buildShort = `fuller`; }
+                else if (targetBmi >= 22) { buildDesc = `average medium-build person, proportionate frame, healthy weight`; buildShort = `average medium`; }
+                else { buildDesc = `slim lean narrow-build person, slender frame`; buildShort = `slim lean`; }
+
+                if (targetWeight < weightNum) {
+                  // Полный человек — генерируем слегка стройнее (минус 15-20 кг), но не худой
+                  bodyBuildInstruction = `BODY TYPE — HIGHEST PRIORITY, override any default body rendering: the person is ${heightNum} cm tall. Render them at a flattering weight of approximately ${Math.round(targetWeight)} kg (slightly slimmer than their real ${weightNum} kg — a natural, healthy-looking reduction of about ${Math.round(weightNum - targetWeight)} kg, NOT extreme, NOT skinny). The body must look like a ${buildDesc} — realistic and proportionate, with a natural healthy body volume. CRITICAL: do NOT render a skinny, thin, or athletic body. Do NOT render the original heavy body either. The result must be a believable "slightly slimmer but still full-figured" version of the person — as if they lost ${Math.round(weightNum - targetWeight)} kg healthily. The torso, waist, hips, arms and legs MUST reflect target weight ${Math.round(targetWeight)} kg. Clothing must be tailored to flatter this body — structured tailoring, vertical lines, proper fit (not baggy, not skin-tight).`;
+                } else {
+                  // Худой/средний — без изменений, реальное тело
+                  bodyBuildInstruction = `BODY TYPE — HIGHEST PRIORITY, override any default body rendering: the person is ${heightNum} cm tall and weighs ${weightNum} kg, which means a ${buildDesc}. Draw the FULL BODY with these exact proportions: ${buildShort} build, realistic body volume and width matching height ${heightNum} cm and weight ${weightNum} kg. CRITICAL: do NOT render a slim or athletic body if the person is not slim. Do NOT slim down the person. The torso, waist, hips, arms and legs MUST reflect the real weight ${weightNum} kg. Clothing must be tailored to flatter this ${buildShort} body — structured tailoring, vertical lines, proper fit (not baggy, not skin-tight).`;
+                }
+              }
+              const fluxPrompt = `${bodyBuildInstruction} High-end fashion editorial photography, single person, one subject in frame, full body visible. Youthful appearance, fresh glowing skin, natural healthy complexion, smooth skin texture — person looks approximately 5 years younger than their actual age, vibrant and energetic. No tired look, no aging signs.${identityInstruction}${bodyFacingInstruction}${occasionAtmosphere}${poseInstruction}${qualityInstruction}${expressionInstruction} ${sanitizeEditPrompt(look.editPrompt)}`;
               imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
               if (imageDataUrl) break;
               lastError = "No image data returned from Flux model.";
