@@ -124,7 +124,8 @@ python deploy.py # Деплой на stilist-ai.ru
 ## AI модели (Polza.ai)
 
 - **ANALYSIS_MODEL:** `google/gemini-3.1-flash-lite-preview`
-- **IMAGE_MODEL:** `google/gemini-3.1-flash-image-preview`
+- **IMAGE_MODEL:** `seedream/5-pro-text-to-image` (вызывается через `POST /media`, quality: `medium`, без `output_format`)
+
 
 ## Проверки после деплоя
 
