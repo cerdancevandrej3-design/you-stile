@@ -32,15 +32,85 @@ interface StatsData { events: StatsEvent[]; standardPrice: number; premiumPrice:
 
 const statsPath = path.join(PROJECT_ROOT, "data", "stats.json");
 const RESULTS_DIR = path.join(PROJECT_ROOT, "data", "results");
+const ORDERS_DIR = path.join(PROJECT_ROOT, "data", "orders");
 if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
+if (!fs.existsSync(ORDERS_DIR)) fs.mkdirSync(ORDERS_DIR, { recursive: true });
 const RESULTS_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours
+const UNFINISHED_ORDER_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+type OrderStatus = "awaiting_payment" | "awaiting_input" | "processing" | "partial" | "ready" | "failed" | "expired";
+interface OrderRecord {
+  paymentId: string;
+  tier: "standard" | "premium";
+  status: OrderStatus;
+  createdAt: string;
+  updatedAt: string;
+  paidAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  unfinishedExpiresAt?: string;
+  resultExpiresAt?: string;
+  expectedLooks?: number;
+  completedLooks?: number;
+  error?: string | null;
+}
+
+const activeOrderIds = new Set<string>();
+const activeRetryKeys = new Set<string>();
+const activePromoCodes = new Set<string>();
+const sanitizeOrderId = (value: unknown) => String(value || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
+const orderFile = (paymentId: string) => path.join(ORDERS_DIR, `${sanitizeOrderId(paymentId)}.json`);
+function readOrder(paymentId: string): OrderRecord | null {
+  const id = sanitizeOrderId(paymentId);
+  if (!id) return null;
+  try {
+    const file = orderFile(id);
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf-8")) : null;
+  } catch {
+    return null;
+  }
+}
+function writeJsonAtomic(file: string, data: unknown) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, file);
+}
+function saveOrder(order: OrderRecord): OrderRecord {
+  const normalized = { ...order, paymentId: sanitizeOrderId(order.paymentId), updatedAt: new Date().toISOString() };
+  writeJsonAtomic(orderFile(normalized.paymentId), normalized);
+  return normalized;
+}
+function updateOrder(paymentId: string, patch: Partial<OrderRecord>): OrderRecord | null {
+  const current = readOrder(paymentId);
+  if (!current) return null;
+  return saveOrder({ ...current, ...patch, paymentId: current.paymentId });
+}
+
 function cleanupOldResults(): number {
-  if (!fs.existsSync(RESULTS_DIR)) return 0;
   let removed = 0;
   const now = Date.now();
+  if (fs.existsSync(ORDERS_DIR)) {
+    for (const entry of fs.readdirSync(ORDERS_DIR)) {
+      if (!entry.endsWith(".json")) continue;
+      const id = entry.slice(0, -5);
+      const order = readOrder(id);
+      if (!order || order.status === "expired") continue;
+      const expiresAt = order.resultExpiresAt || order.unfinishedExpiresAt;
+      if (!expiresAt || new Date(expiresAt).getTime() > now) continue;
+      const dir = path.join(RESULTS_DIR, id);
+      try {
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+        saveOrder({ ...order, status: "expired", error: null });
+        removed++;
+      } catch {}
+    }
+  }
+  if (!fs.existsSync(RESULTS_DIR)) return removed;
   for (const entry of fs.readdirSync(RESULTS_DIR)) {
     const dir = path.join(RESULTS_DIR, entry);
     try {
+      if (readOrder(entry)) continue;
       const st = fs.statSync(dir);
       if (!st.isDirectory()) continue;
       if (now - st.mtimeMs > RESULTS_TTL_MS) {
@@ -49,10 +119,26 @@ function cleanupOldResults(): number {
       }
     } catch {}
   }
-  if (removed > 0) console.log(`[cleanup] Removed ${removed} expired result folders (older than 5h)`);
+  if (removed > 0) console.log(`[cleanup] Expired ${removed} old order result folders`);
   return removed;
 }
 cleanupOldResults();
+// A process restart interrupts in-memory API calls. Preserve checkpoints and expose
+// the order as retryable instead of leaving it permanently stuck in "processing".
+for (const entry of fs.readdirSync(ORDERS_DIR)) {
+  if (!entry.endsWith(".json")) continue;
+  const order = readOrder(entry.slice(0, -5));
+  if (order?.status === "processing") {
+    const complete = !!order.expectedLooks && (order.completedLooks || 0) >= order.expectedLooks;
+    saveOrder({
+      ...order,
+      status: complete ? "ready" : order.completedLooks ? "partial" : "failed",
+      completedAt: complete ? new Date().toISOString() : order.completedAt,
+      resultExpiresAt: complete ? new Date(Date.now() + RESULTS_TTL_MS).toISOString() : order.resultExpiresAt,
+      error: complete ? null : "Генерация была прервана перезапуском сервера. Отсутствующие фото можно повторить.",
+    });
+  }
+}
 setInterval(cleanupOldResults, 60 * 60 * 1000); // every hour
 let _statsCache: StatsData | null = null;
 function loadStats(): StatsData {
@@ -531,6 +617,34 @@ async function generateImageWithFlux(prompt: string, referenceImageBase64?: stri
 
   console.log("[Image API] Full response:", JSON.stringify(data).substring(0, 500));
   return null;
+}
+
+async function persistGeneratedImage(paymentId: string, lookIdx: number, image: string | null): Promise<string | null> {
+  if (!image) return null;
+  const id = sanitizeOrderId(paymentId);
+  if (!id) return image;
+  const resultDir = path.join(RESULTS_DIR, id);
+  fs.mkdirSync(resultDir, { recursive: true });
+
+  const dataMatch = image.match(/^data:([^;]+);base64,(.+)$/);
+  if (dataMatch) {
+    const ext = dataMatch[1].includes("png") ? "png" : dataMatch[1].includes("webp") ? "webp" : "jpg";
+    const imgFile = `look_${lookIdx}.${ext}`;
+    fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(dataMatch[2], "base64"));
+    return `/api/result-image/${id}/${imgFile}`;
+  }
+
+  if (/^https?:\/\//i.test(image)) {
+    const response = await fetchWithTimeout(image, { method: "GET" }, 120000);
+    if (!response.ok) throw new Error(`Не удалось сохранить готовое изображение: HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+    const imgFile = `look_${lookIdx}.${ext}`;
+    fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(await response.arrayBuffer()));
+    return `/api/result-image/${id}/${imgFile}`;
+  }
+
+  return image;
 }
 
 async function startServer() {
@@ -1224,6 +1338,58 @@ loadList(1);
 
   // Payment endpoints
   const PAYMENT_MODE = process.env.PAYMENT_MODE || "test";
+  async function ensurePaidOrder(paymentIdRaw: unknown): Promise<OrderRecord | null> {
+    const paymentId = sanitizeOrderId(paymentIdRaw);
+    if (!paymentId) return null;
+    const existing = readOrder(paymentId);
+    const canRecoverLatePayment = existing?.status === "expired" && !existing.startedAt && !existing.completedAt;
+    if (existing && existing.status !== "awaiting_payment" && !canRecoverLatePayment) return existing;
+    try {
+      const payment = await yooKassa.getPayment(paymentId);
+      if (payment.status !== "succeeded") return existing;
+      const now = new Date().toISOString();
+      const tier: "standard" | "premium" = payment.metadata?.tier === "premium" ? "premium" : "standard";
+      let legacyPatch: Partial<OrderRecord> = {};
+      if (!existing) {
+        const legacyResultFile = path.join(RESULTS_DIR, paymentId, "result.json");
+        if (fs.existsSync(legacyResultFile)) {
+          try {
+            const legacyResult = JSON.parse(fs.readFileSync(legacyResultFile, "utf-8"));
+            const legacyLooks = Array.isArray(legacyResult.looks) ? legacyResult.looks : [];
+            const completedLooks = legacyLooks.filter((look: any) => !!look.image).length;
+            const isComplete = legacyLooks.length > 0 && completedLooks === legacyLooks.length;
+            const completedMs = fs.statSync(legacyResultFile).mtimeMs;
+            legacyPatch = {
+              status: isComplete ? "ready" : "partial",
+              startedAt: new Date(completedMs).toISOString(),
+              completedAt: isComplete ? new Date(completedMs).toISOString() : undefined,
+              expectedLooks: legacyLooks.length,
+              completedLooks,
+              resultExpiresAt: isComplete ? new Date(completedMs + RESULTS_TTL_MS).toISOString() : undefined,
+              unfinishedExpiresAt: isComplete ? undefined : new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+            };
+          } catch {}
+        }
+      }
+      return saveOrder({
+        paymentId,
+        tier,
+        status: "awaiting_input",
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+        paidAt: existing?.paidAt || now,
+        unfinishedExpiresAt: canRecoverLatePayment
+          ? new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString()
+          : existing?.unfinishedExpiresAt || new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+        error: null,
+        ...legacyPatch,
+      });
+    } catch (error) {
+      console.error("[Order] Payment verification failed:", paymentId, (error as Error).message);
+      return existing;
+    }
+  }
+
   // Maps orderId (idempotenceKey) -> paymentId — persisted to disk so restarts don't lose pending payments
   const pendingPaymentsFile = path.join(PROJECT_ROOT, "data", "pending_payments.json");
   function loadPendingPayments(): Map<string, string> {
@@ -1273,6 +1439,20 @@ loadList(1);
       // Сохраняем маппинг orderId → paymentId для confirm-payment
       pendingPayments.set(idempotenceKey, payment.id);
       savePendingPayment(idempotenceKey, payment.id);
+      const createdAt = new Date().toISOString();
+      try {
+        saveOrder({
+          paymentId: payment.id,
+          tier: tier === "premium" ? "premium" : "standard",
+          status: "awaiting_payment",
+          createdAt,
+          updatedAt: createdAt,
+          unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+          error: null,
+        });
+      } catch (orderError) {
+        console.error("[Order] Failed to persist newly created payment:", payment.id, orderError);
+      }
 
       console.log("[YooKassa] Payment created:", payment.id, "status:", payment.status);
 
@@ -1306,12 +1486,13 @@ loadList(1);
       const event = req.body;
       console.log("[YooKassa Webhook] Received event:", event.type, event.object?.id);
 
-      if (event.type === "payment.succeeded" || event.type === "waiting_for_capture") {
+      if (event.type === "payment.succeeded") {
         const paymentId = event.object?.id;
         const tier = event.object?.metadata?.tier || "standard";
         const amount = event.object?.amount?.value || "?";
 
         if (paymentId) {
+          await ensurePaidOrder(paymentId);
           incPaidSale(tier);
           console.log(`[YooKassa Webhook] Payment confirmed: ${paymentId}, tier: ${tier}`);
           const tierName = tier === "premium" ? "Премиум" : "Стандарт";
@@ -1357,11 +1538,13 @@ loadList(1);
       if (p.status === "waiting_for_capture") {
         await yooKassa.capturePayment(paymentId, undefined, paymentId);
         console.log(`[YooKassa] Payment captured: ${paymentId}`);
+        p = await yooKassa.getPayment(paymentId);
       }
 
-      if (p.status === "succeeded" || p.status === "waiting_for_capture") {
+      if (p.status === "succeeded") {
         const tier = p.metadata?.tier || "standard";
         const amount = (p as any).amount?.value || "?";
+        await ensurePaidOrder(paymentId);
         console.log(`[YooKassa] Payment confirmed: ${paymentId}, tier: ${tier}`);
         // Fallback: increment stats and notify Telegram (webhook may not have fired yet)
         incPaidSale(tier);
@@ -1400,15 +1583,54 @@ loadList(1);
     }
   });
 
+  app.get("/api/order/:paymentId", async (req: Request, res: Response) => {
+    const paymentId = sanitizeOrderId(req.params.paymentId);
+    if (!paymentId) return res.status(400).json({ error: "invalid id" });
+    const order = await ensurePaidOrder(paymentId);
+    if (!order) return res.status(404).json({ status: "not_found", paid: false });
+    const expiresAt = order.resultExpiresAt || order.unfinishedExpiresAt;
+    if (expiresAt && new Date(expiresAt).getTime() <= Date.now() && order.status !== "expired") {
+      cleanupOldResults();
+      const expired = readOrder(paymentId);
+      return res.json({ ...(expired || order), paid: !!order.paidAt, status: "expired" });
+    }
+    res.json({ ...order, paid: !!order.paidAt });
+  });
+
   // Recover saved result by paymentId
   app.get("/api/result/:paymentId", (req: Request, res: Response) => {
-    const id = req.params.paymentId.replace(/[^a-zA-Z0-9_-]/g, "");
+    const id = sanitizeOrderId(req.params.paymentId);
     if (!id) return res.status(400).json({ error: "invalid id" });
+    const order = readOrder(id);
+    const expiresAt = order?.resultExpiresAt || order?.unfinishedExpiresAt;
+    if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) {
+      cleanupOldResults();
+      return res.json({ ready: false, status: "expired", expired: true });
+    }
     const file = path.join(RESULTS_DIR, id, "result.json");
-    if (!fs.existsSync(file)) return res.status(404).json({ ready: false, expired: true });
+    if (!fs.existsSync(file)) {
+      if (order) {
+        return res.json({
+          ready: false,
+          status: order.status,
+          expired: order.status === "expired",
+          expectedLooks: order.expectedLooks || 0,
+          completedLooks: order.completedLooks || 0,
+          error: order.error || null,
+        });
+      }
+      return res.status(404).json({ ready: false, status: "not_found", expired: false });
+    }
     try {
       const data = JSON.parse(fs.readFileSync(file, "utf-8"));
-      res.json({ ready: true, ...data });
+      const looks = Array.isArray(data.looks) ? data.looks : [];
+      const complete = looks.length > 0 && looks.every((look: any) => !!look.image);
+      res.json({
+        ready: true,
+        status: complete ? "ready" : (order?.status || "partial"),
+        expiresAt: order?.resultExpiresAt || null,
+        ...data,
+      });
     } catch {
       res.status(500).json({ error: "read failed" });
     }
@@ -1573,6 +1795,9 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
     let bodyTypeSummary: string | undefined;
     let astroReading: string | null | undefined;
     let looksWithImages: any[] | undefined;
+    let lockedOrderId: string | null = null;
+    let lockedPromoCode: string | null = null;
+    let paymentId = "";
 
     try {
       safeWrite(JSON.stringify({ type: "progress", step: 0.8, text: "Фотографии получены сервером..." }) + "\n");
@@ -1583,6 +1808,70 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         return res.end();
       }
 
+      paymentId = sanitizeOrderId(req.body.paymentId);
+      const promoCodeForAccess = (req.body.promoCode || "").toString().trim().toUpperCase();
+      if (paymentId) {
+        const paidOrder = await ensurePaidOrder(paymentId);
+        if (!paidOrder?.paidAt) {
+          safeWrite(JSON.stringify({ type: "error", error: "Оплата заказа не подтверждена." }) + "\n");
+          return res.end();
+        }
+        if (paidOrder.status === "expired") {
+          safeWrite(JSON.stringify({ type: "error", error: "Срок продолжения этого заказа истёк." }) + "\n");
+          return res.end();
+        }
+        const existingResult = path.join(RESULTS_DIR, paymentId, "result.json");
+        if (fs.existsSync(existingResult)) {
+          safeWrite(JSON.stringify({ type: "error", error: "Заказ уже создан. Откройте «Мои образы» — там можно повторить только отсутствующие фото." }) + "\n");
+          return res.end();
+        }
+        if (activeOrderIds.has(paymentId) || paidOrder.status === "processing") {
+          safeWrite(JSON.stringify({ type: "error", error: "Этот заказ уже генерируется. Его можно закрыть и открыть позже в разделе «Мои образы»." }) + "\n");
+          return res.end();
+        }
+        activeOrderIds.add(paymentId);
+        lockedOrderId = paymentId;
+
+        const resultDir = path.join(RESULTS_DIR, paymentId);
+        fs.mkdirSync(resultDir, { recursive: true });
+        for (const name of fs.readdirSync(resultDir)) {
+          if (/^source_\d+\.(jpg|png|webp)$/i.test(name)) fs.rmSync(path.join(resultDir, name), { force: true });
+        }
+        files.forEach((file, idx) => {
+          const ext = file.mimetype.includes("png") ? "png" : file.mimetype.includes("webp") ? "webp" : "jpg";
+          fs.writeFileSync(path.join(resultDir, `source_${idx}.${ext}`), file.buffer);
+        });
+        writeJsonAtomic(path.join(resultDir, "input.json"), {
+          height: req.body.height || "",
+          weight: req.body.weight || "",
+          wishes: req.body.wishes || "",
+          looksCount: req.body.looksCount || "",
+          userName: req.body.userName || "",
+          budget: req.body.budget || "",
+          birthDate: req.body.birthDate || "",
+          savedAt: new Date().toISOString(),
+        });
+        updateOrder(paymentId, {
+          status: "processing",
+          startedAt: new Date().toISOString(),
+          completedLooks: 0,
+          error: null,
+          unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+        });
+      } else {
+        const promo = promoCodeForAccess ? promos[promoCodeForAccess] : null;
+        if (!promo || promo.used) {
+          safeWrite(JSON.stringify({ type: "error", error: "Для генерации нужна подтверждённая оплата или действующий промокод." }) + "\n");
+          return res.end();
+        }
+        if (activePromoCodes.has(promoCodeForAccess)) {
+          safeWrite(JSON.stringify({ type: "error", error: "Этот промокод уже используется для генерации." }) + "\n");
+          return res.end();
+        }
+        activePromoCodes.add(promoCodeForAccess);
+        lockedPromoCode = promoCodeForAccess;
+      }
+
       const height = req.body.height || "не указан";
       const weight = req.body.weight || "не указан";
       const rawWishes = (req.body.wishes || "").toString().slice(0, 500).trim();
@@ -1590,7 +1879,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       // Блокировка повторной генерации: если для этого paymentId уже есть сохранённый
       // результат (моложе 5 часов) — не запускаем новую генерацию, сразу возвращаем ошибку.
       // Пользователь должен смотреть свои уже сгенерированные образы, а не тратить токены заново.
-      const earlyPaymentId = (req.body.paymentId || "").toString().trim();
+      const earlyPaymentId = paymentId;
       if (earlyPaymentId) {
         try {
           const existingResult = path.join(RESULTS_DIR, earlyPaymentId, "result.json");
@@ -1622,6 +1911,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         ? `\n\n💰 БЮДЖЕТ ПОЛЬЗОВАТЕЛЯ: ${budgetRaw.toLocaleString("ru-RU")} ₽ на один образ. КРИТИЧЕСКИ ВАЖНО: сумма всех items[] в каждом образе НЕ должна превышать ${budgetRaw.toLocaleString("ru-RU")} ₽. Подбирай реальные вещи в этом ценовом диапазоне. Расставляй приоритеты: сначала ключевые вещи образа, потом аксессуары. Указывай честные цены — не занижай и не завышай.`
         : "";
       const looksCount = Math.min(5, Math.max(1, parseInt(req.body.looksCount) || 3));
+      if (paymentId) updateOrder(paymentId, { expectedLooks: looksCount });
       const userName = (req.body.userName || "").toString().trim().slice(0, 50);
       const visitCount = Math.max(1, parseInt(req.body.visitCount) || 1);
       const pastLooks = (req.body.pastLooks || "").toString().trim().slice(0, 300);
@@ -1749,6 +2039,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         }
       } catch (e: any) {
         clearInterval(heartbeat);
+        if (paymentId) updateOrder(paymentId, { status: "failed", error: e.message || "Ошибка анализа изображения." });
         let msg = e.message;
         if (msg.includes("Quota") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("429")) {
           msg = "Превышен лимит запросов API. Подождите 1 минуту и попробуйте снова.";
@@ -1778,8 +2069,21 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
 
       if (!looks || !Array.isArray(looks) || looks.length === 0) {
         clearInterval(heartbeat);
+        if (paymentId) updateOrder(paymentId, { status: "failed", error: "AI не смог подготовить описания образов." });
         safeWrite(JSON.stringify({ type: "error", error: "AI не смог сгенерировать образы. Попробуйте еще раз." }) + "\n");
         return res.end();
+      }
+
+      const checkpointLooks = looks.map((look: any) => ({ ...look, image: null, imageError: null }));
+      if (paymentId) {
+        const resultDir = path.join(RESULTS_DIR, paymentId);
+        writeJsonAtomic(path.join(resultDir, "result.json"), {
+          greetingAndAnalysis,
+          bodyTypeSummary,
+          astroReading: astroReading || null,
+          looks: checkpointLooks,
+          savedAt: new Date().toISOString(),
+        });
       }
 
       safeWrite(JSON.stringify({ type: "progress", step: 1.5, text: "Анализ и подбор гардероба завершен. Переходим к визуализации..." }) + "\n");
@@ -1915,7 +2219,29 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
           text: `Сгенерировано ${completedImages}/${totalImages} образов...`
         }) + "\n");
 
-        return { ...look, image: generatedImageBase64, imageError: imageGenerationError };
+        const completedLook = { ...look, image: generatedImageBase64, imageError: imageGenerationError };
+        if (paymentId) {
+          try {
+            const resultDir = path.join(RESULTS_DIR, paymentId);
+            const imageRef = await persistGeneratedImage(paymentId, idx, generatedImageBase64);
+            checkpointLooks[idx] = { ...look, image: imageRef, imageError: imageGenerationError };
+            writeJsonAtomic(path.join(resultDir, "result.json"), {
+              greetingAndAnalysis,
+              bodyTypeSummary,
+              astroReading: astroReading || null,
+              looks: checkpointLooks,
+              savedAt: new Date().toISOString(),
+            });
+            updateOrder(paymentId, {
+              status: "processing",
+              completedLooks: checkpointLooks.filter((item: any) => !!item.image).length,
+              error: imageGenerationError || null,
+            });
+          } catch (checkpointError) {
+            console.error("[Checkpoint] failed:", checkpointError);
+          }
+        }
+        return completedLook;
       }));
 
       // Step 3: Send intermediate result with images so user sees greeting + looks immediately
@@ -1928,27 +2254,17 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       }) + "\n");
 
       // Save partial result immediately after image generation — survives if shopping URLs fail
-      const paymentId = (req.body.paymentId || "").toString().trim();
       if (paymentId) {
         try {
           const resultDir = path.join(RESULTS_DIR, paymentId);
           fs.mkdirSync(resultDir, { recursive: true });
-          const looksForPartial = looksWithImages.map((look: any, idx: number) => {
-            let imageRef = look.image;
-            if (look.image && look.image.startsWith("data:")) {
-              const m = look.image.match(/^data:([^;]+);base64,(.+)$/);
-              if (m) {
-                const ext = m[1].includes("png") ? "png" : "jpg";
-                const imgFile = `look_${idx}.${ext}`;
-                fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(m[2], "base64"));
-                imageRef = `/api/result-image/${paymentId}/${imgFile}`;
-              }
-            }
-            return { ...look, image: imageRef };
-          });
-          fs.writeFileSync(
+          const looksForPartial = looksWithImages.map((look: any, idx: number) => ({
+            ...look,
+            image: checkpointLooks[idx]?.image || null,
+          }));
+          writeJsonAtomic(
             path.join(resultDir, "result.json"),
-            JSON.stringify({ greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null, looks: looksForPartial, savedAt: new Date().toISOString() })
+            { greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null, looks: looksForPartial, savedAt: new Date().toISOString() }
           );
         } catch (e) { console.error("[Partial save] failed:", e); }
       }
@@ -1975,24 +2291,29 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
         try {
           const resultDir = path.join(RESULTS_DIR, paymentId);
           fs.mkdirSync(resultDir, { recursive: true });
-          const looksForStorage = looksWithImagesAndUrls.map((look: any, idx: number) => {
-            let imageRef = look.image;
-            if (look.image && look.image.startsWith("data:")) {
-              const m = look.image.match(/^data:([^;]+);base64,(.+)$/);
-              if (m) {
-                const ext = m[1].includes("png") ? "png" : "jpg";
-                const imgFile = `look_${idx}.${ext}`;
-                fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(m[2], "base64"));
-                imageRef = `/api/result-image/${paymentId}/${imgFile}`;
-              }
-            }
-            return { ...look, image: imageRef };
-          });
-          fs.writeFileSync(
+          const looksForStorage = looksWithImagesAndUrls.map((look: any, idx: number) => ({
+            ...look,
+            image: checkpointLooks[idx]?.image || null,
+          }));
+          writeJsonAtomic(
             path.join(resultDir, "result.json"),
-            JSON.stringify({ greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null, looks: looksForStorage, savedAt: new Date().toISOString() })
+            { greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null, looks: looksForStorage, savedAt: new Date().toISOString() }
           );
         } catch (e) { console.error("[Result] Save failed:", e); }
+      }
+
+      if (paymentId) {
+        const completedLooks = checkpointLooks.filter((look: any) => !!look.image).length;
+        const isComplete = completedLooks === looksWithImagesAndUrls.length;
+        const completedAt = isComplete ? new Date().toISOString() : undefined;
+        updateOrder(paymentId, {
+          status: isComplete ? "ready" : "partial",
+          completedLooks,
+          completedAt,
+          resultExpiresAt: isComplete ? new Date(Date.now() + RESULTS_TTL_MS).toISOString() : undefined,
+          unfinishedExpiresAt: isComplete ? undefined : new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+          error: isComplete ? null : "Не все изображения удалось создать. Повторите только отсутствующие фото.",
+        });
       }
 
       // Промокод помечаем использованным ТОЛЬКО после успешной генерации.
@@ -2017,7 +2338,7 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
       console.error("Error processing image in /api/stylize:", error);
 
       // Emergency save: persist whatever was generated before the error
-      const paymentIdEmergency = (req.body?.paymentId || "").toString().trim();
+      const paymentIdEmergency = sanitizeOrderId(req.body?.paymentId);
       if (paymentIdEmergency && greetingAndAnalysis && looksWithImages && looksWithImages.length > 0) {
         try {
           const resultDir = path.join(RESULTS_DIR, paymentIdEmergency);
@@ -2038,35 +2359,92 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
               }
               return { ...look, image: imageRef };
             });
-            fs.writeFileSync(resultFile, JSON.stringify({
+            writeJsonAtomic(resultFile, {
               greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null,
               looks: emergencyLooks, savedAt: new Date().toISOString()
-            }));
+            });
             console.log("[Emergency save] Saved partial result for", paymentIdEmergency);
           }
         } catch (saveErr) { console.error("[Emergency save] failed:", saveErr); }
       }
 
+      if (paymentIdEmergency) {
+        const completedLooks = looksWithImages?.filter((look: any) => !!look.image).length || 0;
+        updateOrder(paymentIdEmergency, {
+          status: completedLooks > 0 ? "partial" : "failed",
+          completedLooks,
+          error: (error as Error).message,
+          unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+        });
+      }
+
       safeWrite(JSON.stringify({ type: "error", error: (error as Error).message }) + "\n");
       if (!res.writableEnded) res.end();
+    } finally {
+      if (lockedOrderId) activeOrderIds.delete(lockedOrderId);
+      if (lockedPromoCode) activePromoCodes.delete(lockedPromoCode);
     }
   });
 
   // Regenerate a single look image
   app.post("/api/regenerate-image", upload.single("image"), async (req: Request, res: Response) => {
+    let retryKey = "";
     try {
-      const file = req.file as MulterFile | undefined;
-      const editPrompt = (req.body.editPrompt || "").toString().trim();
-      const wishes = (req.body.wishes || "").toString().trim();
-      const paymentId = (req.body.paymentId || "").toString().trim();
+      const paymentId = sanitizeOrderId(req.body.paymentId);
       const lookIdx = parseInt(req.body.lookIdx || "0", 10);
+      if (!paymentId || !Number.isInteger(lookIdx) || lookIdx < 0) {
+        return res.status(400).json({ error: "Некорректный заказ или номер образа." });
+      }
 
-      if (!file || !editPrompt) return res.status(400).json({ error: "Missing image or editPrompt" });
+      const order = await ensurePaidOrder(paymentId);
+      if (!order?.paidAt) return res.status(403).json({ error: "Оплата заказа не подтверждена." });
+      const expiresAt = order.resultExpiresAt || order.unfinishedExpiresAt;
+      if (order.status === "expired" || (expiresAt && new Date(expiresAt).getTime() <= Date.now())) {
+        cleanupOldResults();
+        return res.status(410).json({ error: "Срок хранения заказа истёк." });
+      }
+      if (order.status === "processing" || activeOrderIds.has(paymentId)) {
+        return res.status(409).json({ error: "Основная генерация этого заказа ещё выполняется." });
+      }
 
-      const mimeType = file.mimetype as "image/jpeg" | "image/png" | "image/webp";
-      const referenceImageBase64 = file.buffer.toString("base64");
+      const resultDir = path.join(RESULTS_DIR, paymentId);
+      const resultFile = path.join(resultDir, "result.json");
+      if (!fs.existsSync(resultFile)) return res.status(409).json({ error: "Описание образов ещё не готово." });
+      const saved = JSON.parse(fs.readFileSync(resultFile, "utf-8"));
+      if (!saved.looks?.[lookIdx]) return res.status(404).json({ error: "Образ не найден." });
+      if (saved.looks[lookIdx].image) return res.json({ image: saved.looks[lookIdx].image, alreadyReady: true });
+
+      retryKey = paymentId;
+      if (activeRetryKeys.has(retryKey)) return res.status(409).json({ error: "Для этого заказа уже повторяется другое фото." });
+      activeRetryKeys.add(retryKey);
+
+      const uploadedFile = req.file as MulterFile | undefined;
+      let sourceBuffer: Buffer;
+      let mimeType: "image/jpeg" | "image/png" | "image/webp";
+      if (uploadedFile) {
+        sourceBuffer = uploadedFile.buffer;
+        mimeType = uploadedFile.mimetype as "image/jpeg" | "image/png" | "image/webp";
+      } else {
+        const sourceName = fs.readdirSync(resultDir).find(name => /^source_0\.(jpg|png|webp)$/i.test(name));
+        if (!sourceName) return res.status(409).json({ error: "Исходное фото заказа не найдено." });
+        sourceBuffer = fs.readFileSync(path.join(resultDir, sourceName));
+        mimeType = sourceName.endsWith(".png") ? "image/png" : sourceName.endsWith(".webp") ? "image/webp" : "image/jpeg";
+      }
+
+      let input: any = {};
+      try {
+        const inputFile = path.join(resultDir, "input.json");
+        if (fs.existsSync(inputFile)) input = JSON.parse(fs.readFileSync(inputFile, "utf-8"));
+      } catch {}
+      const editPrompt = (saved.looks[lookIdx].editPrompt || req.body.editPrompt || "").toString().trim();
+      const wishes = (input.wishes || req.body.wishes || "").toString().trim();
+      if (!editPrompt) return res.status(409).json({ error: "Инструкция для этого образа не сохранилась." });
+
+      const referenceImageBase64 = sourceBuffer.toString("base64");
+      updateOrder(paymentId, { status: "partial", error: null });
 
       let imageDataUrl: string | null = null;
+      let lastError = "";
       for (let attempt = 0; attempt < 5; attempt++) {
         try {
           const poseInstruction = wishes.toLowerCase().includes("фотосессия")
@@ -2074,39 +2452,43 @@ ${wishes ? `Пожелания: "${wishes}"` : ""}
             : " POSE: Natural confident pose — slight body angle to camera, weight on one leg.";
           const identityInstruction = " IDENTITY: The person in the generated image MUST be the SAME person as in the reference photo. Preserve their gender, face, facial features, skin tone, hair color, eye color, jawline, and body type EXACTLY. Do NOT change gender. Do NOT swap to a different person.";
           const bodyFacingInstruction = " BODY: The person's full body must face the CAMERA DIRECTLY — torso, hips, and legs are FRONT-FACING toward the viewer. Avoid 3/4 turns, side profiles, or angled body poses. The subject should face the camera head-on.";
-          const fluxPrompt = `High-end fashion editorial photography. Single person only.${identityInstruction}${bodyFacingInstruction}${poseInstruction} QUALITY: Maximum resolution, magazine cover quality. ${sanitizeEditPrompt(editPrompt)}`;
+          const expressionInstruction = " EXPRESSION: Preserve the exact facial expression from the reference photo. Do NOT add a smile if the person is not smiling in the reference.";
+          const fluxPrompt = `High-end fashion editorial photography. Single person only.${identityInstruction}${bodyFacingInstruction}${poseInstruction}${expressionInstruction} QUALITY: Maximum resolution, magazine cover quality. ${sanitizeEditPrompt(editPrompt)}`;
           imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
           if (imageDataUrl) break;
         } catch (e: any) {
+          lastError = e.message;
           if (attempt < 4) await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
         }
       }
 
-      if (!imageDataUrl) return res.status(503).json({ error: "Image generation failed after 5 attempts" });
-
-      // Update saved result if paymentId provided
-      if (paymentId) {
-        try {
-          const resultFile = path.join(RESULTS_DIR, paymentId, "result.json");
-          if (fs.existsSync(resultFile)) {
-            const saved = JSON.parse(fs.readFileSync(resultFile, "utf-8"));
-            if (saved.looks && saved.looks[lookIdx]) {
-              const m = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
-              if (m) {
-                const ext = m[1].includes("png") ? "png" : "jpg";
-                const imgFile = `look_${lookIdx}.${ext}`;
-                fs.writeFileSync(path.join(RESULTS_DIR, paymentId, imgFile), Buffer.from(m[2], "base64"));
-                saved.looks[lookIdx].image = `/api/result-image/${paymentId}/${imgFile}`;
-                fs.writeFileSync(resultFile, JSON.stringify(saved));
-              }
-            }
-          }
-        } catch (e) { console.error("[Regen save] failed:", e); }
+      if (!imageDataUrl) {
+        updateOrder(paymentId, { status: "partial", error: lastError || "Не удалось повторить генерацию изображения." });
+        return res.status(503).json({ error: "Не удалось создать фото после нескольких попыток. Попробуйте позже." });
       }
 
-      res.json({ image: imageDataUrl });
+      const imageRef = await persistGeneratedImage(paymentId, lookIdx, imageDataUrl);
+      saved.looks[lookIdx].image = imageRef;
+      saved.looks[lookIdx].imageError = null;
+      saved.savedAt = new Date().toISOString();
+      writeJsonAtomic(resultFile, saved);
+
+      const completedLooks = saved.looks.filter((look: any) => !!look.image).length;
+      const isComplete = completedLooks === saved.looks.length;
+      updateOrder(paymentId, {
+        status: isComplete ? "ready" : "partial",
+        completedLooks,
+        completedAt: isComplete ? new Date().toISOString() : order.completedAt,
+        resultExpiresAt: isComplete ? new Date(Date.now() + RESULTS_TTL_MS).toISOString() : order.resultExpiresAt,
+        unfinishedExpiresAt: isComplete ? undefined : new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+        error: isComplete ? null : "Остались изображения, которые нужно повторить.",
+      });
+
+      res.json({ image: imageRef, completed: isComplete });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    } finally {
+      if (retryKey) activeRetryKeys.delete(retryKey);
     }
   });
 

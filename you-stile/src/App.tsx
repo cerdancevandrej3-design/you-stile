@@ -119,6 +119,9 @@ function saveName(name: string) {
 
 // --- My paid orders (persistent access to recovered looks) ---
 type MyOrder = { paymentId: string; tier: Tier; createdAt: number; thumbnail?: string };
+function notifyMyOrdersChanged() {
+  window.dispatchEvent(new Event("you-stile-orders-changed"));
+}
 function getMyOrders(): MyOrder[] {
   try { return JSON.parse(localStorage.getItem("you-stile-my-orders") || "[]"); } catch { return []; }
 }
@@ -126,14 +129,17 @@ function saveMyOrder(order: MyOrder) {
   const all = getMyOrders().filter(o => o.paymentId !== order.paymentId);
   all.push(order);
   localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-20)));
+  notifyMyOrdersChanged();
 }
 function updateMyOrderThumbnail(paymentId: string, thumbnail: string) {
   const all = getMyOrders().map(o => o.paymentId === paymentId ? { ...o, thumbnail } : o);
   localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-20)));
+  notifyMyOrdersChanged();
 }
 function removeMyOrder(paymentId: string) {
   const all = getMyOrders().filter(o => o.paymentId !== paymentId);
   localStorage.setItem("you-stile-my-orders", JSON.stringify(all));
+  notifyMyOrdersChanged();
 }
 function clearMyOrders() {
   localStorage.removeItem("you-stile-my-orders");
@@ -142,6 +148,7 @@ function clearMyOrders() {
   for (const k of Object.keys(localStorage)) {
     if (k.startsWith("paid_")) localStorage.removeItem(k);
   }
+  notifyMyOrdersChanged();
 }
 
 // --- Welcome Screen ---
@@ -869,6 +876,8 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
           const rj = await rd.json();
           if (rj.success) {
             // Сохраняем промокод — он будет помечен "used" на сервере только после успешной генерации.
+            localStorage.removeItem("pending_payment_id");
+            localStorage.removeItem("pending_payment_tier");
             localStorage.setItem("you-stile-promo-code", promoCode.trim().toUpperCase());
             onPaid(rj.tier || tier);
             onClose();
@@ -897,6 +906,9 @@ const PricingModal = ({ isOpen, onClose, onPaid, userName, initialTier, prices }
         // Сохраняем paymentId для проверки после возврата
         localStorage.setItem("pending_payment_id", data.paymentId);
         localStorage.setItem("pending_payment_tier", selectedTier);
+        // Записываем заказ до перехода в ЮKassa: если пользователь оплатит и
+        // случайно закроет страницу возврата, заказ всё равно останется доступен.
+        saveMyOrder({ paymentId: data.paymentId, tier: selectedTier, createdAt: Date.now() });
         // Редирект на YooKassa — через openLink в Telegram, иначе обычный редирект
         const tgWP = (window as any).Telegram?.WebApp;
         if (tgWP?.initData && tgWP.openLink) tgWP.openLink(data.confirmationUrl);
@@ -1862,13 +1874,19 @@ const NailsQuizModal = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
 const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll }: { isOpen: boolean; onClose: () => void; onOpenOrder: (paymentId: string, tier: Tier) => void; onClearAll: () => void }) => {
   const [orders, setOrders] = useState<MyOrder[]>([]);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [statuses, setStatuses] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (isOpen) {
       const fresh = getMyOrders();
       setOrders(fresh);
+      setStatuses({});
       // Background-load thumbnails for orders that don't have one yet
       fresh.forEach(o => {
+        fetch(`/api/order/${o.paymentId}`)
+          .then(r => r.json())
+          .then(data => setStatuses(prev => ({ ...prev, [o.paymentId]: data.status || "not_found" })))
+          .catch(() => {});
         if (o.thumbnail) return;
         fetch(`/api/result/${o.paymentId}`)
           .then(r => r.json())
@@ -1883,6 +1901,15 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll }: { isOpen: bo
           })
           .catch(() => {});
       });
+      const timer = window.setInterval(() => {
+        fresh.forEach(o => {
+          fetch(`/api/order/${o.paymentId}`)
+            .then(r => r.json())
+            .then(data => setStatuses(prev => ({ ...prev, [o.paymentId]: data.status || "not_found" })))
+            .catch(() => {});
+        });
+      }, 10000);
+      return () => window.clearInterval(timer);
     }
   }, [isOpen]);
 
@@ -1951,6 +1978,14 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll }: { isOpen: bo
                             {o.tier === "premium" ? "Премиум" : "Стандарт"}
                           </p>
                           <p className="text-xs text-charcoal/50 mt-0.5">{formatDate(o.createdAt)}</p>
+                          <p className="text-[11px] mt-1 text-charcoal/60">
+                            {statuses[o.paymentId] === "ready" ? "Готово" :
+                              statuses[o.paymentId] === "partial" ? "Нужно повторить часть фото" :
+                              statuses[o.paymentId] === "processing" ? "Генерируется…" :
+                              statuses[o.paymentId] === "awaiting_input" ? "Ожидает загрузки фото" :
+                              statuses[o.paymentId] === "failed" ? "Нужно продолжить заказ" :
+                              statuses[o.paymentId] === "expired" ? "Срок хранения истёк" : "Проверяем статус…"}
+                          </p>
                         </div>
                       </div>
                       <button
@@ -1958,7 +1993,10 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll }: { isOpen: bo
                         disabled={loadingId === o.paymentId}
                         className="px-5 py-2.5 rounded-full bg-charcoal text-ivory text-sm font-medium hover:bg-charcoal/90 transition-colors disabled:opacity-50 whitespace-nowrap"
                       >
-                        {loadingId === o.paymentId ? "Загрузка…" : "Открыть образы"}
+                        {loadingId === o.paymentId ? "Загрузка…" :
+                          statuses[o.paymentId] === "processing" ? "Проверить" :
+                          statuses[o.paymentId] === "awaiting_input" || statuses[o.paymentId] === "failed" ? "Продолжить" :
+                          "Открыть образы"}
                       </button>
                     </div>
                   ))}
@@ -2092,7 +2130,7 @@ const GroupModal = ({ isOpen, onClose, userName }: { isOpen: boolean; onClose: (
 };
 
 // --- Stylize Modal Component ---
-const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, recoveredResult, onRecoveredResultShown, onOpenLightbox }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier; onToast: (msg: string, type: 'success'|'error'|'info') => void; onNewLooks: () => void; recoveredResult?: any; onRecoveredResultShown?: () => void; onOpenLightbox?: (state: LightboxState) => void }) => {
+const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast, onNewLooks, recoveredResult, onRecoveredResultShown, onOpenLightbox }: { isOpen: boolean; onClose: () => void; userName: string; tier: Tier; orderPaymentId?: string; onToast: (msg: string, type: 'success'|'error'|'info') => void; onNewLooks: () => void; recoveredResult?: any; onRecoveredResultShown?: () => void; onOpenLightbox?: (state: LightboxState) => void }) => {
   const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [height, setHeight] = useState("");
@@ -2114,6 +2152,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
   const [reviewText, setReviewText] = useState("");
   const [reviewSent, setReviewSent] = useState(false);
   const [viewMode, setViewMode] = useState<'form' | 'result'>('form');
+  const [retryingLook, setRetryingLook] = useState<number | null>(null);
 
   useEffect(() => { localStorage.setItem("you-stile-birth-day", birthDay); }, [birthDay]);
   useEffect(() => { localStorage.setItem("you-stile-birth-month", birthMonth); }, [birthMonth]);
@@ -2322,7 +2361,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
         formData.append("birthTime", birthTime);
       }
 
-      const pendingId = localStorage.getItem("pending_payment_id");
+      const pendingId = orderPaymentId || localStorage.getItem("pending_payment_id");
       if (pendingId) formData.append("paymentId", pendingId);
 
       const promoCode = localStorage.getItem("you-stile-promo-code");
@@ -2842,31 +2881,40 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, onToast, onNewLooks, re
                               )}
                               <button
                                 type="button"
-                                className="mt-4 px-4 py-2 bg-gold text-charcoal rounded-full text-sm font-medium hover:bg-gold/90 transition-colors"
+                                disabled={retryingLook !== null}
+                                className="mt-4 px-4 py-2 bg-gold text-charcoal rounded-full text-sm font-medium hover:bg-gold/90 transition-colors disabled:opacity-60"
                                 onClick={async () => {
-                                  if (!files.length || !look.editPrompt) return;
+                                  const pid = orderPaymentId || localStorage.getItem("pending_payment_id") || "";
+                                  if (!pid) {
+                                    onToast("Не найден номер оплаченного заказа.", "error");
+                                    return;
+                                  }
                                   const fd = new FormData();
-                                  try { const b = await resizeImage(files[0]); fd.append("image", b, files[0].name); } catch { fd.append("image", files[0]); }
-                                  fd.append("editPrompt", look.editPrompt);
+                                  if (files.length) {
+                                    try { const b = await resizeImage(files[0]); fd.append("image", b, files[0].name); } catch { fd.append("image", files[0]); }
+                                  }
+                                  if (look.editPrompt) fd.append("editPrompt", look.editPrompt);
                                   fd.append("wishes", wishes);
                                   fd.append("lookIdx", String(lookIdx));
-                                  const pid = localStorage.getItem("pending_payment_id") || "";
-                                  if (pid) fd.append("paymentId", pid);
-                                  const btn = document.activeElement as HTMLButtonElement;
-                                  if (btn) btn.textContent = "Генерирую...";
+                                  fd.append("paymentId", pid);
+                                  setRetryingLook(lookIdx);
                                   try {
                                     const r = await fetch("/api/regenerate-image", { method: "POST", body: fd });
                                     const d = await r.json();
                                     if (d.image) {
                                       setResult(prev => prev ? { ...prev, looks: prev.looks.map((l, i) => i === lookIdx ? { ...l, image: d.image, imageError: null } : l) } : prev);
+                                      onToast("Фото успешно создано и сохранено.", "success");
                                     } else {
-                                      if (btn) btn.textContent = "Повторить";
-                                      alert("Не удалось. Попробуйте ещё раз.");
+                                      onToast(d.error || "Не удалось создать фото. Попробуйте позже.", "error");
                                     }
-                                  } catch { if (btn) btn.textContent = "Повторить"; }
+                                  } catch {
+                                    onToast("Связь прервалась. Проверьте заказ в «Моих образах».", "error");
+                                  } finally {
+                                    setRetryingLook(null);
+                                  }
                                 }}
                               >
-                                🔄 Повторить генерацию
+                                {retryingLook === lookIdx ? "Генерирую…" : "🔄 Повторить генерацию"}
                               </button>
                             </div>
                           )}
@@ -3133,12 +3181,26 @@ export default function App() {
   const [isNailsQuizOpen, setIsNailsQuizOpen] = useState(false);
   const [modalKey, setModalKey] = useState(0);
   const [currentTier, setCurrentTier] = useState<Tier>("standard");
+  const [activeOrderId, setActiveOrderId] = useState(() => localStorage.getItem("pending_payment_id") || "");
+  const [myOrdersVersion, setMyOrdersVersion] = useState(0);
   const [userName, setUserName] = useState(getSavedName);
   const [showWelcome, setShowWelcome] = useState(() => !getSavedName());
   const [prices, setPrices] = useState({ standard: 100, premium: 200 });
   const [recoveredResult, setRecoveredResult] = useState<any>(null);
   const [showProcessing, setShowProcessing] = useState(false);
+  const processingDismissedRef = useRef(false);
   const [lightbox, setLightbox] = useState<LightboxState>(null);
+  const hasMyOrders = myOrdersVersion >= 0 && getMyOrders().length > 0;
+
+  useEffect(() => {
+    const refresh = () => setMyOrdersVersion(v => v + 1);
+    window.addEventListener("you-stile-orders-changed", refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("you-stile-orders-changed", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
 
   // Telegram Mini App init
   useEffect(() => {
@@ -3164,6 +3226,7 @@ export default function App() {
           localStorage.setItem("pending_payment_id", paymentId);
           localStorage.setItem("pending_payment_tier", tier);
           saveMyOrder({ paymentId, tier, createdAt: Date.now() });
+          setActiveOrderId(paymentId);
           setCurrentTier(tier);
           setTimeout(() => setIsModalOpen(true), 500);
         }
@@ -3184,37 +3247,71 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("payment_success") === "true") return;
     const pendingId = localStorage.getItem("pending_payment_id");
     if (!pendingId) return;
-    fetch(`/api/result/${pendingId}`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.ready && data.looks) {
-          const tier = (localStorage.getItem("pending_payment_tier") as Tier) || "standard";
-          setCurrentTier(tier);
-          setRecoveredResult(data);
-          setModalKey(k => k + 1);
-          setIsModalOpen(true);
-          // НЕ удаляем pending_payment_id — пользователь может вернуться ещё раз в течение 5 часов
-        } else if (data.expired) {
-          // Проверяем возраст заказа — если < 15 минут, генерация ещё идёт (папка ещё не создана)
-          const order = getMyOrders().find(o => o.paymentId === pendingId);
-          const ageMin = order ? (Date.now() - order.createdAt) / 60000 : Infinity;
-          if (ageMin < 15) {
-            // Генерация ещё не завершилась — оставляем ключ, не показываем ошибку
-            return;
-          }
-          // Образы удалены сервером (старше 5 часов) — чистим всё
+    let cancelled = false;
+    let opened = false;
+    const tier = (localStorage.getItem("pending_payment_tier") as Tier) || "standard";
+
+    const checkOrder = async () => {
+      try {
+        const orderResponse = await fetch(`/api/order/${pendingId}`);
+        if (!orderResponse.ok || cancelled) return;
+        const order = await orderResponse.json();
+        if (cancelled) return;
+
+        if (order.status === "expired") {
           removeMyOrder(pendingId);
           localStorage.removeItem("pending_payment_id");
           localStorage.removeItem("pending_payment_tier");
-          localStorage.removeItem(`paid_standard_${pendingId}`);
-          localStorage.removeItem(`paid_premium_${pendingId}`);
-          setToast({ message: "Срок хранения ваших образов истёк (5 часов). Создайте новые образы.", type: "info" });
+          setShowProcessing(false);
+          setToast({ message: "Срок хранения этого заказа истёк.", type: "info" });
+          return;
         }
-        // если data.ready=false и не expired — генерация ещё идёт, ключ оставляем
-      })
-      .catch(() => {});
+
+        setActiveOrderId(pendingId);
+        if (order.status === "awaiting_input" && order.paid && !opened) {
+          opened = true;
+          setCurrentTier(order.tier || tier);
+          setModalKey(k => k + 1);
+          setIsModalOpen(true);
+          return;
+        }
+
+        if (order.status === "processing") {
+          if (!processingDismissedRef.current) setShowProcessing(true);
+          return;
+        }
+
+        if (order.status === "ready" || order.status === "partial" || order.status === "failed") {
+          const resultResponse = await fetch(`/api/result/${pendingId}`);
+          const data = await resultResponse.json();
+          if (cancelled) return;
+          setShowProcessing(false);
+          if (data.ready && data.looks && !opened) {
+            opened = true;
+            setCurrentTier(order.tier || tier);
+            setRecoveredResult(data);
+            setModalKey(k => k + 1);
+            setIsModalOpen(true);
+          } else if (order.status === "failed" && !opened) {
+            opened = true;
+            setCurrentTier(order.tier || tier);
+            setModalKey(k => k + 1);
+            setIsModalOpen(true);
+            setToast({ message: "Генерация прервалась. Продолжите оплаченный заказ.", type: "info" });
+          }
+        }
+      } catch {}
+    };
+
+    checkOrder();
+    const timer = window.setInterval(checkOrder, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -3237,29 +3334,33 @@ export default function App() {
 
   const openMyOrder = async (paymentId: string, tier: Tier) => {
     try {
+      setActiveOrderId(paymentId);
       const res = await fetch(`/api/result/${paymentId}`);
       const data = await res.json();
-      if (data.ready && data.looks) {
+      if (data.ready && data.looks && data.status !== "processing") {
         setCurrentTier(tier);
         setRecoveredResult(data);
         setModalKey(k => k + 1);
         setIsMyLooksOpen(false);
         setIsModalOpen(true);
       } else if (data.expired) {
-        const order = getMyOrders().find(o => o.paymentId === paymentId);
-        const ageMin = order ? (Date.now() - order.createdAt) / 60000 : Infinity;
-        if (ageMin < 15) {
-          setToast({ message: "Образы ещё генерируются. Зайдите через 10 минут.", type: "info" });
-        } else {
-          removeMyOrder(paymentId);
+        removeMyOrder(paymentId);
+        if (localStorage.getItem("pending_payment_id") === paymentId) {
           localStorage.removeItem("pending_payment_id");
           localStorage.removeItem("pending_payment_tier");
-          localStorage.removeItem(`paid_standard_${paymentId}`);
-          localStorage.removeItem(`paid_premium_${paymentId}`);
-          setToast({ message: "Срок хранения этих образов истёк (5 часов). Создайте новые.", type: "info" });
         }
+        setToast({ message: "Срок хранения этих образов истёк.", type: "info" });
       } else {
-        setToast({ message: "Образы ещё генерируются. Зайдите через 10 минут.", type: "info" });
+        if (data.status === "awaiting_input" || data.status === "failed") {
+          setCurrentTier(tier);
+          localStorage.setItem("pending_payment_id", paymentId);
+          localStorage.setItem("pending_payment_tier", tier);
+          setModalKey(k => k + 1);
+          setIsMyLooksOpen(false);
+          setIsModalOpen(true);
+        } else {
+          setToast({ message: "Образы ещё генерируются. Можно закрыть сайт и вернуться позже.", type: "info" });
+        }
       }
     } catch {
       setToast({ message: "Не удалось загрузить образы. Попробуйте позже.", type: "error" });
@@ -3271,6 +3372,7 @@ export default function App() {
   };
 
   const handlePaid = (tier: Tier) => {
+    setActiveOrderId(localStorage.getItem("pending_payment_id") || "");
     setCurrentTier(tier);
     setModalKey(k => k + 1);
     setIsModalOpen(true);
@@ -3291,6 +3393,7 @@ export default function App() {
       localStorage.setItem("pending_payment_id", paymentId);
       localStorage.setItem("pending_payment_tier", tier);
       saveMyOrder({ paymentId, tier: tier as Tier, createdAt: Date.now() });
+      setActiveOrderId(paymentId);
 
       // Убираем параметры из URL
       window.history.replaceState({}, "", "/");
@@ -3352,7 +3455,7 @@ export default function App() {
           <div className="bg-ivory rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl">
             <p className="text-lg font-serif text-charcoal mb-3">Ваш заказ обрабатывается</p>
             <p className="text-charcoal/60 text-sm mb-6">Пожалуйста, зайдите через 10 минут — результат будет готов.</p>
-            <button onClick={() => setShowProcessing(false)} className="px-6 py-3 rounded-full bg-gold text-charcoal font-medium text-sm">
+            <button onClick={() => { processingDismissedRef.current = true; setShowProcessing(false); }} className="px-6 py-3 rounded-full bg-gold text-charcoal font-medium text-sm">
               Понятно
             </button>
           </div>
@@ -3361,7 +3464,7 @@ export default function App() {
       <PricingModal key={selectedPricingTier} isOpen={isPricingOpen} onClose={() => setIsPricingOpen(false)} onPaid={handlePaid} userName={userName} initialTier={selectedPricingTier} prices={prices} />
       {isTrialOpen && <TrialModalContent isOpen={isTrialOpen} onClose={() => setIsTrialOpen(false)} userName={userName} onUnlock={() => setIsTrialPaymentOpen(true)} />}
       <TrialPaymentModal isOpen={isTrialPaymentOpen} onClose={() => setIsTrialPaymentOpen(false)} onPaid={() => {}} />
-      <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} recoveredResult={recoveredResult} onRecoveredResultShown={() => setRecoveredResult(null)} onOpenLightbox={setLightbox} />
+      <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} orderPaymentId={activeOrderId || undefined} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} recoveredResult={recoveredResult} onRecoveredResultShown={() => setRecoveredResult(null)} onOpenLightbox={setLightbox} />
       <GroupModal isOpen={isGroupOpen} onClose={() => setIsGroupOpen(false)} userName={userName} />
       <MyLooksModal isOpen={isMyLooksOpen} onClose={() => setIsMyLooksOpen(false)} onOpenOrder={openMyOrder} onClearAll={() => { /* список уже обновлён внутри */ }} />
       <NailsQuizModal isOpen={isNailsQuizOpen} onClose={() => setIsNailsQuizOpen(false)} />
@@ -3390,7 +3493,7 @@ export default function App() {
               <a href="#lookbook" className="hover:text-charcoal transition-colors">Лукбук</a>
               <a href="#pricing" className="hover:text-charcoal transition-colors">Тарифы</a>
             </nav>
-            {getMyOrders().length > 0 && (
+            {hasMyOrders && (
               <button
                 onClick={() => setIsMyLooksOpen(true)}
                 className="text-sm font-medium text-charcoal/70 hover:text-charcoal transition-colors"
@@ -3434,7 +3537,7 @@ export default function App() {
               <a href="#how-it-works" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Как это работает</a>
               <a href="#lookbook" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Лукбук</a>
               <a href="#pricing" onClick={() => setMenuOpen(false)} className="text-charcoal/70 font-medium py-2 border-b border-charcoal/5">Тарифы</a>
-              {getMyOrders().length > 0 && (
+              {hasMyOrders && (
                 <button
                   onClick={() => { setMenuOpen(false); setIsMyLooksOpen(true); }}
                   className="text-left text-charcoal/70 font-medium py-2 border-b border-charcoal/5"
