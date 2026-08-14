@@ -1,10 +1,25 @@
 node_modules/
+hermes/node_modules/
 build/
 dist/
+hermes/dist/
+hermes/data/
+public/hermes/
+.env
+!.env.example
+hermes/.env
+!hermes/.env.example
+hermes/*.mp4
+hermes/*.jpg
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
+pass.txt
 used-promo-codes.json
 promo-codes.json
+# Телефоны клиентов (привязка заказов)
+data/phones/
+# Kimi project memory
+.kimi-memory/

@@ -1,4 +1,13 @@
+# You-stile — основной прод-краулер-файл.
+# Админку и апи скрываем — там ничего полезного для поисковика.
 User-agent: *
 Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /soulmate-admin
+
+# Yandex иногда любит отдельный Crawl-delay; Google игнорирует.
+User-agent: Yandex
+Crawl-delay: 1
 
 Sitemap: https://stilist-ai.ru/sitemap.xml

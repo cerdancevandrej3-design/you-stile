@@ -6,26 +6,28 @@
   "scripts": {
     "dev": "node --enable-source-maps --import tsx ./server.ts",
     "start": "node --import tsx ./server.ts",
-    "build": "vite build",
+    "build": "node -e \"process.env.NODE_ENV='production'; import('vite').then(({ build }) => build())\"",
     "preview": "vite preview",
     "clean": "rimraf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "nails:enrich": "node scripts/enrich-nails-polza.mjs",
+    "nails:enrich:desc": "node scripts/enrich-nails-polza.mjs --skip-regen",
+    "nails:enrich:regen": "node scripts/enrich-nails-polza.mjs --only-regen"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
-    "@types/helmet": "^0.0.48",
     "@types/qrcode": "^1.5.6",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "express-rate-limit": "^8.5.1",
-    "helmet": "^8.1.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "multer": "^1.4.5-lts.2",
+    "openai": "^6.45.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "yookassa": "^0.1.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -36,9 +38,10 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.21",
+    "pm2": "^7.0.1",
     "rimraf": "^6.0.1",
     "tailwindcss": "^4.1.14",
-    "tsx": "^4.21.0",
+    "tsx": "^4.22.0",
     "typescript": "^5.8.2",
     "vite": "^6.2.0"
   }

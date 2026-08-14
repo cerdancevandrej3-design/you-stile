@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      { "type": "bash", "command": "ssh root@186.246.31.126 *" }
-    ]
-  }
-}

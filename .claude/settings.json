@@ -16,8 +16,8 @@
       "Bash(npm run clean)",
       "Bash(taskkill //PID *)",
       "Bash(taskkill /PID *)",
-      "Bash(ssh root@186.246.31.126 *)",
-      "Bash(scp * root@186.246.31.126:*)"
+      "WebFetch(domain:www.treatwell.es)",
+      "WebFetch(domain:www.treatwell.fr)"
     ]
   }
 }

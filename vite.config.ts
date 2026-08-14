@@ -3,11 +3,14 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
 
-export default defineConfig(({mode}) => {
+export default defineConfig(({mode, command}) => {
+  const isProductionBuild = command === 'build';
+  if (isProductionBuild) process.env.NODE_ENV = 'production';
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
     define: {
+      'process.env.NODE_ENV': JSON.stringify(isProductionBuild ? 'production' : 'development'),
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
     resolve: {
@@ -19,12 +22,17 @@ export default defineConfig(({mode}) => {
       // HMR is disabled in AI Studio via DISABLE_HMR env var
       // to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
+      allowedHosts: ['.stilist-ai.ru', 'stilist-ai.ru'],
       proxy: {
         '/api': {
-          target: 'http://localhost:3001',
+          target: 'http://localhost:3000',
           changeOrigin: true,
         },
       },
+    },
+    build: {
+      minify: 'esbuild',
+      sourcemap: false,
     },
   };
 });

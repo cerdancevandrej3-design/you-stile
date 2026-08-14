@@ -24,8 +24,8 @@ This is a single-repo full-stack app — one Express server serves both the API 
 2. **`server.ts`** (Express) handles `/api/*` routes; all other requests go to Vite middleware (dev) or `dist/` (prod)
 3. `/api/stylize` — main endpoint: receives up to 3 photos (multipart), streams NDJSON responses back via SSE-style `res.write()` + heartbeat
 4. Server calls **Polza.ai API** (`https://polza.ai/api/v1`) — OpenAI-compatible endpoint — using two models:
-   - `ANALYSIS_MODEL` (`google/gemini-3.1-flash-lite-preview`) — analyzes photo, generates JSON look recommendations
-   - `IMAGE_MODEL` (`google/gemini-3.1-flash-image-preview`) — generates outfit images with user's face
+   - `ANALYSIS_MODEL` (`google/gemini-3.5-flash-lite`) — analyzes photo, generates JSON look recommendations
+   - `IMAGE_MODEL` (`seedream/5-pro-text-to-image`) — generates outfit images with user's face. Called via `POST /media` (не `/chat/completions`). Валидные значения `quality`: `basic`, `medium`, `high` (сейчас используется `medium`). НЕ передавать `output_format` — вызывает `BAD_REQUEST` "Недопустимое значение quality".
 5. **`src/App.tsx`** — single React component (~1000 lines), reads the NDJSON stream and renders results progressively
 
 ### Key files
@@ -51,11 +51,26 @@ This is a single-repo full-stack app — one Express server serves both the API 
 
 `sanitizeWishes()` in `server.ts` replaces sensitive words in user input before sending to AI. The system prompt also instructs the model to silently reinterpret such words as fashion-appropriate equivalents.
 
+### Vite proxy
+
+In dev mode, Vite proxies `/api` → `http://localhost:3000` (note: hardcoded in `vite.config.ts` — if server port changes, update this too). Currently the server runs on 3001 but this proxy is bypassed because Vite runs as middleware inside the same Express process.
+
 ### Production deployment
 
 **VPS:** `186.246.31.126`, path `/var/www/you-stile/you-stile/`, PM2 process `stilist`.
 
+**Firewall (Timeweb «Polite Plover»):** деплой **без VPN**. Входящий трафик:
+- SSH `22` — только с IP разработчика `178.197.229.166`
+- HTTPS `443` — все адреса
+- HTTP `80` — все адреса  
+Всё остальное входящее закрыто. Если SSH не коннектится — скорее всего сменился домашний IP, нужно обновить правило в firewall.
+
+**Nails images on server:** `/var/www/you-stile/you-stile/public/nails/all/` — 622 images (mix of `STIL-26-NNN.jpg` and `t_хэш.png` formats).
+**Nails descriptions:** `/var/www/you-stile/you-stile/public/nails/nails-data.json` — JSON с описаниями 622 дизайнов ногтей.
+
 Server reads static files from `dist/` (Vite output). `public/` is copied into `dist/` automatically by Vite on build — gallery images, before/after photos, etc. all live in `public/` locally and end up in `dist/` after build.
+
+**SSH key:** `C:/Users/and/.ssh/id_rsa_deploy` (используется в deploy.py для подключения к VPS)
 
 **To deploy** (run from `you-stile/`):
 ```bash
@@ -67,47 +82,75 @@ python deploy.py
 
 **Do NOT** manually upload only `index.html` + `assets/` — that breaks gallery images and other static files.
 
-**После изменений ОБЯЗАТЕЛЬНО проверить в браузере:**
-- https://stilist-ai.ru/admin?pin=913260 — админка you-stile
-- https://stilist-ai.ru/soulmate-admin?pin=913260 — админка Soulmate
-- https://stilist-ai.ru/api/soulmate/users?pin=913260 — API возвращает JSON
+## Admin Panel
+
+- **Админка:** `https://stilist-ai.ru/api/admin?pin=913260`
+- **Soulmate админка:** `https://stilist-ai.ru/soulmate-admin?pin=913260`
+
+## Правила коммуникации
+
+**НЕ выкладывать код, команды, длинные промпты или конфиги в чат.** Пользователь не разбирается в технике — это его дезориентирует.
+
+Вместо этого — сообщать о выполнении задач простым языком:
+- "Готово: обновил админку — теперь показывает сколько промо осталось"
+- "Сделано: подправил промпт для стилиста — добавил правило для декольте"
+- "Исправлено: баг с пагинацией промокодов"
+- "Деплой на прод: Seedream 5 Pro работает, лица сохраняются"
+
+---
+
+## Главное правило работы с проектом
+
+**Перед каждым действием проверять, нарушит ли оно уже работающий функционал.**
+
+Сайт https://stilist-ai.ru работает в проде. Прежде чем что-то менять/удалять:
+1. Grep'ом проверить, не используется ли файл/переменная/функция в `server.ts`, `src/App.tsx`, `index.html`, других рабочих файлах.
+2. Если файл в `public/` — проверить, не ссылается ли на него код (например `/gallery/gen1.jpg`, `/before.jpg`, `/after.jpg`, `/gucci.jpg`, `/share/`, `/s/`).
+3. Не трогать рабочие файлы без необходимости: `server.ts`, `src/App.tsx`, `src/system-prompt.txt`, `src/fashion-knowledge-base.txt`, `deploy.py`, `.env`, `public/` (только если явно не нужно).
+4. Не удалять папку `nails.csv/` и скрипт `generate-nails.mjs` — это будущая интеграция каталога ногтей (см. PROJECT_MAP.md).
+5. После изменений ОБЯЗАТЕЛЬНО: `npm run lint` + `npm run build`, потом проверить в браузере.
 
 ## Бизнес-логика тарифов
 
-### Стандарт
-- 1 фото, 3 образа
-- Поводы НЕ выбираются — образы генерируются случайно (AI сам решает)
-- Нет слайдера количества образов
+### Стандарт (100 ₽)
+- 1 фото, **3 свободных образа от стилиста** (без выбора поводов)
+- Образы генерируются случайно — AI сам решает
+- Нет слайдера количества, нет поводов, нет бюджета, нет астро
 
-### Премиум
-- До 3 фото, до 5 образов
-- Поводы выбираются (максимум 5 поводов)
-- Рядом с каждым выбранным поводом — счётчик +/- сколько образов под этот повод
-- Сумма образов по всем поводам = looksCount
-- Слайдер количества образов (1-5)
-- Бюджет, астро-разбор
+### Премиум (200 ₽)
+- До 3 фото, **до 5 образов на выбор**
+- **22 мероприятия** на выбор (свадьба, романтик, вечеринка, ресторан и т.д.)
+- Максимум 5 поводов суммарно, счётчик образов на каждый повод (1-5)
+- Сумма образов по всем поводам = looksCount (1-5)
+- Бюджет на образ + астро-разбор
 
-## Задачи на завтра (промпт для генерации образов)
+### Описание платежа (server.ts /api/create-payment)
+- Standard: "Стандарт тариф — 3 образа от стилиста"
+- Premium: "Премиум тариф — до 5 образов + 22 повода + астро-разбор"
 
-### 1. Убрать улыбку если её нет на исходном фото
-- Проблема: Flux генерирует улыбку даже если на загруженном фото человек серьёзный — лицо становится непохожим
-- Решение: добавить в fluxPrompt инструкцию `EXPRESSION: Match the facial expression from the reference photo exactly. If person is not smiling in reference, do NOT add smile. Preserve natural expression.`
-- Файл: server.ts, строка ~1592 (fluxPrompt)
+---
 
-### 2. Учитывать тип фигуры в образах
-- Худой комплекции → больше образов с короткой юбкой, мини
-- Есть грудь → можно декольте (формулировка для прохождения цензуры Flux)
-- Решение: в системном промпте анализа (ANALYSIS_MODEL) добавить инструкцию учитывать bodyType при выборе длины юбок и выреза
-- Формулировка для цензуры: `elegant neckline`, `tasteful décolletage`, `sophisticated low-cut neckline` — НЕ использовать прямые слова
-- Файл: src/system-prompt.txt + server.ts fluxPrompt
+## 📋 Состояние и задачи (обновлено 23.07.2026)
 
-### Текущее состояние сайта (коммит 7e6ccb2)
-- Работает стабильно на stilist-ai.ru
-- Кнопка "Повторить генерацию" при сбое Polza.ai
-- Лимит файла 50MB, retry 3 попытки
-- Поводы: максимум 5 суммарно, счётчик на каждый повод
-- Слайдер количества образов убран
-- **ВСЕГДА проверять сделанное в браузере перед тем как сообщать о завершении**
-- Всегда уточнять у пользователя детали перед реализацией
-- Стандарт: образы случайные, без поводов
-- Премиум: поводы со счётчиком образов на каждый повод
+**Полный handoff для нового чата:** см. `SESSION_HANDOFF.md` и правило `.cursor/rules/session-handoff.mdc`.
+
+### Сделано недавно (на проде)
+- Grooming («Причёска и цвет»): free + paid 100₽, промо тир `grooming`, KB макияжа, новая одежда на фото, nginx 600s для `/api/grooming`, сохранение картинок, скачать + шаринг в мессенджеры.
+- Админка: 7 промокодов на страницу; тир «Причёска и уход».
+- Основной стилист: Seedream medium без output_format; «Мои образы» / retry — делали 18.07.
+
+### На завтра / по запросу
+1. Смоук-проверка grooming: новая одежда на свежих генерациях + кнопки скачать/шаринг.
+2. Если жалобы — «Мои образы» / восстановление оплаты.
+3. Если жалобы — база ногтей (deploy не заливает всю `nails/`, только индексы + restore на сервере).
+4. Деплой только с разрешения пользователя.
+
+---
+
+## История важных исправлений (для контекста)
+
+- **23.07.2026:** Grooming — шаринг/скачивание как у основного преображения; ранее: промо, макияж KB, makeover-одежда, nginx timeout `/api/grooming`.
+- **18.07.2026:** Надёжность заказов («Мои образы», сохранение фото на сервере, retry отсутствующих).
+- **17.07.2026:** Найдена и исправлена причина ошибки генерации образов — модель `seedream/5-pro-text-to-image` не принимала `quality: "high"` + `output_format: "png"` вместе (API возвращал `BAD_REQUEST`). Исправлено на `quality: "medium"` без `output_format`. Задеплоено, полный премиум-флоу (5 образов, бюджет, повод, астро) протестирован и работает.
+- **17.07.2026:** Добавлено видимое предупреждение об ожидаемом времени генерации (Стандарт: 2–4 мин, Премиум: 4–7 мин) — видно сразу на форме, до нажатия "Сгенерировать", и во время загрузки.
+- **17.07.2026:** Исправлено окно статус-бара генерации — было `absolute inset-0` внутри модалки (обрезалось на маленьких экранах), стало `fixed inset-0` с `overflow-y-auto` — теперь весь прогресс виден и скроллится при необходимости.
