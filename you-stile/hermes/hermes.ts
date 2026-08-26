@@ -2535,10 +2535,10 @@ function htmlFromStoredNews(text: string, title: string): { album: string; follo
       body = body.slice(0, lm.index).trim();
     }
   }
-  const chunks = body.split(/(?=^\d+\.\s)/m).map((p) => p.trim()).filter(Boolean);
+  const chunks = body.split(/(?=^(?:[🟥🟨🟩❤️💛💚]\s*)?\d+\.\s)/m).map((p) => p.trim()).filter(Boolean);
   const stories = chunks
     .map((p) => {
-      const m = p.match(/^(\d+)\.\s+([^\n—–-]+)(?:\s*[—–-]\s*([^\n]+))?/);
+      const m = p.match(/^(?:[🟥🟨🟩❤️💛💚]\s*)?(\d+)\.\s+([^\n—–-]+)(?:\s*[—–-]\s*([^\n]+))?/);
       if (!m) return "";
       const i = Math.max(0, Number(m[1]) - 1);
       const name = escapeHtml(stripNewsQuotes(m[2].trim()));
