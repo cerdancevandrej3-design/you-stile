@@ -2509,9 +2509,13 @@ function htmlFromStoredNews(text: string, title: string): { album: string; follo
     `<b>Мода, о которой сейчас говорят</b>\n` +
     names.map((n, i) => `${storyDot(i)} ${escapeHtml(stripNewsQuotes(n))}`).join("  ");
   let body = telegramPlain(text).replace(/^Мода, о которой сейчас говорят\s*/i, "").trim();
-  const firstLine = (body.split("\n")[0] || "").replace(/[❤️💛💚🤍🟥🟨🟩]/g, "").replace(/\s+/g, " ").trim();
-  if (names.length && names.every((n) => firstLine.includes(n))) {
-    body = body.split("\n").slice(1).join("\n").trim();
+  for (;;) {
+    const fl = (body.split("\n")[0] || "").replace(/[❤️💛💚🤍🟥🟨🟩]/g, "").replace(/\s+/g, " ").trim();
+    if (names.length && names.every((n) => fl.includes(n)) && !/^\d+\./.test(fl)) {
+      body = body.split("\n").slice(1).join("\n").trim();
+      continue;
+    }
+    break;
   }
   let expert = "";
   let links = "";
@@ -2532,23 +2536,26 @@ function htmlFromStoredNews(text: string, title: string): { album: string; follo
     }
   }
   const chunks = body.split(/(?=^\d+\.\s)/m).map((p) => p.trim()).filter(Boolean);
-  const stories = chunks.map((p, i) => {
-    const m = p.match(/^(\d+)\.\s+([^\n—–-]+)(?:\s*[—–-]\s*([^\n]+))?/);
-    if (!m) return escapeHtml(p);
-    const name = escapeHtml(stripNewsQuotes(m[2].trim()));
-    const kicker = escapeHtml(stripNewsQuotes((m[3] || "").trim()));
-    let rest = p.slice(m[0].length).trim();
-    let how = "";
-    const hm = rest.match(/\nНа неделю:\s*([\s\S]*)$/i);
-    if (hm && hm.index != null) {
-      how = stripNewsQuotes(hm[1].trim());
-      rest = rest.slice(0, hm.index).trim();
-    }
-    const head = `${storyDot(i)} <b>${i + 1}. ${name}</b>` + (kicker ? `\n<i>${kicker}</i>` : "");
-    return [head, escapeHtml(stripNewsQuotes(rest)), how ? `<i>На неделю:</i> ${escapeHtml(how)}` : ""]
-      .filter(Boolean)
-      .join("\n\n");
-  });
+  const stories = chunks
+    .map((p) => {
+      const m = p.match(/^(\d+)\.\s+([^\n—–-]+)(?:\s*[—–-]\s*([^\n]+))?/);
+      if (!m) return "";
+      const i = Math.max(0, Number(m[1]) - 1);
+      const name = escapeHtml(stripNewsQuotes(m[2].trim()));
+      const kicker = escapeHtml(stripNewsQuotes((m[3] || "").trim()));
+      let rest = p.slice(m[0].length).trim();
+      let how = "";
+      const hm = rest.match(/\nНа неделю:\s*([\s\S]*)$/i);
+      if (hm && hm.index != null) {
+        how = stripNewsQuotes(hm[1].trim());
+        rest = rest.slice(0, hm.index).trim();
+      }
+      const head = `${storyDot(i)} <b>${m[1]}. ${name}</b>` + (kicker ? `\n<i>${kicker}</i>` : "");
+      return [head, escapeHtml(stripNewsQuotes(rest)), how ? `<i>На неделю:</i> ${escapeHtml(how)}` : ""]
+        .filter(Boolean)
+        .join("\n\n");
+    })
+    .filter(Boolean);
   const expertHtml = expert
     ? `💬 <b>Мнение стилиста</b>\n<blockquote>${escapeHtml(stripNewsQuotes(expert))}</blockquote>`
     : "";
