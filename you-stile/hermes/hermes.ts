@@ -361,6 +361,7 @@ function clearPendingNews(): void {
 }
 
 function queuePendingNews(p: Omit<PendingNews, "nextAt">): void {
+  rememberDigestStories(p.stories || [], (p.links || []).map((link) => ({ link })));
   const wait = PENDING_BACKOFF_MS[Math.min(Math.max(p.attempts, 0), PENDING_BACKOFF_MS.length - 1)];
   const next: PendingNews = { ...p, nextAt: Date.now() + wait };
   savePendingNews(next);
@@ -1242,9 +1243,8 @@ function recentPsychologySnippets(limit = 10): string[] {
 async function fetchRssInspiration(limit = 6): Promise<string[]> {
   try {
     const items = await fetchRssFeeds();
-    const published = loadPublishedCache();
     const scored = items
-      .filter((it) => !published.has(it.link))
+      .filter((it) => !isRememberedNews(it))
       .map((it) => ({ title: it.title, score: fashionScore(it) }))
       .filter((x) => x.score >= 2 && x.title.length > 12)
       .sort((a, b) => b.score - a.score);
@@ -1488,6 +1488,18 @@ function polishRussian(text: string): string {
     .replace(/\bПлотный тон ставит\b/gi, "Плотный тон добавляет")
     .replace(/\bвыдает\b/g, "выдаёт")
     .replace(/\bвыдаешь\b/g, "выдаёшь");
+}
+
+/** Кавычки в новостях мешают читать — оставляем слова как есть. */
+function stripNewsQuotes(text: string): string {
+  let t = String(text || "");
+  t = t.replace(/&laquo;|&raquo;|&ldquo;|&rdquo;|&quot;|&#171;|&#187;|&#34;/gi, "");
+  t = t.replace(/[«»„‟“”‹›]/g, "");
+  t = t.replace(/"([^"]*)"/g, "$1");
+  t = t.replace(/"/g, "");
+  t = t.replace(/[ \t]{2,}/g, " ");
+  t = t.replace(/ +([.,!?;:])/g, "$1");
+  return t;
 }
 
 async function generateTextPost(
@@ -1795,10 +1807,10 @@ function withEditorialTitle(prompt: string, title: string, opts?: { celebIdentit
     return `${base}.${juice}Clean global fashion-media cover typography, high contrast, no watermark, 1:1.`;
   }
   return (
-    `${base}.${juice}Cover typography: place ONE short Russian headline exactly «${short}» as a clean international fashion-media title card (Vogue / Elle / Harper's digital energy — premium but accessible). ` +
+    `${base}.${juice}Cover typography: place ONE short Russian headline as plain words, exactly: ${short}. Do NOT wrap the headline in quotation marks, guillemets, «», "" or any quotes — no quote glyphs at all. Clean international fashion-media title card (Vogue / Elle / Harper's digital energy — premium but accessible). ` +
     `READABILITY FIRST for phone screens: LARGE bold refined modern sans-serif, thick clear letterforms, high contrast (white/near-white on dark soft gradient bar OR dark on light clean band), sharp Russian glyphs, comfortable tracking — must stay legible at Telegram thumbnail size. ` +
     `Classic magazine serif allowed ONLY if still bold and highly legible on mobile; never hairline/thin decorative. Title preferably one line (max two), ~12–18% of frame at top or bottom, generous padding, photo remains the hero. ` +
-    `FORBIDDEN: thin script/calligraphy, bubble/teen fonts, comic, graffiti, neon cyber UI, dense paragraphs, tiny captions, English gibberish, misspelled Russian, Ukrainian letters, watermarks. Square 1:1.`
+    `FORBIDDEN: quotation marks around the title, thin script/calligraphy, bubble/teen fonts, comic, graffiti, neon cyber UI, dense paragraphs, tiny captions, English gibberish, misspelled Russian, Ukrainian letters, watermarks. Square 1:1.`
   );
 }
 
@@ -2032,11 +2044,11 @@ function ruCelebName(raw: string, item?: FeedItem): string {
 
 function ruLine(raw: string, fallback: string): string {
   const t = String(raw || "").trim();
-  if (!t) return fallback;
-  if (mostlyRussian(t)) return t;
+  if (!t) return stripNewsQuotes(fallback);
+  if (mostlyRussian(t)) return stripNewsQuotes(t);
   const cyr = (t.match(/[А-Яа-яЁё]/g) || []).length;
-  if (cyr >= 20) return t;
-  return fallback;
+  if (cyr >= 20) return stripNewsQuotes(t);
+  return stripNewsQuotes(fallback);
 }
 
 function defaultHow(angle: DigestStory["angle"], kind: DigestStory["kind"] = "star"): string {
@@ -2312,10 +2324,10 @@ function magazineLabel(s: DigestStory): string {
 }
 
 function formatStoryNews(s: DigestStory, i: number): string {
-  const name = escapeHtml(String(s.name || "").trim());
-  const kicker = escapeHtml(String(s.kicker || "").trim());
-  const line = escapeHtml(String(s.line || "").replace(/\s+/g, " ").trim());
-  const how = escapeHtml(String(s.how || "").replace(/\s+/g, " ").trim());
+  const name = escapeHtml(stripNewsQuotes(String(s.name || "").trim()));
+  const kicker = escapeHtml(stripNewsQuotes(String(s.kicker || "").trim()));
+  const line = escapeHtml(stripNewsQuotes(String(s.line || "").replace(/\s+/g, " ").trim()));
+  const how = escapeHtml(stripNewsQuotes(String(s.how || "").replace(/\s+/g, " ").trim()));
   const head = kicker ? `<b>${name}</b> — ${kicker}` : `<b>${name}</b>`;
   const tip = how ? `На неделю: ${how}` : "";
   return [`${i + 1}. ${head}`, line, tip].filter(Boolean).join("\n");
@@ -2331,15 +2343,15 @@ function formatExpertCloser(voice: string): string {
   return formatExpertNote(voice);
 }
 
-/** Мнение эксперта — отдельная цветная плашка (blockquote в Telegram). */
+/** Мнение эксперта — живой текст без кавычек и без цитат-блока. */
 function formatExpertNote(voice: string): string {
-  const t = String(voice || "")
+  const t = stripNewsQuotes(String(voice || ""))
     .replace(/\r\n/g, "\n")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   if (!t) return "";
-  return `💬 <b>Мнение эксперта</b>\n<blockquote>${escapeHtml(t)}</blockquote>`;
+  return `💬 <b>Мнение эксперта</b>\n${escapeHtml(t)}`;
 }
 
 function formatStylistNote(voice: string): string {
@@ -2366,9 +2378,9 @@ function formatDigestCaption(stories: DigestStory[], voice = ""): string {
 }
 
 function formatDigestShotCaption(story: DigestStory, index: number, total: number): string {
-  const name = escapeHtml(String(story.name || "").trim());
-  const kicker = escapeHtml(String(story.kicker || "").trim());
-  const fact = escapeHtml(String(story.line || "").replace(/\s+/g, " ").trim()).slice(0, 220);
+  const name = escapeHtml(stripNewsQuotes(String(story.name || "").trim()));
+  const kicker = escapeHtml(stripNewsQuotes(String(story.kicker || "").trim()));
+  const fact = escapeHtml(stripNewsQuotes(String(story.line || "").replace(/\s+/g, " ").trim())).slice(0, 220);
   const head = kicker ? `<b>${index}/${total} ${name}</b> — ${kicker}` : `<b>${index}/${total} ${name}</b>`;
   return [head, fact].filter(Boolean).join("\n").slice(0, TG_CAPTION_LIMIT);
 }
@@ -2376,8 +2388,8 @@ function formatDigestShotCaption(story: DigestStory, index: number, total: numbe
 function formatDigestAlbumTeaser(stories: DigestStory[]): string {
   const list = stories.filter(Boolean).slice(0, 3);
   const lines = list.map((s, i) => {
-    const name = escapeHtml(String(s.name || "").trim());
-    const kicker = escapeHtml(String(s.kicker || "").trim());
+    const name = escapeHtml(stripNewsQuotes(String(s.name || "").trim()));
+    const kicker = escapeHtml(stripNewsQuotes(String(s.kicker || "").trim()));
     return kicker ? `${i + 1}. <b>${name}</b> — ${kicker}` : `${i + 1}. <b>${name}</b>`;
   });
   return ["<b>Мода, о которой сейчас говорят</b>", ...lines].join("\n").slice(0, TG_CAPTION_LIMIT);
@@ -2829,18 +2841,159 @@ function starInterestBoost(item: FeedItem): number {
 }
 
 function loadPublishedCache(): Set<string> {
-  try {
-    if (fs.existsSync(PUBLISHED_CACHE)) {
-      const arr = JSON.parse(fs.readFileSync(PUBLISHED_CACHE, "utf-8"));
-      if (Array.isArray(arr)) return new Set(arr);
-    }
-  } catch {}
-  return new Set();
+  return new Set(loadPostedMemory().links);
 }
 
 function savePublishedCache(set: Set<string>): void {
-  const arr = Array.from(set).slice(-2000);
-  fs.writeFileSync(PUBLISHED_CACHE, JSON.stringify(arr, null, 2), "utf-8");
+  rememberPostedNews({ links: Array.from(set) });
+}
+
+type PostedEvent = { k: "link" | "title" | "name"; v: string; ts: number };
+type PostedMemory = { events: PostedEvent[]; links: string[]; titles: string[]; names: string[] };
+
+const POSTED_NAME_MS = 12 * 86400_000;
+const POSTED_TITLE_MS = 45 * 86400_000;
+const POSTED_LINK_MS = 60 * 86400_000;
+
+function foldName(s: string): string {
+  let t = normTitle(s);
+  const pairs: Array<[string, string]> = [
+    ["кс", "x"], ["дж", "j"],
+    ["а", "a"], ["б", "b"], ["в", "v"], ["г", "g"], ["д", "d"], ["е", "e"], ["ё", "e"],
+    ["ж", "zh"], ["з", "z"], ["и", "i"], ["й", "y"], ["к", "k"], ["л", "l"], ["м", "m"],
+    ["н", "n"], ["о", "o"], ["п", "p"], ["р", "r"], ["с", "s"], ["т", "t"], ["у", "u"],
+    ["ф", "f"], ["х", "h"], ["ц", "ts"], ["ч", "ch"], ["ш", "sh"], ["щ", "sch"],
+    ["ъ", ""], ["ы", "y"], ["ь", ""], ["э", "e"], ["ю", "yu"], ["я", "ya"],
+  ];
+  for (const [a, b] of pairs) t = t.split(a).join(b);
+  return t.replace(/w/g, "v").replace(/\s+/g, " ").trim();
+}
+
+function namesMatch(a: string, b: string): boolean {
+  const fa = foldName(a);
+  const fb = foldName(b);
+  if (!fa || !fb || fa.length < 4 || fb.length < 4) return false;
+  if (fa === fb) return true;
+  if ((fa.includes(fb) || fb.includes(fa)) && Math.min(fa.length, fb.length) >= 6) return true;
+  const wa = fa.split(" ").filter((w) => w.length >= 4);
+  const wb = fb.split(" ").filter((w) => w.length >= 4);
+  if (!wa.length || !wb.length) return false;
+  const lastA = wa[wa.length - 1];
+  const lastB = wb[wb.length - 1];
+  if (lastA === lastB && lastA.length >= 5) return true;
+  return titlesTooSimilar(fa, fb);
+}
+
+function ttlForKind(k: PostedEvent["k"]): number {
+  if (k === "name") return POSTED_NAME_MS;
+  if (k === "title") return POSTED_TITLE_MS;
+  return POSTED_LINK_MS;
+}
+
+function rebuildPostedArrays(events: PostedEvent[]): PostedMemory {
+  const now = Date.now();
+  const live = events.filter((e) => now - e.ts < ttlForKind(e.k)).slice(-4000);
+  const links: string[] = [];
+  const titles: string[] = [];
+  const names: string[] = [];
+  for (const e of live) {
+    if (e.k === "link") links.push(e.v);
+    else if (e.k === "title") titles.push(e.v);
+    else names.push(e.v);
+  }
+  return { events: live, links: [...new Set(links)], titles: [...new Set(titles)].slice(-800), names: [...new Set(names)].slice(-400) };
+}
+
+function harvestPostedFromLog(events: PostedEvent[]): PostedEvent[] {
+  try {
+    const log = loadLog();
+    for (const p of log.posts || []) {
+      const ts = Date.parse(p.ts || "") || Date.now();
+      const title = String(p.title || "").trim();
+      if (title) {
+        events.push({ k: "title", v: title, ts });
+        for (const part of title.split(/\s*[·|]\s*/)) {
+          const name = part.trim();
+          if (name.length >= 4) events.push({ k: "name", v: name, ts });
+        }
+      }
+    }
+  } catch {}
+  return events;
+}
+
+function loadPostedMemory(): PostedMemory {
+  try {
+    if (fs.existsSync(PUBLISHED_CACHE)) {
+      const raw = JSON.parse(fs.readFileSync(PUBLISHED_CACHE, "utf-8"));
+      let events: PostedEvent[] = [];
+      if (Array.isArray(raw)) {
+        const ts = Date.now();
+        events = raw.filter((x) => typeof x === "string" && x).map((v: string) => ({ k: "link" as const, v, ts }));
+        events = harvestPostedFromLog(events);
+      } else if (raw && Array.isArray(raw.events)) {
+        events = raw.events.filter((e: PostedEvent) => e && e.v && e.k);
+        if (!events.some((e) => e.k === "name")) events = harvestPostedFromLog(events);
+      }
+      return rebuildPostedArrays(events);
+    }
+  } catch {}
+  return rebuildPostedArrays(harvestPostedFromLog([]));
+}
+
+function savePostedMemory(mem: PostedMemory): void {
+  const next = rebuildPostedArrays(mem.events);
+  fs.writeFileSync(PUBLISHED_CACHE, JSON.stringify(next, null, 2), "utf-8");
+}
+
+function rememberPostedNews(opts: { links?: string[]; titles?: string[]; names?: string[] }): void {
+  const mem = loadPostedMemory();
+  const ts = Date.now();
+  const push = (k: PostedEvent["k"], v: string) => {
+    const val = String(v || "").trim();
+    if (!val) return;
+    if (k === "link" && mem.links.includes(val)) return;
+    if (k === "name" && mem.names.some((n) => namesMatch(n, val))) return;
+    if (k === "title" && mem.titles.some((t) => titlesTooSimilar(t, val))) return;
+    mem.events.push({ k, v: val, ts });
+  };
+  for (const v of opts.links || []) push("link", v);
+  for (const v of opts.titles || []) push("title", v);
+  for (const v of opts.names || []) push("name", v);
+  savePostedMemory(mem);
+}
+
+function isPostedName(name: string, mem = loadPostedMemory()): boolean {
+  const n = String(name || "").trim();
+  if (n.length < 4) return false;
+  return mem.names.some((x) => namesMatch(x, n));
+}
+
+function isRememberedNews(item: FeedItem, mem = loadPostedMemory()): boolean {
+  if (item.link && mem.links.includes(item.link)) return true;
+  if (mem.titles.some((t) => titlesTooSimilar(t, item.title))) return true;
+  const celeb = extractCelebNameHint(item);
+  if (celeb && mem.names.some((n) => namesMatch(n, celeb))) return true;
+  if (mem.names.some((n) => namesMatch(n, item.title))) return true;
+  return false;
+}
+
+function rememberDigestStories(stories: DigestStory[], items?: Array<{ link?: string; title?: string }>): void {
+  rememberPostedNews({
+    links: [
+      ...(items || []).map((it) => String(it.link || "")),
+      ...stories.map((s) => s.link || s.photoLink || ""),
+    ].filter(Boolean),
+    titles: [
+      ...(items || []).map((it) => String(it.title || "")),
+      ...stories.map((s) => s.name),
+      ...stories.map((s) => s.kicker),
+    ].filter(Boolean),
+    names: [
+      ...stories.map((s) => s.name),
+      ...(items || []).map((it) => extractCelebNameHint(it as FeedItem)),
+    ].filter(Boolean),
+  });
 }
 
 type NewsBucket = "celeb" | "fashion" | "nails" | "hair" | "beauty" | "trend" | "models" | "other";
@@ -3209,8 +3362,9 @@ function scoreFreshCandidates(
   published: Set<string>,
 ): ScoredNews[] {
   const cutoff = Date.now() - maxAgeDays * 86400_000;
+  const mem = loadPostedMemory();
   return items
-    .filter((it) => !published.has(it.link))
+    .filter((it) => !published.has(it.link) && !isRememberedNews(it, mem))
     .filter((it) => isChannelNews(it))
     .filter((it) => {
       const t = new Date(it.pubDate).getTime();
@@ -3275,11 +3429,13 @@ function pickFreshNewsPack(
   const usedNames = new Set<string>();
   const usedBuckets = new Set<string>();
 
+  const postedMem = loadPostedMemory();
   const tryTake = (c: ScoredNews, wantMix: boolean) => {
     if (picked.length >= 6) return;
     if (picked.some((p) => p.it.link === c.it.link)) return;
+    if (isRememberedNews(c.it, postedMem)) return;
     const name = extractCelebNameHint(c.it).toLowerCase();
-    if (name && usedNames.has(name)) return;
+    if (name && (usedNames.has(name) || isPostedName(name, postedMem))) return;
     if (wantMix && picked.length > 0 && usedBuckets.has(c.bucket)) {
       const leftover = candidates.some((x) => {
         if (picked.some((p) => p.it.link === x.it.link)) return false;
@@ -3577,6 +3733,7 @@ async function writeLookReview(filePath: string, story: DigestStory, trendResear
       : "") +
     `opinion — 3–5 живых предложений от первого лица: зашло / спорно / холодно и ПОЧЕМУ, глядя на кадр и на тренд. Можно тихий юмор, 2–4 стикера-эмодзи (😉😅🔥❤️✨😏), как человек в чате, не как пресс-релиз.\n` +
     `Не пересказывай новость. Не пиши «как эксперт отмечу». Просто говори.\n` +
+    `Без кавычек «» и "" — пиши прямо, без обёртывания слов.\n` +
     `ЗАПРЕЩЕНО: «Вау», «Девочки, вы готовы», «лаконичный выход», «эффектные платья», «по ссылке ниже», голосование «что выберете», 😂😂, мат, пошлость.\n` +
     `kicker оставь близким к исходному. how — короткий совет на неделю, не опрос.\n` +
     `Только русский. Не выдумывай бренды.\n` +
@@ -3645,7 +3802,8 @@ async function writeDigestVoice(stories: DigestStory[], photoPath: string): Prom
     `4–6 предложений по-русски. Пройдись по каждому из трёх: что зашло и что мимо.\n` +
     `Сегодня ход общения: ${move}.\n` +
     `Можно спросить людей как знакомых, без конкурса и без «что выберете».\n` +
-    `Настроение (не копируй): «этот силуэт мне не очень зашёл — слишком театрально; если вам тоже мимо, напишите, я не обижусь 😉».\n` +
+    `Настроение (не копируй): этот силуэт мне не очень зашёл — слишком театрально; если вам тоже мимо, напишите, я не обижусь 😉\n` +
+    `Без кавычек «» и "" вокруг фраз.\n` +
     `Запрещено: мат, пошлость, шутки про тело, оскорбления, голосование «что выберете», 😂😂, ха-ха, анекдот, «девочки вы готовы», канцелярит «как эксперт отмечу».\n` +
     (recent.length ? `Не повторяй эти недавние концовки: ${recent.slice(-4).join(" | ").slice(0, 900)}\n` : "") +
     `Только текст, без JSON и без заголовка.`;
@@ -4114,6 +4272,7 @@ async function writeOneStory(it: FeedItem, research: string): Promise<DigestStor
             (houseCard ? `ДОМ МОДЫ ИЗ ФАКТОВ (это шпаргалка, не реклама; не добавляй другие дома):\n${houseCard}\n\n` : "") +
             `Нужен ПОЛНЫЙ сюжет-НОВОСТЬ, без личного мнения. name — имя по-русски (звезда, дом моды или показ). kicker — 4–8 слов. line — только факты, 3–5 предложений: кто, где, что надето, какой дом латиницей, чем этот дом узнают, почему это сейчас читают, одна живая деталь образа. Не пиши «мне зашло», «спорно», «я думаю» — это будет отдельным блоком эксперта.\n` +
             `how — одно короткое «что взять на эту неделю» в духе этого дома, без салонной инструкции.\n` +
+            `БЕЗ КАВЫЧЕК: не ставь «ёлочки», "" и любые кавычки вокруг слов, названий коллекций, теорий и фраз — пиши прямо.\n` +
             `Если в фактах нет люкс-дома — не пришивай Gucci. Запрещены: короткие справки, «эффектные платья», «эволюция стиля», «лаконичный выход», «по ссылке ниже».\n` +
             `{"name":"...","kicker":"...","line":"...","how":"...","kind":"star или product","angle":"wardrobe или style или nails","skip":false}`,
         },
@@ -4488,6 +4647,10 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
   }
   for (const p of informative.slice(0, 3)) published.add(p.item.link);
   savePublishedCache(published);
+  rememberDigestStories(
+    shownStories,
+    informative.slice(0, 3).map((p) => p.item),
+  );
   return { ok: true, title: shownStories.map((s) => s.name).join(" · ") };
 }
 
@@ -5264,8 +5427,8 @@ async function completePendingNews(pending: PendingNews): Promise<{ ok: boolean;
     return { ok: false, reason: "pending-photos", title };
   }
   const stories = pending.stories.slice(0, 3);
-  const albumTitle = pending.albumTitle || formatDigestAlbumTeaser(stories);
-  const follow = pending.follow || formatDigestFollowup(stories, pending.voice || "");
+  const albumTitle = formatDigestAlbumTeaser(stories);
+  const follow = formatDigestFollowup(stories, pending.voice || "");
   let tgMessageId: number | null = null;
   if (!DRY_RUN && TG_TOKEN && TG_CHAT_ID) {
     try {
@@ -5311,6 +5474,7 @@ async function completePendingNews(pending: PendingNews): Promise<{ ok: boolean;
   const published = loadPublishedCache();
   for (const link of pending.links) if (link) published.add(link);
   savePublishedCache(published);
+  rememberDigestStories(stories, pending.links.map((link) => ({ link })));
   clearPendingNews();
   console.log(`[Hermes] pending published «${title}» tg=${tgMessageId ?? "dry"}`);
   return { ok: true, title, reason: DRY_RUN ? "dry-run" : undefined };
