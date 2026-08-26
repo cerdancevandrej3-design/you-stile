@@ -31,10 +31,13 @@ import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
+import dns from "dns";
 import dotenv from "dotenv";
 import OpenAI from "openai";
 // @ts-ignore — node-cron не имеет стабильных типов в этой версии
 import cron from "node-cron";
+
+dns.setDefaultResultOrder("ipv4first");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -4351,7 +4354,10 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
   if (!DRY_RUN) {
     if (TG_TOKEN && TG_CHAT_ID) {
       try {
-        tgMessageId = await sendTelegramAlbum(media, albumTitle);
+        tgMessageId = await withTelegramRetry(
+          () => sendTelegramAlbum(media, albumTitle),
+          "news album",
+        );
         if (tgMessageId && follow) {
           try {
             await sendTelegramMessage(follow, tgMessageId);
@@ -4418,7 +4424,22 @@ async function generateVideo(prompt: string, imageUrl?: string): Promise<string>
   return url;
 }
 
-function telegramPreviewOptions(opts?: { preview?: boolean; previewUrl?: string }): Record<string, unknown> {
+async function withTelegramRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      last = e;
+      const msg = (e as Error).message || String(e);
+      if (!/fetch failed|ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|aborted|socket|network/i.test(msg)) throw e;
+      const wait = 5000 * (attempt + 1);
+      console.warn(`[Hermes] ${label} retry ${attempt + 1}/5 after ${wait}ms:`, msg.slice(0, 160));
+      await sleep(wait);
+    }
+  }
+  throw last instanceof Error ? last : new Error(String(last));
+}
   const previewOn = Boolean(opts?.preview);
   if (!previewOn) return { link_preview_options: { is_disabled: true } };
   const previewUrl = String(opts?.previewUrl || "").trim();
