@@ -129,7 +129,7 @@ python deploy.py # Деплой на stilist-ai.ru
 
 ## Проверки после деплоя
 
-- https://stilist-ai.ru/admin?pin=913260 — админка you-stile
+- https://stilist-ai.ru/api/admin — админка you-stile (PIN `913260` в форме, не в URL)
 - https://stilist-ai.ru/soulmate-admin?pin=913260 — админка Soulmate
 
 ## Восстановление

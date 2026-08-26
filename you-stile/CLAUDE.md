@@ -80,7 +80,7 @@ python deploy.py
 
 ## Admin Panel
 
-- **Админка:** `https://stilist-ai.ru/api/admin?pin=913260`
+- **Админка:** https://stilist-ai.ru/api/admin — PIN `913260` вводится в форму (параметр `?pin=` в URL больше не работает). На сервере обязателен `ADMIN_PIN` в `.env`.
 - **Soulmate админка:** `https://stilist-ai.ru/soulmate-admin?pin=913260`
 
 ## Правила коммуникации

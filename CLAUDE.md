@@ -68,7 +68,7 @@ python deploy.py
 **Do NOT** manually upload only `index.html` + `assets/` — that breaks gallery images and other static files.
 
 **После изменений ОБЯЗАТЕЛЬНО проверить в браузере:**
-- https://stilist-ai.ru/admin?pin=913260 — админка you-stile
+- https://stilist-ai.ru/api/admin — админка you-stile (PIN `913260` ввести в форму)
 - https://stilist-ai.ru/soulmate-admin?pin=913260 — админка Soulmate
 - https://stilist-ai.ru/api/soulmate/users?pin=913260 — API возвращает JSON
 
