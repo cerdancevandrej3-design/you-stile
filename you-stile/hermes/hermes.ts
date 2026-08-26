@@ -2334,21 +2334,19 @@ async function rewriteLastNewsPost(): Promise<{ ok: boolean; reason?: string; ti
   if (!last) return { ok: false, reason: "no-news-post" };
   const photos = digestPhotosForLog(last);
   if (photos.length < 3) return { ok: false, reason: `need-3-photos:${photos.length}`, title: last.title };
-  const { album, follow } = splitStoredNewsText(last.text, last.title);
+  const { album, follow } = htmlFromStoredNews(last.text, last.title);
   if (!follow) return { ok: false, reason: "no-follow", title: last.title };
-  const albumPlain = telegramPlain(album);
-  const followPlain = telegramPlain(follow);
   const mid = last.tgMessageId;
   for (const id of [mid, mid + 1, mid + 2, mid + 3]) {
     await deleteTelegramMessage(id);
   }
-  const tgMessageId = await withTelegramRetry(() => sendTelegramAlbum(photos, albumPlain), "rewrite album");
-  if (tgMessageId && followPlain) {
-    await withTelegramRetry(() => sendTelegramThread(followPlain), "rewrite followup");
+  const tgMessageId = await withTelegramRetry(() => sendTelegramAlbum(photos, album), "rewrite album");
+  if (tgMessageId && follow) {
+    await withTelegramRetry(() => sendTelegramThread(follow), "rewrite followup");
   }
   if (!tgMessageId) return { ok: false, reason: "tg-failed", title: last.title };
   last.tgMessageId = tgMessageId;
-  last.text = [albumPlain, followPlain].filter(Boolean).join("\n\n");
+  last.text = [album, follow].filter(Boolean).join("\n\n");
   saveLog(log);
   console.log(`[Hermes] rewritten news «${last.title}» tg=${tgMessageId}`);
   return { ok: true, title: last.title, tgMessageId };
@@ -2402,7 +2400,12 @@ function ensureVoteAsk(how: string): string {
   return t;
 }
 
-/** Подборка: три модные новости. Ссылки на журналы — только внизу. */
+/** Цвет каждой новости: в Telegram нет цветного шрифта, поэтому цветные квадраты. */
+const STORY_DOTS = ["🟥", "🟨", "🟩"];
+
+function storyDot(i: number): string {
+  return STORY_DOTS[i] || "🤍";
+}
 function magazineLabel(s: DigestStory): string {
   const raw = String(s.source || "").replace(/^Поиск · |^Google News[^·]* · /g, "").trim();
   return escapeHtml(SOURCE_RU[raw] || raw || "журнал");
@@ -2413,9 +2416,9 @@ function formatStoryNews(s: DigestStory, i: number): string {
   const kicker = escapeHtml(stripNewsQuotes(String(s.kicker || "").trim()));
   const line = escapeHtml(stripNewsQuotes(String(s.line || "").replace(/\s+/g, " ").trim()));
   const how = escapeHtml(stripNewsQuotes(String(s.how || "").replace(/\s+/g, " ").trim()));
-  const head = kicker ? `<b>${name}</b> — ${kicker}` : `<b>${name}</b>`;
-  const tip = how ? `На неделю: ${how}` : "";
-  return [`${i + 1}. ${head}`, line, tip].filter(Boolean).join("\n");
+  const head = `${storyDot(i)} <b>${i + 1}. ${name}</b>` + (kicker ? `\n<i>${kicker}</i>` : "");
+  const tip = how ? `<i>На неделю:</i> ${how}` : "";
+  return [head, line, tip].filter(Boolean).join("\n\n");
 }
 
 function formatStoryOpinion(s: DigestStory): string {
@@ -2428,7 +2431,7 @@ function formatExpertCloser(voice: string): string {
   return formatExpertNote(voice);
 }
 
-/** Мнение эксперта — живой текст без кавычек и без цитат-блока. */
+/** Мнение стилиста — отдельный блок с полоской Telegram, не ответ на альбом. */
 function formatExpertNote(voice: string): string {
   const t = stripNewsQuotes(String(voice || ""))
     .replace(/\r\n/g, "\n")
@@ -2436,7 +2439,7 @@ function formatExpertNote(voice: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   if (!t) return "";
-  return `💬 <b>Мнение эксперта</b>\n${escapeHtml(t)}`;
+  return `💬 <b>Мнение стилиста</b>\n<blockquote>${escapeHtml(t)}</blockquote>`;
 }
 
 function formatStylistNote(voice: string): string {
@@ -2459,7 +2462,7 @@ function formatDigestCaption(stories: DigestStory[], voice = ""): string {
     })
     .join("\n");
   const title = "<b>Мода, о которой сейчас говорят</b>";
-  return [title, ...blocks, formatExpertCloser(voice), "————————————\nЧитать в журналах:\n" + links].filter(Boolean).join("\n\n");
+  return [title, ...blocks, formatExpertCloser(voice), "————————————\nЧитать в журналах:\n" + links].filter(Boolean).join("\n\n\n");
 }
 
 function formatDigestShotCaption(story: DigestStory, index: number, total: number): string {
@@ -2472,10 +2475,10 @@ function formatDigestShotCaption(story: DigestStory, index: number, total: numbe
 
 function formatDigestAlbumTeaser(stories: DigestStory[]): string {
   const list = stories.filter(Boolean).slice(0, 3);
-  const names = list
-    .map((s) => escapeHtml(stripNewsQuotes(String(s.name || "").trim())))
-    .filter(Boolean);
-  const who = names.join(" · ");
+  const who = list
+    .map((s, i) => `${storyDot(i)} ${escapeHtml(stripNewsQuotes(String(s.name || "").trim()))}`)
+    .filter((x) => x.trim().length > 2)
+    .join("  ");
   return ["<b>Мода, о которой сейчас говорят</b>", who].filter(Boolean).join("\n").slice(0, TG_CAPTION_LIMIT);
 }
 
@@ -2493,7 +2496,82 @@ function formatDigestFollowup(stories: DigestStory[], voice = ""): string {
       return `${i + 1}. ${src}`;
     })
     .join("\n");
-  return [...blocks, formatExpertCloser(voice), links ? "————————————\nЧитать в журналах:\n" + links : ""].filter(Boolean).join("\n\n");
+  return [...blocks, formatExpertCloser(voice), links ? "————————————\nЧитать в журналах:\n" + links : ""].filter(Boolean).join("\n\n\n");
+}
+
+/** Старый текст выпуска → HTML с цветными заголовками, без сырых тегов на экране. */
+function htmlFromStoredNews(text: string, title: string): { album: string; follow: string } {
+  const names = String(title || "")
+    .split(/\s*·\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const album =
+    `<b>Мода, о которой сейчас говорят</b>\n` +
+    names.map((n, i) => `${storyDot(i)} ${escapeHtml(stripNewsQuotes(n))}`).join("  ");
+  let body = telegramPlain(text).replace(/^Мода, о которой сейчас говорят\s*/i, "").trim();
+  const firstLine = (body.split("\n")[0] || "").replace(/[❤️💛💚🤍🟥🟨🟩]/g, "").replace(/\s+/g, " ").trim();
+  if (names.length && names.every((n) => firstLine.includes(n))) {
+    body = body.split("\n").slice(1).join("\n").trim();
+  }
+  let expert = "";
+  let links = "";
+  const expM = body.match(/💬\s*Мнение (?:эксперта|стилиста)\s*([\s\S]*)/i);
+  if (expM && expM.index != null) {
+    let tail = String(expM[1] || "").trim();
+    body = body.slice(0, expM.index).trim();
+    const lm = tail.match(/—{3,}|Читать в журналах/i);
+    if (lm && lm.index != null) {
+      links = tail.slice(lm.index).replace(/^—+\s*/g, "").trim();
+      expert = tail.slice(0, lm.index).trim();
+    } else expert = tail;
+  } else {
+    const lm = body.match(/—{3,}|Читать в журналах/i);
+    if (lm && lm.index != null) {
+      links = body.slice(lm.index).replace(/^—+\s*/g, "").trim();
+      body = body.slice(0, lm.index).trim();
+    }
+  }
+  const chunks = body.split(/(?=^\d+\.\s)/m).map((p) => p.trim()).filter(Boolean);
+  const stories = chunks.map((p, i) => {
+    const m = p.match(/^(\d+)\.\s+([^\n—–-]+)(?:\s*[—–-]\s*([^\n]+))?/);
+    if (!m) return escapeHtml(p);
+    const name = escapeHtml(stripNewsQuotes(m[2].trim()));
+    const kicker = escapeHtml(stripNewsQuotes((m[3] || "").trim()));
+    let rest = p.slice(m[0].length).trim();
+    let how = "";
+    const hm = rest.match(/\nНа неделю:\s*([\s\S]*)$/i);
+    if (hm && hm.index != null) {
+      how = stripNewsQuotes(hm[1].trim());
+      rest = rest.slice(0, hm.index).trim();
+    }
+    const head = `${storyDot(i)} <b>${i + 1}. ${name}</b>` + (kicker ? `\n<i>${kicker}</i>` : "");
+    return [head, escapeHtml(stripNewsQuotes(rest)), how ? `<i>На неделю:</i> ${escapeHtml(how)}` : ""]
+      .filter(Boolean)
+      .join("\n\n");
+  });
+  const expertHtml = expert
+    ? `💬 <b>Мнение стилиста</b>\n<blockquote>${escapeHtml(stripNewsQuotes(expert))}</blockquote>`
+    : "";
+  let linksHtml = "";
+  if (links) {
+    const clean = telegramPlain(links).replace(/^Читать в журналах:?\s*/i, "").trim();
+    const rendered = clean
+      .split("\n")
+      .map((ln) => ln.trim())
+      .filter(Boolean)
+      .map((ln) => {
+        const url = ln.match(/https?:\/\/\S+/);
+        if (url) {
+          const label = ln.replace(url[0], "").replace(/^\d+\.\s*/, "").trim() || url[0];
+          return `<a href="${escapeHref(url[0])}">${escapeHtml(label)}</a>`;
+        }
+        return escapeHtml(ln);
+      })
+      .join("\n");
+    linksHtml = `————————————\nЧитать в журналах:\n${rendered}`;
+  }
+  return { album, follow: [...stories, expertHtml, linksHtml].filter(Boolean).join("\n\n\n") };
+}
 }
 
 /** Пустой «новинка / по ссылке ниже» в канал не пускаем. */
@@ -4658,8 +4736,8 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
     console.warn("[Hermes] digest voice skip:", (e as Error).message.slice(0, 120));
     voice = "";
   }
-  const follow = telegramPlain(formatDigestFollowup(shownStories, voice));
-  const albumTitle = telegramPlain(formatDigestAlbumTeaser(shownStories));
+  const follow = formatDigestFollowup(shownStories, voice);
+  const albumTitle = formatDigestAlbumTeaser(shownStories);
 
   let tgMessageId: number | null = null;
   let maxMessageId: string | undefined;
@@ -4833,9 +4911,12 @@ function splitTelegramText(text: string, limit = TG_MESSAGE_LIMIT): string[] {
 }
 
 async function sendTelegramThread(text: string): Promise<number | null> {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const asHtml = /<\/?[a-zA-Z]/.test(raw);
   let last: number | null = null;
-  for (const chunk of splitTelegramText(telegramPlain(text))) {
-    last = await sendTelegramMessage(chunk, null, { html: false });
+  for (const chunk of splitTelegramText(raw)) {
+    last = await sendTelegramMessage(chunk, null, { html: asHtml });
   }
   return last;
 }
@@ -5532,8 +5613,8 @@ async function completePendingNews(pending: PendingNews): Promise<{ ok: boolean;
     return { ok: false, reason: "pending-photos", title };
   }
   const stories = pending.stories.slice(0, 3);
-  const albumTitle = telegramPlain(formatDigestAlbumTeaser(stories));
-  const follow = telegramPlain(formatDigestFollowup(stories, pending.voice || ""));
+  const albumTitle = formatDigestAlbumTeaser(stories);
+  const follow = formatDigestFollowup(stories, pending.voice || "");
   let tgMessageId: number | null = null;
   if (!DRY_RUN && TG_TOKEN && TG_CHAT_ID) {
     try {
