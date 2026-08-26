@@ -2572,7 +2572,6 @@ function htmlFromStoredNews(text: string, title: string): { album: string; follo
   }
   return { album, follow: [...stories, expertHtml, linksHtml].filter(Boolean).join("\n\n\n") };
 }
-}
 
 /** Пустой «новинка / по ссылке ниже» в канал не пускаем. */
 function thinReason(s: DigestStory): string {
