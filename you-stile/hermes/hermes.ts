@@ -2387,12 +2387,11 @@ function formatDigestShotCaption(story: DigestStory, index: number, total: numbe
 
 function formatDigestAlbumTeaser(stories: DigestStory[]): string {
   const list = stories.filter(Boolean).slice(0, 3);
-  const lines = list.map((s, i) => {
-    const name = escapeHtml(stripNewsQuotes(String(s.name || "").trim()));
-    const kicker = escapeHtml(stripNewsQuotes(String(s.kicker || "").trim()));
-    return kicker ? `${i + 1}. <b>${name}</b> — ${kicker}` : `${i + 1}. <b>${name}</b>`;
-  });
-  return ["<b>Мода, о которой сейчас говорят</b>", ...lines].join("\n").slice(0, TG_CAPTION_LIMIT);
+  const names = list
+    .map((s) => escapeHtml(stripNewsQuotes(String(s.name || "").trim())))
+    .filter(Boolean);
+  const who = names.join(" · ");
+  return ["<b>Мода, о которой сейчас говорят</b>", who].filter(Boolean).join("\n").slice(0, TG_CAPTION_LIMIT);
 }
 
 function formatDigestFollowup(stories: DigestStory[], voice = ""): string {
@@ -4589,10 +4588,9 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
         );
         if (tgMessageId && follow) {
           try {
-            await sendTelegramMessage(follow, tgMessageId);
+            await withTelegramRetry(() => sendTelegramThread(follow), "news followup");
           } catch (e) {
             console.warn("[Hermes] digest followup failed:", (e as Error).message.slice(0, 120));
-            await sendTelegramMessage(follow);
           }
         }
       } catch (e) {
@@ -4740,6 +4738,32 @@ async function sendTelegramMessage(
   return j.result?.message_id ?? null;
 }
 
+/** Режем длинный пост по абзацам, без серой цитаты-ответа. */
+function splitTelegramText(text: string, limit = TG_MESSAGE_LIMIT): string[] {
+  const t = String(text || "").trim();
+  if (!t) return [];
+  if (t.length <= limit) return [t];
+  const parts: string[] = [];
+  let rest = t;
+  while (rest.length > limit) {
+    let cut = rest.lastIndexOf("\n\n", limit);
+    if (cut < Math.floor(limit * 0.45)) cut = rest.lastIndexOf("\n", limit);
+    if (cut < Math.floor(limit * 0.45)) cut = limit;
+    parts.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
+async function sendTelegramThread(text: string): Promise<number | null> {
+  let last: number | null = null;
+  for (const chunk of splitTelegramText(text)) {
+    last = await sendTelegramMessage(chunk);
+  }
+  return last;
+}
+
 /**
  * Фото/видео: если полный текст > 1024 — тизер в подписи + полный пост отдельным сообщением
  * (чтобы психология и остальные блоки не обрезались).
@@ -4758,11 +4782,10 @@ async function sendTelegramMediaWithCaption(
       : await sendTelegramVideo(filePath, mediaCaption);
   if (!fits && mid) {
     try {
-      await sendTelegramMessage(fullCaption, mid);
-      console.log(`[Hermes] tg full text sent as reply to message_id=${mid} (len=${fullCaption.length})`);
+      await sendTelegramThread(fullCaption);
+      console.log(`[Hermes] tg full text sent after photo (len=${fullCaption.length})`);
     } catch (e) {
       console.error("[Hermes] tg full text follow-up failed:", (e as Error).message);
-      // fallback: попробовать без reply
       try {
         await sendTelegramMessage(fullCaption);
       } catch (e2) {
@@ -4884,8 +4907,8 @@ async function sendTelegramAlbumWithCaption(
   const mid = await sendTelegramAlbum(paths, albumCap);
   if (!fits && mid) {
     try {
-      await sendTelegramMessage(full, mid);
-      console.log(`[Hermes] tg full text after album id=${mid} len=${full.length}`);
+      await sendTelegramThread(full);
+      console.log(`[Hermes] tg full text after album len=${full.length}`);
     } catch (e) {
       console.error("[Hermes] tg full text after album failed:", (e as Error).message);
       try {
@@ -5435,10 +5458,9 @@ async function completePendingNews(pending: PendingNews): Promise<{ ok: boolean;
       tgMessageId = await withTelegramRetry(() => sendTelegramAlbum(photos, albumTitle), "pending album");
       if (tgMessageId && follow) {
         try {
-          await withTelegramRetry(() => sendTelegramMessage(follow, tgMessageId), "pending followup");
+          await withTelegramRetry(() => sendTelegramThread(follow), "pending followup");
         } catch (e) {
           console.warn("[Hermes] pending followup failed:", (e as Error).message.slice(0, 120));
-          try { await sendTelegramMessage(follow); } catch {}
         }
       }
     } catch (e) {
