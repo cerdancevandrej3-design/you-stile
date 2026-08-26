@@ -1502,6 +1502,29 @@ function stripNewsQuotes(text: string): string {
   return t;
 }
 
+/** Telegram без parse_mode: теги <b> иначе видны как «кавычки». */
+function telegramPlain(text: string): string {
+  let t = String(text || "");
+  t = t.replace(/<br\s*\/?>/gi, "\n");
+  t = t.replace(/<\/(?:p|div|h[1-6]|li|blockquote)>/gi, "\n");
+  t = t.replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, href, label) => {
+    const name = String(label || "").replace(/<[^>]+>/g, "").trim();
+    const url = String(href || "").trim();
+    if (name && url) return `${name}\n${url}`;
+    return name || url;
+  });
+  t = t.replace(/<\/?[a-zA-Z][^>]*>/g, "");
+  t = t.replace(/&nbsp;/g, " ");
+  t = t.replace(/&amp;/g, "&");
+  t = t.replace(/&lt;/g, "<");
+  t = t.replace(/&gt;/g, ">");
+  t = t.replace(/&#39;|&apos;/g, "'");
+  t = stripNewsQuotes(t);
+  t = t.replace(/[ \t]+\n/g, "\n");
+  t = t.replace(/\n{3,}/g, "\n\n");
+  return t.trim();
+}
+
 async function generateTextPost(
   topic: string,
   kind: "image" | "video",
@@ -2313,17 +2336,19 @@ async function rewriteLastNewsPost(): Promise<{ ok: boolean; reason?: string; ti
   if (photos.length < 3) return { ok: false, reason: `need-3-photos:${photos.length}`, title: last.title };
   const { album, follow } = splitStoredNewsText(last.text, last.title);
   if (!follow) return { ok: false, reason: "no-follow", title: last.title };
+  const albumPlain = telegramPlain(album);
+  const followPlain = telegramPlain(follow);
   const mid = last.tgMessageId;
   for (const id of [mid, mid + 1, mid + 2, mid + 3]) {
     await deleteTelegramMessage(id);
   }
-  const tgMessageId = await withTelegramRetry(() => sendTelegramAlbum(photos, album), "rewrite album");
-  if (tgMessageId && follow) {
-    await withTelegramRetry(() => sendTelegramThread(follow), "rewrite followup");
+  const tgMessageId = await withTelegramRetry(() => sendTelegramAlbum(photos, albumPlain), "rewrite album");
+  if (tgMessageId && followPlain) {
+    await withTelegramRetry(() => sendTelegramThread(followPlain), "rewrite followup");
   }
   if (!tgMessageId) return { ok: false, reason: "tg-failed", title: last.title };
   last.tgMessageId = tgMessageId;
-  last.text = [album, follow].filter(Boolean).join("\n\n");
+  last.text = [albumPlain, followPlain].filter(Boolean).join("\n\n");
   saveLog(log);
   console.log(`[Hermes] rewritten news «${last.title}» tg=${tgMessageId}`);
   return { ok: true, title: last.title, tgMessageId };
@@ -4633,8 +4658,8 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
     console.warn("[Hermes] digest voice skip:", (e as Error).message.slice(0, 120));
     voice = "";
   }
-  const follow = formatDigestFollowup(shownStories, voice);
-  const albumTitle = formatDigestAlbumTeaser(shownStories);
+  const follow = telegramPlain(formatDigestFollowup(shownStories, voice));
+  const albumTitle = telegramPlain(formatDigestAlbumTeaser(shownStories));
 
   let tgMessageId: number | null = null;
   let maxMessageId: string | undefined;
@@ -4762,16 +4787,18 @@ function telegramPreviewOptions(opts?: { preview?: boolean; previewUrl?: string 
 async function sendTelegramMessage(
   text: string,
   replyToMessageId?: number | null,
-  opts?: { preview?: boolean; previewUrl?: string },
+  opts?: { preview?: boolean; previewUrl?: string; html?: boolean },
 ): Promise<number | null> {
   if (!TG_TOKEN || !TG_CHAT_ID) return null;
+  const useHtml = opts?.html !== false;
+  const bodyText = (useHtml ? String(text || "") : telegramPlain(text)).slice(0, TG_MESSAGE_LIMIT);
   const preview = telegramPreviewOptions(opts);
   const payload: Record<string, unknown> = {
     chat_id: TG_CHAT_ID,
-    text: text.slice(0, TG_MESSAGE_LIMIT),
-    parse_mode: "HTML",
+    text: bodyText,
     ...preview,
   };
+  if (useHtml) payload.parse_mode = "HTML";
   if (replyToMessageId) payload.reply_to_message_id = replyToMessageId;
   const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
     method: "POST",
@@ -4779,20 +4806,9 @@ async function sendTelegramMessage(
     body: JSON.stringify(payload),
   });
   const j = await r.json();
-  if (!j.ok && /parse|entities|html/i.test(String(j.description || ""))) {
-    const r2 = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: TG_CHAT_ID,
-        text: text.slice(0, TG_MESSAGE_LIMIT),
-        ...preview,
-        ...(replyToMessageId ? { reply_to_message_id: replyToMessageId } : {}),
-      }),
-    });
-    const j2 = await r2.json();
-    if (!j2.ok) throw new Error(`tg sendMessage: ${j2.description}`);
-    return j2.result?.message_id ?? null;
+  if (!j.ok && useHtml && /parse|entities|html/i.test(String(j.description || ""))) {
+    console.warn("[Hermes] sendMessage HTML failed, sending plain:", j.description);
+    return sendTelegramMessage(text, replyToMessageId, { ...opts, html: false });
   }
   if (!j.ok) throw new Error(`tg sendMessage: ${j.description}`);
   return j.result?.message_id ?? null;
@@ -4818,8 +4834,8 @@ function splitTelegramText(text: string, limit = TG_MESSAGE_LIMIT): string[] {
 
 async function sendTelegramThread(text: string): Promise<number | null> {
   let last: number | null = null;
-  for (const chunk of splitTelegramText(text)) {
-    last = await sendTelegramMessage(chunk);
+  for (const chunk of splitTelegramText(telegramPlain(text))) {
+    last = await sendTelegramMessage(chunk, null, { html: false });
   }
   return last;
 }
@@ -4860,6 +4876,7 @@ async function sendTelegramPhoto(filePath: string, caption: string, replyTo?: nu
   if (!TG_TOKEN || !TG_CHAT_ID) return null;
   const url = `https://api.telegram.org/bot${TG_TOKEN}/sendPhoto`;
   const isRemote = /^https?:\/\//i.test(filePath);
+  let capText = caption;
   const trySend = async (parseMode?: "HTML") => {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 120000);
@@ -4871,7 +4888,7 @@ async function sendTelegramPhoto(filePath: string, caption: string, replyTo?: nu
           body: JSON.stringify({
             chat_id: TG_CHAT_ID,
             photo: filePath,
-            caption: caption.slice(0, TG_CAPTION_LIMIT),
+            caption: capText.slice(0, TG_CAPTION_LIMIT),
             show_caption_above_media: false,
             ...(parseMode ? { parse_mode: parseMode } : {}),
             ...(replyTo ? { reply_to_message_id: replyTo } : {}),
@@ -4883,7 +4900,7 @@ async function sendTelegramPhoto(filePath: string, caption: string, replyTo?: nu
       const form = new FormData();
       const buf = fs.readFileSync(filePath);
       form.append("chat_id", TG_CHAT_ID);
-      form.append("caption", caption.slice(0, TG_CAPTION_LIMIT));
+      form.append("caption", capText.slice(0, TG_CAPTION_LIMIT));
       form.append("show_caption_above_media", "false");
       if (parseMode) form.append("parse_mode", parseMode);
       if (replyTo) form.append("reply_to_message_id", String(replyTo));
@@ -4896,7 +4913,8 @@ async function sendTelegramPhoto(filePath: string, caption: string, replyTo?: nu
   };
   let j = await trySend("HTML");
   if (!j.ok && /parse|entities|html/i.test(String(j.description || ""))) {
-    console.warn("[Hermes] sendPhoto HTML failed, retry without parse_mode:", j.description);
+    console.warn("[Hermes] sendPhoto HTML failed, retry plain:", j.description);
+    capText = telegramPlain(capText);
     j = await trySend();
   }
   if (!j.ok) throw new Error(`tg sendPhoto: ${j.description}`);
@@ -4908,12 +4926,14 @@ async function sendTelegramPhoto(filePath: string, caption: string, replyTo?: nu
 async function sendTelegramAlbum(filePaths: string[], caption: string, itemCaptions?: string[]): Promise<number | null> {
   if (!TG_TOKEN || !TG_CHAT_ID || filePaths.length < 2) return null;
   const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMediaGroup`;
+  let capAll = caption;
+  let caps = itemCaptions;
   const trySend = async (parseMode?: "HTML") => {
     const form = new FormData();
     form.append("chat_id", TG_CHAT_ID);
     const media = filePaths.slice(0, 10).map((fp, i) => {
       const isRemote = /^https?:\/\//i.test(fp);
-      const cap = String(itemCaptions?.[i] || (i === 0 ? caption : "") || "").slice(0, TG_CAPTION_LIMIT);
+      const cap = String(caps?.[i] || (i === 0 ? capAll : "") || "").slice(0, TG_CAPTION_LIMIT);
       return {
         type: "photo",
         media: isRemote ? fp : `attach://photo${i}`,
@@ -4942,7 +4962,9 @@ async function sendTelegramAlbum(filePaths: string[], caption: string, itemCapti
   };
   let j = await trySend("HTML");
   if (!j.ok && /parse|entities|html/i.test(String(j.description || ""))) {
-    console.warn("[Hermes] sendMediaGroup HTML failed, retry without parse_mode:", j.description);
+    console.warn("[Hermes] sendMediaGroup HTML failed, retry plain:", j.description);
+    capAll = telegramPlain(capAll);
+    caps = caps?.map((c) => telegramPlain(c));
     j = await trySend();
   }
   if (!j.ok) throw new Error(`tg sendMediaGroup: ${j.description}`);
@@ -5510,8 +5532,8 @@ async function completePendingNews(pending: PendingNews): Promise<{ ok: boolean;
     return { ok: false, reason: "pending-photos", title };
   }
   const stories = pending.stories.slice(0, 3);
-  const albumTitle = formatDigestAlbumTeaser(stories);
-  const follow = formatDigestFollowup(stories, pending.voice || "");
+  const albumTitle = telegramPlain(formatDigestAlbumTeaser(stories));
+  const follow = telegramPlain(formatDigestFollowup(stories, pending.voice || ""));
   let tgMessageId: number | null = null;
   if (!DRY_RUN && TG_TOKEN && TG_CHAT_ID) {
     try {
