@@ -2269,6 +2269,66 @@ async function deleteLastPublishedPost(titleHint = ""): Promise<{ ok: boolean; r
   return { ok: true, deleted };
 }
 
+function digestPhotosForLog(last: { id?: string; imagePath?: string }): string[] {
+  const id = String(last.id || "").trim();
+  const img = String(last.imagePath || "").trim();
+  const dir = PUBLIC_HERMES_DIR;
+  const names = [
+    img,
+    img.endsWith(".jpg") ? "" : `${img}.jpg`,
+    id ? path.join(dir, `${id}-hero-0-0.jpg`) : "",
+    id ? path.join(dir, `${id}-hero-1-0.jpg`) : "",
+    id ? path.join(dir, `${id}-hero-2-0.jpg`) : "",
+    id ? path.join(dir, `${id}-hero-extra-c-1.jpg`) : "",
+    id ? path.join(dir, `${id}-hero-extra-c-2.jpg`) : "",
+  ];
+  const out: string[] = [];
+  for (const n of names) {
+    if (n && fs.existsSync(n) && !out.includes(n)) out.push(n);
+  }
+  return out.slice(0, 3);
+}
+
+function splitStoredNewsText(text: string, title: string): { album: string; follow: string } {
+  const names = escapeHtml(stripNewsQuotes(String(title || "").replace(/\s*·\s*/g, " · ").trim()));
+  const album = ["<b>Мода, о которой сейчас говорят</b>", names].filter(Boolean).join("\n");
+  let follow = String(text || "");
+  follow = follow.replace(/<\/?blockquote>/gi, "");
+  follow = stripNewsQuotes(follow);
+  const marker = "\n1. <b>";
+  const first = follow.indexOf(marker);
+  const second = first >= 0 ? follow.indexOf(marker, first + 1) : -1;
+  if (second >= 0) follow = follow.slice(second + 1);
+  else follow = follow.replace(/^<b>Мода, о которой сейчас говорят<\/b>\s*/i, "").trim();
+  follow = follow.replace(/\n{3,}/g, "\n\n").trim();
+  return { album, follow };
+}
+
+/** Переложить последний выпуск новостей: без ответа-цитаты и без обрыва текста. */
+async function rewriteLastNewsPost(): Promise<{ ok: boolean; reason?: string; title?: string; tgMessageId?: number }> {
+  const log = loadLog();
+  const last = [...log.posts].reverse().find((p) => p.tgMessageId && /Мода, о которой сейчас говорят/.test(String(p.text || "")));
+  if (!last) return { ok: false, reason: "no-news-post" };
+  const photos = digestPhotosForLog(last);
+  if (photos.length < 3) return { ok: false, reason: `need-3-photos:${photos.length}`, title: last.title };
+  const { album, follow } = splitStoredNewsText(last.text, last.title);
+  if (!follow) return { ok: false, reason: "no-follow", title: last.title };
+  const mid = last.tgMessageId;
+  for (const id of [mid, mid + 1, mid + 2, mid + 3]) {
+    await deleteTelegramMessage(id);
+  }
+  const tgMessageId = await withTelegramRetry(() => sendTelegramAlbum(photos, album), "rewrite album");
+  if (tgMessageId && follow) {
+    await withTelegramRetry(() => sendTelegramThread(follow), "rewrite followup");
+  }
+  if (!tgMessageId) return { ok: false, reason: "tg-failed", title: last.title };
+  last.tgMessageId = tgMessageId;
+  last.text = [album, follow].filter(Boolean).join("\n\n");
+  saveLog(log);
+  console.log(`[Hermes] rewritten news «${last.title}» tg=${tgMessageId}`);
+  return { ok: true, title: last.title, tgMessageId };
+}
+
 /** Опубликовать последний черновик из лога (если TG не принял с первого раза). */
 async function republishLastLogEntry(): Promise<{ ok: boolean; title?: string; tgMessageId?: number; reason?: string }> {
   const log = loadLog();
@@ -5561,6 +5621,7 @@ async function main(): Promise<void> {
   const deleteLast = argv.includes("--delete-last");
   const replaceEvergreen = argv.includes("--replace-evergreen");
   const republishLast = argv.includes("--republish-last");
+  const rewriteLastNews = argv.includes("--rewrite-last-news");
   const retryPending = argv.includes("--retry-pending");
   const wardrobeLast = argv.includes("--wardrobe-last");
   const titleHintArg = argv.find((a) => a.startsWith("--title-hint="));
@@ -5614,6 +5675,11 @@ async function main(): Promise<void> {
   if (republishLast) {
     const r = await republishLastLogEntry();
     console.log(`[Hermes] republish-last | ok=${r.ok} | ${r.title || r.reason} | msg=${r.tgMessageId ?? "—"}`);
+    return;
+  }
+  if (rewriteLastNews) {
+    const r = await rewriteLastNewsPost();
+    console.log(`[Hermes] rewrite-last-news | ok=${r.ok} | ${r.title || r.reason} | msg=${r.tgMessageId ?? "—"}`);
     return;
   }
   if (retryPending) {
