@@ -60,6 +60,7 @@ if (rootPolza) process.env.POLZA_API_KEY = rootPolza;
 const PROJECT_ROOT = __dirname;
 const DATA_DIR = path.join(PROJECT_ROOT, "data");
 const LOG_FILE = path.join(DATA_DIR, "hermes-log.json");
+const PENDING_FILE = path.join(DATA_DIR, "pending-news.json");
 const TOPICS_FILE = path.join(PROJECT_ROOT, "topics.json");
 const PUBLISHED_CACHE = path.join(DATA_DIR, "published-rss.json");
 const PUBLIC_HERMES_DIR = path.join(PROJECT_ROOT, "..", "public", "hermes");
@@ -272,8 +273,10 @@ function searchCitations(r: unknown): string {
   }
   return [...new Set(urls)].slice(0, 6).join("\n");
 }
-// Картинки: openai/gpt-5.4-image-2 — пока топовая по качеству
+// Картинки: openai/gpt-5.4-image-2 — лица и качество
 const IMAGE_MODEL = (process.env.HERMES_IMAGE_MODEL || "openai/gpt-5.4-image-2").trim();
+/** Запасная: Qwen Image 2 хорошо держит людей, одежду, фон и читаемые надписи брендов. */
+const IMAGE_FALLBACK = (process.env.HERMES_IMAGE_FALLBACK || "qwen/image-2").trim();
 /** Одежда: пока топовая модель картинок. */
 const WARDROBE_IMAGE_MODEL = (process.env.HERMES_WARDROBE_IMAGE_MODEL || "openai/gpt-5.4-image-2").trim();
 const VIDEO_MODEL = "bytedance/seedance-2-fast";
@@ -315,6 +318,55 @@ function saveLog(log: HermesLog): void {
   // Длинная память — чтобы не крутить темы через неделю
   log.posts = log.posts.slice(-400);
   fs.writeFileSync(LOG_FILE, JSON.stringify(log, null, 2), "utf-8");
+}
+
+type PendingNews = {
+  id: string;
+  slot: DaySlotKind;
+  createdAt: string;
+  attempts: number;
+  nextAt: number;
+  reason: string;
+  stories: DigestStory[];
+  links: string[];
+  photos: string[];
+  albumTitle?: string;
+  follow?: string;
+  voice?: string;
+};
+
+const PENDING_MAX_ATTEMPTS = 5;
+const PENDING_BACKOFF_MS = [8 * 60_000, 15 * 60_000, 25 * 60_000, 40 * 60_000, 60 * 60_000];
+let pendingBusy = false;
+
+function loadPendingNews(): PendingNews | null {
+  try {
+    if (!fs.existsSync(PENDING_FILE)) return null;
+    const raw = JSON.parse(fs.readFileSync(PENDING_FILE, "utf-8"));
+    if (!raw || !Array.isArray(raw.stories) || !raw.id) return null;
+    return raw as PendingNews;
+  } catch {
+    return null;
+  }
+}
+
+function savePendingNews(p: PendingNews): void {
+  fs.writeFileSync(PENDING_FILE, JSON.stringify(p, null, 2), "utf-8");
+}
+
+function clearPendingNews(): void {
+  try {
+    if (fs.existsSync(PENDING_FILE)) fs.unlinkSync(PENDING_FILE);
+  } catch {}
+}
+
+function queuePendingNews(p: Omit<PendingNews, "nextAt">): void {
+  const wait = PENDING_BACKOFF_MS[Math.min(Math.max(p.attempts, 0), PENDING_BACKOFF_MS.length - 1)];
+  const next: PendingNews = { ...p, nextAt: Date.now() + wait };
+  savePendingNews(next);
+  console.warn(
+    `[Hermes] отложенный пост сохранён — через ${Math.round(wait / 60000)} мин только фото/отправка, без нового поиска (${p.reason}, попытка ${p.attempts + 1}/${PENDING_MAX_ATTEMPTS})`,
+  );
 }
 
 function loadTopics(): string[] {
@@ -1740,13 +1792,28 @@ function withEditorialTitle(prompt: string, title: string, opts?: { celebIdentit
   const juice =
     ` VISUAL IMPACT: vivid juicy saturated colors, scroll-stopping magazine wow, rich warm cinematic light, glowing healthy skin, sharp fabric/nails detail, high contrast hero image — NOT dull, NOT grey, NOT flat stock, NOT washed-out, NOT muddy. `;
   if (!short) {
-    return `${base}.${juice}Clean global fashion-media cover typography, high contrast, no watermark, no logo, 1:1.`;
+    return `${base}.${juice}Clean global fashion-media cover typography, high contrast, no watermark, 1:1.`;
   }
   return (
     `${base}.${juice}Cover typography: place ONE short Russian headline exactly «${short}» as a clean international fashion-media title card (Vogue / Elle / Harper's digital energy — premium but accessible). ` +
     `READABILITY FIRST for phone screens: LARGE bold refined modern sans-serif, thick clear letterforms, high contrast (white/near-white on dark soft gradient bar OR dark on light clean band), sharp Russian glyphs, comfortable tracking — must stay legible at Telegram thumbnail size. ` +
     `Classic magazine serif allowed ONLY if still bold and highly legible on mobile; never hairline/thin decorative. Title preferably one line (max two), ~12–18% of frame at top or bottom, generous padding, photo remains the hero. ` +
-    `FORBIDDEN: thin script/calligraphy, bubble/teen fonts, comic, graffiti, neon cyber UI, dense paragraphs, tiny captions, English gibberish, misspelled Russian, Ukrainian letters, watermarks, logos, brand marks. Square 1:1.`
+    `FORBIDDEN: thin script/calligraphy, bubble/teen fonts, comic, graffiti, neon cyber UI, dense paragraphs, tiny captions, English gibberish, misspelled Russian, Ukrainian letters, watermarks. Square 1:1.`
+  );
+}
+
+/** Кадр для добора: человек + одежда + фон + читаемые надписи дома моды на вещах. */
+function brandLookPrompt(s: DigestStory): string {
+  const house = matchingLuxuryHouses(`${s.name} ${s.kicker} ${s.line}`)[0];
+  const houseBit = house
+    ? `Show the ${house.name} look with sharp readable ${house.name} lettering on a bag, belt, shoe or button — real brand typography, not gibberish.`
+    : `If a luxury house is named in the look, keep its lettering readable on accessories.`;
+  return withEditorialTitle(
+    `photoreal fashion magazine editorial of this look: ${s.kicker}. ${String(s.line || "").slice(0, 220)}. ` +
+      `Full outfit, real fabric texture, cinematic light, believable person, rich background. ${houseBit} ` +
+      `No fake celebrity likeness.`,
+    s.name,
+    { celebIdentity: false },
   );
 }
 
@@ -2475,20 +2542,20 @@ async function generateImage(
   isFallback = false,
 ): Promise<string> {
   const base = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
-  const fallbackModel = (process.env.HERMES_IMAGE_FALLBACK || "seedream/5-pro-text-to-image").trim();
+  const fallbackModel = IMAGE_FALLBACK;
   let ratio = aspectRatio;
+  let omitQuality = false;
 
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      const body = {
-        model,
-        input: {
-          prompt,
-          aspect_ratio: ratio,
-          quality: model.includes("seedream") || model.includes("5-pro") ? "medium" : "basic",
-          n: 1,
-        },
+      const useMedium = /seedream|qwen|gemini.*image|5-pro/i.test(model);
+      const input: Record<string, unknown> = {
+        prompt,
+        aspect_ratio: ratio,
+        n: 1,
       };
+      if (!omitQuality) input.quality = useMedium ? "medium" : "basic";
+      const body = { model, input };
       const response = await fetch(`${base}/media`, {
         method: "POST",
         headers: {
@@ -2506,6 +2573,11 @@ async function generateImage(
         if (isTransientImageError(msg, response.status) && attempt < 3) {
           console.warn(`[Hermes] ${model} busy/error, wait 20s (try ${attempt + 1}):`, String(msg).slice(0, 120));
           await sleep(20000);
+          continue;
+        }
+        if (/quality|недопустим/i.test(msg) && !omitQuality && attempt < 3) {
+          console.warn(`[Hermes] ${model} quality rejected, retry without quality`);
+          omitQuality = true;
           continue;
         }
         if (/aspect|BAD_REQUEST|недопустим/i.test(msg) && ratio !== "1:1" && attempt < 3) {
@@ -4204,13 +4276,7 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
       const house = matchingLuxuryHouses(`${story.name} ${story.kicker} ${story.line} ${it.title} ${research}`)[0];
       if (house) {
         try {
-          const imgUrl = await generateImage(
-            withEditorialTitle(
-              `photoreal magazine editorial of a new ${house.name} look: ${story.kicker}. ${String(story.line || "").slice(0, 220)}. Full outfit, luxury lighting, no celebrity likeness, no fake famous face.`,
-              house.name,
-              { celebIdentity: false },
-            ),
-          );
+          const imgUrl = await generateImage(brandLookPrompt({ ...story, name: house.name }));
           const dest = path.join(PUBLIC_HERMES_DIR, `${id}-p${i}-house.jpg`);
           await downloadToFile(imgUrl, dest);
           shots.push(dest);
@@ -4286,13 +4352,7 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
     }
     if (!extraPhoto) {
       try {
-        const imgUrl = await generateImage(
-          withEditorialTitle(
-            `photoreal fashion close-up matching this look: ${s.kicker} ${s.line}`.slice(0, 400),
-            s.name,
-            { celebIdentity: false },
-          ),
-        );
+        const imgUrl = await generateImage(brandLookPrompt(s));
         const extraDest = path.join(PUBLIC_HERMES_DIR, `${id}-hero-extra-gen-${padN}.jpg`);
         await downloadToFile(imgUrl, extraDest);
         extraPhoto = extraDest;
@@ -4327,6 +4387,16 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
   }
   if (media.length < 3) {
     console.error("[Hermes] news NOT published: need three photos");
+    queuePendingNews({
+      id,
+      slot,
+      createdAt: new Date().toISOString(),
+      attempts: 0,
+      reason: "need-3-photos",
+      stories: (informative.map((p) => p.story).filter(Boolean) as DigestStory[]).slice(0, 3),
+      links: informative.slice(0, 3).map((p) => p.item.link).filter(Boolean),
+      photos: media.filter((p) => p && fs.existsSync(p)),
+    });
     return { ok: false, reason: "need-3-photos", title: stories[0]?.name };
   }
   for (let i = 0; i < shown.length; i++) {
@@ -4401,6 +4471,19 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
   }
   if (!tgMessageId) {
     console.error("[Hermes] news NOT marked published: Telegram failed or missing");
+    queuePendingNews({
+      id,
+      slot,
+      createdAt: new Date().toISOString(),
+      attempts: 0,
+      reason: "tg-failed",
+      stories: shownStories,
+      links: informative.slice(0, 3).map((p) => p.item.link).filter(Boolean),
+      photos: media.filter((p) => p && fs.existsSync(p)),
+      albumTitle,
+      follow,
+      voice,
+    });
     return { ok: false, reason: "tg-failed", title: shownStories[0]?.name };
   }
   for (const p of informative.slice(0, 3)) published.add(p.item.link);
@@ -4440,6 +4523,8 @@ async function withTelegramRetry<T>(fn: () => Promise<T>, label: string): Promis
   }
   throw last instanceof Error ? last : new Error(String(last));
 }
+
+function telegramPreviewOptions(opts?: { preview?: boolean; previewUrl?: string }): Record<string, unknown> {
   const previewOn = Boolean(opts?.preview);
   if (!previewOn) return { link_preview_options: { is_disabled: true } };
   const previewUrl = String(opts?.previewUrl || "").trim();
@@ -5131,11 +5216,142 @@ async function attachWardrobeToLastPost(): Promise<{ ok: boolean; reason?: strin
   return { ok: true, title: last.title };
 }
 
+async function generateMissingDigestPhotos(pending: PendingNews): Promise<string[]> {
+  const photos = pending.photos.filter((p) => p && fs.existsSync(p));
+  let n = 0;
+  while (photos.length < 3 && n < 5) {
+    n += 1;
+    const s = pending.stories[Math.min(photos.length, pending.stories.length - 1)] || pending.stories[0];
+    if (!s) break;
+    const dest = path.join(PUBLIC_HERMES_DIR, `${pending.id}-retry-${Date.now()}-${n}.jpg`);
+    try {
+      const imgUrl = await generateImage(brandLookPrompt(s));
+      await downloadToFile(imgUrl, dest);
+      const cropped = await cropHeroPortrait(dest, dest.replace(/\.jpg$/i, "-c.jpg"), heroCropMode(s));
+      photos.push(cropped);
+      console.log(`[Hermes] pending photo ${photos.length}/3 via ${photos.length > 1 ? "fallback-ok" : "gen"}: ${s.name}`);
+    } catch (e) {
+      console.warn("[Hermes] pending photo retry failed:", (e as Error).message.slice(0, 140));
+      if (IMAGE_FALLBACK && IMAGE_FALLBACK !== IMAGE_MODEL) {
+        try {
+          const imgUrl = await generateImage(brandLookPrompt(s), IMAGE_FALLBACK, "1:1", true);
+          await downloadToFile(imgUrl, dest);
+          const cropped = await cropHeroPortrait(dest, dest.replace(/\.jpg$/i, "-c.jpg"), heroCropMode(s));
+          photos.push(cropped);
+          console.log(`[Hermes] pending photo ${photos.length}/3 fallback ${IMAGE_FALLBACK}: ${s.name}`);
+        } catch (e2) {
+          console.warn("[Hermes] pending fallback photo failed:", (e2 as Error).message.slice(0, 140));
+        }
+      }
+    }
+  }
+  return photos;
+}
+
+async function completePendingNews(pending: PendingNews): Promise<{ ok: boolean; reason?: string; title?: string }> {
+  const title = pending.stories.map((s) => s.name).filter(Boolean).join(" · ") || pending.stories[0]?.name;
+  const photos = await generateMissingDigestPhotos(pending);
+  pending.photos = photos;
+  if (photos.length < 3) {
+    pending.attempts += 1;
+    pending.reason = "need-3-photos";
+    if (pending.attempts >= PENDING_MAX_ATTEMPTS) {
+      console.error("[Hermes] pending dropped: still no 3 photos");
+      clearPendingNews();
+      return { ok: false, reason: "pending-expired", title };
+    }
+    queuePendingNews(pending);
+    return { ok: false, reason: "pending-photos", title };
+  }
+  const stories = pending.stories.slice(0, 3);
+  const albumTitle = pending.albumTitle || formatDigestAlbumTeaser(stories);
+  const follow = pending.follow || formatDigestFollowup(stories, pending.voice || "");
+  let tgMessageId: number | null = null;
+  if (!DRY_RUN && TG_TOKEN && TG_CHAT_ID) {
+    try {
+      tgMessageId = await withTelegramRetry(() => sendTelegramAlbum(photos, albumTitle), "pending album");
+      if (tgMessageId && follow) {
+        try {
+          await withTelegramRetry(() => sendTelegramMessage(follow, tgMessageId), "pending followup");
+        } catch (e) {
+          console.warn("[Hermes] pending followup failed:", (e as Error).message.slice(0, 120));
+          try { await sendTelegramMessage(follow); } catch {}
+        }
+      }
+    } catch (e) {
+      console.error("[Hermes] pending tg send failed:", (e as Error).message);
+    }
+  }
+  if (!DRY_RUN && !tgMessageId) {
+    pending.attempts += 1;
+    pending.reason = "tg-failed";
+    pending.albumTitle = albumTitle;
+    pending.follow = follow;
+    if (pending.attempts >= PENDING_MAX_ATTEMPTS) {
+      console.error("[Hermes] pending dropped: telegram still failing");
+      clearPendingNews();
+      return { ok: false, reason: "pending-expired", title };
+    }
+    queuePendingNews(pending);
+    return { ok: false, reason: "pending-tg", title };
+  }
+  const log = loadLog();
+  log.posts.push({
+    id: pending.id,
+    ts: new Date().toISOString(),
+    kind: "image",
+    title: title || "Мода",
+    text: [albumTitle, follow].filter(Boolean).join("\n\n"),
+    imagePath: photos[0],
+    tgMessageId: tgMessageId ?? undefined,
+    model: TEXT_MODEL,
+    audience: pending.slot === "men" ? "men" : "celeb",
+  });
+  saveLog(log);
+  const published = loadPublishedCache();
+  for (const link of pending.links) if (link) published.add(link);
+  savePublishedCache(published);
+  clearPendingNews();
+  console.log(`[Hermes] pending published «${title}» tg=${tgMessageId ?? "dry"}`);
+  return { ok: true, title, reason: DRY_RUN ? "dry-run" : undefined };
+}
+
+async function retryPendingNews(): Promise<{ ok: boolean; reason?: string; title?: string; handled?: boolean }> {
+  const pending = loadPendingNews();
+  if (!pending) return { ok: false, handled: false };
+  if (pendingBusy) return { ok: false, reason: "pending-busy", handled: true };
+  if (pending.attempts >= PENDING_MAX_ATTEMPTS) {
+    console.warn("[Hermes] pending expired, drop");
+    clearPendingNews();
+    return { ok: false, handled: false };
+  }
+  if (Date.now() < pending.nextAt) {
+    const min = Math.max(1, Math.round((pending.nextAt - Date.now()) / 60000));
+    console.log(`[Hermes] pending wait ${min} min (без нового поиска)`);
+    return { ok: false, reason: "pending-wait", title: pending.stories[0]?.name, handled: true };
+  }
+  pendingBusy = true;
+  try {
+    console.log(`[Hermes] pending retry ${pending.attempts + 1}: только фото/отправка, материал уже есть`);
+    const r = await completePendingNews(pending);
+    return { ...r, handled: true };
+  } finally {
+    pendingBusy = false;
+  }
+}
+
 /** Нет годной новости про звёзд — ещё раз Google, не старый уход/гардероб. */
 async function publishNewsOrEvergreen(slot: DaySlotKind): Promise<{ ok: boolean; reason?: string; title?: string }> {
+  const pendingFirst = await retryPendingNews();
+  if (pendingFirst.ok) return pendingFirst;
+  if (pendingFirst.handled) return pendingFirst;
+
   const lane = contentLane(slot);
   const news = await publishNewsOnce(slot);
   if (news.ok) return news;
+  if (news.reason === "need-3-photos" || news.reason === "tg-failed") {
+    return news;
+  }
   if (lane === "star") {
     console.warn(`[Hermes] нет звёзд (${news.reason}) → ещё раз Google, не старый уход/гардероб`);
     const retry = await publishNewsOnce(slot);
@@ -5159,6 +5375,7 @@ async function main(): Promise<void> {
   const deleteLast = argv.includes("--delete-last");
   const replaceEvergreen = argv.includes("--replace-evergreen");
   const republishLast = argv.includes("--republish-last");
+  const retryPending = argv.includes("--retry-pending");
   const wardrobeLast = argv.includes("--wardrobe-last");
   const titleHintArg = argv.find((a) => a.startsWith("--title-hint="));
   const titleHint = titleHintArg?.split("=").slice(1).join("=") || "";
@@ -5213,6 +5430,11 @@ async function main(): Promise<void> {
     console.log(`[Hermes] republish-last | ok=${r.ok} | ${r.title || r.reason} | msg=${r.tgMessageId ?? "—"}`);
     return;
   }
+  if (retryPending) {
+    const r = await retryPendingNews();
+    console.log(`[Hermes] retry-pending | ok=${r.ok} | ${r.title || r.reason}`);
+    return;
+  }
 
   if (batchCelebN > 0) {
     const okCount = await runTopicBatch(batchCelebN, CELEB_BATCH_TOPICS);
@@ -5230,6 +5452,20 @@ async function main(): Promise<void> {
     return;
   }
   if (once) {
+    const queued = loadPendingNews();
+    if (queued) {
+      queued.nextAt = 0;
+      savePendingNews(queued);
+      const pendingOnce = await retryPendingNews();
+      if (pendingOnce.ok) {
+        console.log(`[Hermes] once news done | ok=true | pending | ${pendingOnce.title || ""}`);
+        return;
+      }
+      if (pendingOnce.handled) {
+        console.log(`[Hermes] once: материал уже есть, фото/отправка не готовы (${pendingOnce.reason}) — новый поиск не запускаем`);
+        return;
+      }
+    }
     if (MODE === "image" || MODE === "video") {
       const kind: "image" | "video" = MODE === "video" ? "video" : "image";
       const aud = audienceForced || resolveDaySlot();
@@ -5250,7 +5486,10 @@ async function main(): Promise<void> {
   cron.schedule("0 8 * * *", () => publishStar("women"), cronOpts);
   cron.schedule("0 16 * * *", () => publishStar("women"), cronOpts);
   cron.schedule("0 0 * * *", () => publishStar("women"), cronOpts);
-  console.log("[Hermes] cron: 08:00 и 16:00 звёзды · 00:00 маникюр/причёска/одежда");
+  cron.schedule("*/10 * * * *", () => {
+    retryPendingNews().catch((e) => console.error("[Hermes] pending cron", e));
+  }, cronOpts);
+  console.log("[Hermes] cron: 08:00 и 16:00 звёзды · 00:00 маникюр/причёска/одежда · каждые 10 мин добор фото");
 
   setInterval(() => {}, 60_000);
 }
