@@ -609,6 +609,20 @@ function readGroomingResult(jobId: string): any | null {
     return null;
   }
 }
+function groomingHasAfterPhoto(look: any): boolean {
+  return !!(look && typeof look.imageAfter === "string" && look.imageAfter.trim());
+}
+function mergeGroomingLookPhotos(into: any, from: any) {
+  if (!into && !from) return into;
+  const next = { ...(into || {}), ...(from || {}) };
+  if (!groomingHasAfterPhoto(into) && groomingHasAfterPhoto(from)) next.imageAfter = from.imageAfter;
+  else if (groomingHasAfterPhoto(into)) next.imageAfter = into.imageAfter;
+  if (!(into?.imageClose) && from?.imageClose) next.imageClose = from.imageClose;
+  else if (into?.imageClose) next.imageClose = into.imageClose;
+  if (groomingHasAfterPhoto(next)) next.imageError = null;
+  else if (from?.imageError && !into?.imageError) next.imageError = from.imageError;
+  return next;
+}
 function saveGroomingResult(jobId: string, payload: Record<string, unknown>) {
   const id = sanitizeOrderId(jobId);
   if (!id) return;
@@ -624,7 +638,13 @@ function saveGroomingResult(jobId: string, payload: Record<string, unknown>) {
     if (Array.isArray(prev.draftLooks) && !payload.draftLooks) {
       merged.draftLooks = prev.draftLooks;
     }
-    if (prev.result && !payload.result) merged.result = prev.result;
+    const drafts = Array.isArray(merged.draftLooks) ? merged.draftLooks as any[] : [];
+    const keepResult = payload.result || prev.result;
+    if (keepResult) {
+      merged.result = hydrateGroomingResultPhotos(keepResult, drafts, id);
+    } else if (prev.result && !payload.result) {
+      merged.result = hydrateGroomingResultPhotos(prev.result, drafts, id);
+    }
     if (prev.sourceImage && !payload.sourceImage) merged.sourceImage = prev.sourceImage;
     if (prev.referenceMime && !payload.referenceMime) merged.referenceMime = prev.referenceMime;
     merged.updatedAt = new Date().toISOString();
@@ -671,47 +691,70 @@ function mapGroomingShopProducts(list: any[], howKey: "dosage" | "howTo") {
   });
 }
 
+function hydrateGroomingResultPhotos(result: any, drafts: any[], jobId: string) {
+  if (!result || typeof result !== "object") return result;
+  const next = { ...result, jobId: result.jobId || jobId };
+  if (next.mode === "free" || next.bestLook) {
+    next.bestLook = mergeGroomingLookPhotos(next.bestLook || {}, drafts[0] || {});
+  }
+  if (Array.isArray(next.looks)) {
+    next.looks = next.looks.map((look: any, i: number) => mergeGroomingLookPhotos(look || {}, drafts[i] || {}));
+  } else if (drafts.length && next.mode === "paid") {
+    next.looks = drafts.map((look: any) => ({ ...look }));
+  }
+  return next;
+}
 function buildGroomingClientResult(saved: any, jobId: string) {
-  if (saved?.result) return saved.result;
   const a = saved?.analysis || {};
-  const looks = Array.isArray(saved?.draftLooks) ? saved.draftLooks : [];
-  if (saved?.mode === "free") {
-    return {
+  const drafts = Array.isArray(saved?.draftLooks) ? saved.draftLooks : [];
+  const prev = saved?.result && typeof saved.result === "object" ? saved.result : null;
+  if (saved?.mode === "free" || prev?.mode === "free") {
+    return hydrateGroomingResultPhotos({
       type: "result",
       mode: "free",
-      faceShape: a.faceShape || "",
-      colorType: a.colorType || "",
-      hairStatus: a.hairStatus || "",
-      coachNote: a.coachNote || "",
-      bestLook: looks[0] || {},
-      upsellTeaser: a.upsellTeaser || "",
+      faceShape: prev?.faceShape || a.faceShape || "",
+      colorType: prev?.colorType || a.colorType || "",
+      hairStatus: prev?.hairStatus || a.hairStatus || "",
+      coachNote: prev?.coachNote || a.coachNote || "",
+      bestLook: prev?.bestLook || drafts[0] || {},
+      upsellTeaser: prev?.upsellTeaser || a.upsellTeaser || "",
       groomingPrice: GROOMING_PRICE,
       jobId,
-    };
+    }, drafts, jobId);
   }
-  return {
+  return hydrateGroomingResultPhotos({
     type: "result",
     mode: "paid",
-    coachNote: a.coachNote || "",
-    faceAnalysis: a.faceAnalysis || {},
-    looks,
-    skincare: {
+    coachNote: prev?.coachNote || a.coachNote || "",
+    faceAnalysis: prev?.faceAnalysis || a.faceAnalysis || {},
+    looks: Array.isArray(prev?.looks) && prev.looks.length ? prev.looks : drafts,
+    skincare: prev?.skincare || {
       summary: a.skincare?.summary || "",
       amRoutine: a.skincare?.amRoutine || "",
       pmRoutine: a.skincare?.pmRoutine || "",
       homeHowTo: a.skincare?.homeHowTo || "",
       products: mapGroomingShopProducts(a.skincare?.products, "dosage"),
     },
-    makeup: a.makeup ? {
+    makeup: prev?.makeup || (a.makeup ? {
       summary: a.makeup.summary || "",
       dayLook: a.makeup.dayLook || "",
       eveningLook: a.makeup.eveningLook || "",
       placement: a.makeup.placement || "",
       products: mapGroomingShopProducts(a.makeup.products, "howTo"),
-    } : undefined,
+    } : undefined),
     groomingPrice: GROOMING_PRICE,
     jobId,
-  };
+  }, drafts, jobId);
+}
+function groomingLooksFromSaved(saved: any): any[] {
+  if (saved?.mode === "free") {
+    return [saved?.result?.bestLook || saved?.draftLooks?.[0]].filter(Boolean);
+  }
+  if (Array.isArray(saved?.result?.looks) && saved.result.looks.length) return saved.result.looks;
+  return Array.isArray(saved?.draftLooks) ? saved.draftLooks : [];
+}
+function groomingAfterPhotoCount(looks: any[]): number {
+  return looks.filter(groomingHasAfterPhoto).length;
 }
 function cleanupOldGroomingResults(): number {
   let removed = 0;
@@ -3812,24 +3855,38 @@ updatePromoHint();
       try { fs.unlinkSync(groomingResultPath(id)); } catch {}
       return res.status(404).json({ error: "Результат истёк" });
     }
-    if (saved.status === "ready" && saved.result) {
-      return res.json({ status: "ready", jobId: id, result: saved.result });
+    const recovered = buildGroomingClientResult(saved, id);
+    const looks = saved.mode === "free"
+      ? [recovered?.bestLook].filter(Boolean)
+      : (Array.isArray(recovered?.looks) ? recovered.looks : groomingLooksFromSaved(saved));
+    const looksTotal = saved.looksTotal || looks.length || 1;
+    const afterCount = groomingAfterPhotoCount(looks);
+    const updatedMs = saved.updatedAt ? new Date(saved.updatedAt).getTime() : 0;
+    const recentlyUpdated = !!updatedMs && (Date.now() - updatedMs < 10 * 60 * 1000);
+    const allFailed = looks.length > 0 && looks.every((look: any) => !groomingHasAfterPhoto(look) && look?.imageError);
+    const stillDrawing = afterCount === 0 && !allFailed && (
+      saved.status === "processing" || (recentlyUpdated && !saved.error)
+    );
+    if (stillDrawing) {
+      return res.status(202).json({
+        status: "processing",
+        jobId: id,
+        progressText: saved.progressText || (afterCount ? `Готово ${afterCount} из ${looksTotal} фото…` : "Ещё рисуем фото «после»…"),
+        looksDone: afterCount,
+        looksTotal,
+      });
     }
-    const draftLooks = Array.isArray(saved.draftLooks) ? saved.draftLooks : [];
-    const looksTotal = saved.looksTotal || 0;
-    const hasAdvice = !!(saved.analysis || saved.result);
-    if (hasAdvice && draftLooks.length > 0 && (saved.status !== "processing" || draftLooks.length >= looksTotal)) {
-      const recovered = buildGroomingClientResult(saved, id);
-      saveGroomingResult(id, { status: "ready", mode: saved.mode, result: recovered, looksDone: draftLooks.length, looksTotal });
-      return res.json({ status: "ready", jobId: id, result: recovered });
+    const complete = afterCount >= looksTotal || allFailed || saved.status === "failed";
+    if (complete && saved.status !== "ready") {
+      saveGroomingResult(id, {
+        status: "ready",
+        mode: saved.mode,
+        result: recovered,
+        looksDone: afterCount,
+        looksTotal,
+      });
     }
-    return res.status(202).json({
-      status: saved.status || "processing",
-      jobId: id,
-      progressText: saved.progressText || "",
-      looksDone: saved.looksDone || 0,
-      looksTotal: saved.looksTotal || 0,
-    });
+    return res.json({ status: "ready", jobId: id, result: recovered });
   });
 
   app.post("/api/grooming-retry-image", async (req: Request, res: Response) => {
