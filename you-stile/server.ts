@@ -1124,14 +1124,15 @@ PRESERVE (do not drift — restated):
 - Exact same face as Image 1: bone structure, eyes, brows, nose, lips, jaw WIDTH, cheeks, forehead, ears
 - Freckles, moles, scars, asymmetry; same ${gender}; same ethnicity and skin undertone
 - Same hair identity: color, length, hairline, parting, texture (tidy OK). Hair is NOT a cap/hat from Image 1
-- EXPRESSION: same as Image 1 — do not invent a new smile or open-mouth laugh; keep the same mouth shape
+- EXPRESSION from Image 1 — copy exactly: same gaze, same eye direction, same mouth. If they smile, keep THAT smile. If they are not smiling, do not add a smile. Do not invent a laugh or a new expression
 - Body of THIS person${bodyExtra ? ` — ${bodyExtra}` : "; keep real proportions; clothing fit this body"}
-- Do NOT slim the face, do NOT narrow the nose, do NOT change skull shape to fake youth
+- Do NOT slim the face, do NOT narrow the nose, do NOT change skull shape
 
-SKIN (look younger, same identity):
-- If Image 1 is an adult: visibly fresher, more youthful complexion than Image 1 — healthy glow, more even tone, less tired under-eyes, brighter eyes. Same generation, not a teen, not a different person.
-- If Image 1 is a teenager: SAME apparent age; glow only; do not make them younger or older
-- Natural pores. Not a beauty filter, not plastic skin. Youth = skin quality only. Identity = the same bones.
+SKIN (visagiste retouch only — not a new age):
+- Like after a makeup artist: if under-eye bags or dark circles are on Image 1, soften them slightly; if forehead lines are visible, soften them a little
+- Slightly more even tone and a healthy glow. Keep pores, freckles, moles
+- Do not add a new makeup look (no new lipstick, no smoky eye, no contour that changes the face)
+- Do not make them look a different person or a different generation
 
 CAMERA:
 - Photorealistic 3:4, 85mm look, camera 3–5 m back so the face never distorts. Never 24–35mm near the head. Head-to-shoes; hem and shoes readable. Catchlights in both eyes.
@@ -1299,15 +1300,17 @@ function groomingAgePolicy(parsed: any): GroomingAgePolicy {
   return "unknown";
 }
 
-/** Убирает морф костей («уже челюсть»), но оставляет «моложе за счёт кожи». */
+/** Убирает морф костей. «Моложе» в промпте = ретушь визажиста, не другое лицо. */
 function stripGroomingFaceMorphLanguage(text: string): string {
   if (!text) return "";
   return text
-    .replace(/\byounger\s+face\b/gi, "same face with younger-looking skin")
-    .replace(/\byouthful\s+face\b/gi, "same face with youthful skin")
+    .replace(/\blooks?\s+\d+\s+years?\s+younger\b/gi, "visagiste skin retouch")
+    .replace(/\ba\s+few\s+years?\s+younger\b/gi, "visagiste skin retouch")
+    .replace(/\byounger\s+face\b/gi, "same face with visagiste skin")
+    .replace(/\byouthful\s+face\b/gi, "same face with visagiste skin")
     .replace(/\bbaby[- ]?face\b/gi, "same adult face")
     .replace(/\b(plastic\s+surgery|facelift|new\s+skull|different\s+skull)\b/gi, "")
-    .replace(/\b(anti[- ]age\w*|rejuvenat\w*|de[- ]?age\w*)\b/gi, "younger-looking skin")
+    .replace(/\b(anti[- ]age\w*|rejuvenat\w*|de[- ]?age\w*)\b/gi, "visagiste skin retouch")
     .replace(/(?<!\b(?:do not|don't|never|not)\s+)\b(slim(?:mer)?|narrow(?:er)?|sculpt(?:ed|ing)?|refine[d]?|sharpen(?:ed)?|point(?:ed)?|v[- ]?shaped?)\s+(the\s+)?(face|jaw|jawline|chin|nose|features)\b/gi, "")
     .replace(/(?<!\b(?:do not|don't|never|not)\s+)\b(tighter|lift(?:ed|ing)?|contour(?:ed|ing)?)\s+(the\s+)?(jaw|jawline|face|cheeks?|chin)\b/gi, "")
     .replace(/\b(stock\s+model|beauty\s+filter|different\s+person|new\s+face|swap(?:ped)?\s+face)\b/gi, "")
@@ -1317,21 +1320,21 @@ function stripGroomingFaceMorphLanguage(text: string): string {
 
 function groomingAgePromptBlock(policy: GroomingAgePolicy): string {
   if (policy === "teenKeep") {
-    return `AGE: teenager. SAME apparent age as Image 1. Not a woman in her 20s, not a child. Fresh glow only — no years-younger. Modest knit/shirt. Hair must still change clearly.`;
+    return `AGE: teenager. SAME apparent age as Image 1. Same gaze, same expression, same smile if any. Fresh glow only. Modest knit/shirt. Hair must still change clearly.`;
   }
   if (policy === "deage5mature") {
-    return `AGE: 60+. MUST look about 5–7 years younger than Image 1 through SKIN ONLY (brighter even complexion, less tired under-eyes, healthy glow, brighter eyes) — still this generation, not 40, not 35, not surgery. SAME bones, nose, jaw WIDTH. Hair: elegant bob/lob, volume, gray blending or silver shine.`;
+    return `AGE: 60+. Same generation. Visagiste only: slightly less under-eye bags if present, slightly softer forehead lines, healthy glow. SAME bones, nose, jaw WIDTH, gaze, and expression. Hair: elegant bob/lob, volume, gray blending or silver shine.`;
   }
   if (policy === "deage5") {
-    return `AGE: 35+ adult. MUST look about 6–7 years younger than Image 1 through SKIN ONLY — glow, fade tired under-eye and nasolabial shadows, brighter rested eyes, more even complexion. SAME bones, same nose, same jaw WIDTH. Not 10–15 years younger, not a teen, not a model, not a new skull. Hair and outfit MUST clearly change.`;
+    return `AGE: 35+ adult. Visagiste only: slightly less under-eye bags if present, slightly softer forehead lines, even glow. SAME bones, gaze, head position, smile if they are smiling. Not a teen, not a model, not a new skull. Hair and outfit MUST clearly change.`;
   }
   if (policy === "deage2") {
-    return `AGE: 18–24 adult. Look about 2–3 years younger via clearer glowing skin and brighter eyes. Same face bones. Not a child, not a different person. Wow = new named hairstyle and color.`;
+    return `AGE: 18–24 adult. Light visagiste glow only. Same face, same gaze, same expression. Not a child. Wow = new named hairstyle and color.`;
   }
   if (policy === "deage3") {
-    return `AGE: 25–34 adult. MUST look about 4–5 years younger through skin (less tired shadows, glow, brighter eyes). SAME face bones. Not a teenager, not a different person. Difference = HAIR + outfit + visibly younger skin.`;
+    return `AGE: 25–34 adult. Visagiste: slightly less tired under-eyes if present, a little even glow. SAME face bones, gaze, and smile. Not a teenager. Difference = HAIR + outfit + subtle skin retouch.`;
   }
-  return `SKIN: visibly younger-looking vs Image 1 (glow, less tired, brighter eyes). Do not change bone structure. Hair must be a dramatic named change, not the same hair shinier.`;
+  return `SKIN: visagiste retouch vs Image 1 (slight bags/forehead only). Same gaze and expression. Do not change bone structure. Hair must be a dramatic named change.`;
 }
 
 function groomingColorFamily(color: string): "dark" | "light" | "warm" {
@@ -1407,8 +1410,8 @@ function buildGroomingAfterPrompt(opts: {
   const core = `Edit Image 1. This is an IMAGE EDIT of the same real person — not a new generation, not a beauty-filter model.
 
 TWO GOALS (both required):
-1) EXACT same face as Image 1 — a close friend recognizes them in 1 second
-2) The person LOOKS YOUNGER than Image 1 — through skin, light, and freshness of the eyes, never through a new skull
+1) EXACT same person as Image 1 — same face, same gaze, same head position, same smile if they are smiling
+2) Skin like after a visagiste: slightly less under-eye bags if present, slightly softer forehead lines if present — not a different age, not a new skull
 
 CHANGE only:
 - Haircut: ${name}
@@ -1416,48 +1419,44 @@ CHANGE only:
 - ${lengthLine}
 - Finished salon styling (blowout or glass or soft waves)
 - Clothes visible at shoulders: ${outfit}
-- Soft studio light, head-and-shoulders close-up, facing camera
-- Skin quality: visibly younger-looking complexion (glow, less tired, brighter eyes)
+- Soft studio light, head-and-shoulders close-up
+- Visagiste skin: slight concealer on bags if any, slightly softened forehead lines if any, even glow
 
-PRESERVE from Image 1 (identity lock — do not drift):
+PRESERVE from Image 1 (copy exactly — do not drift):
 - Exact nose (bridge width, tip, length), jaw WIDTH and shape, chin, eye spacing, brows, lip volume, cheeks, forehead, ears
-- Same expression as Image 1 — do not add a smile if they are not smiling
+- Same gaze and eye direction as Image 1
+- Same head position, tilt, and face angle as Image 1 — do not turn the head
+- Same mouth: if they smile, keep THAT smile; if they are not smiling, do NOT add a smile
 - Freckles, moles, scars, asymmetry, ethnicity, gender
 - Do NOT slim the face, do NOT narrow the nose, do NOT point the chin, do NOT change skull shape
 
-SKIN (must look YOUNGER, not merely "a bit rested"):
-- Visibly younger-looking complexion than Image 1: brighter, more even, healthy glow
-- Reduce tired under-eye darkness, dullness, and heavy shadows; brighter rested eyes
-- Soften tired nasolabial shadows without changing cheekbone or jaw geometry
-- Fine pores and tiny real texture stay — photoreal skin, not plastic, not a beauty filter
-- Youth = lighting + skin quality + freshness of the eyes. Identity = the same bones.`;
+SKIN (visagiste, subtle):
+- If under-eye bags or dark circles are on Image 1, soften them slightly — do not change the eyes
+- If forehead wrinkles are visible, soften them a little — leave natural texture, do not freeze the face
+- Slightly more even tone and a healthy glow
+- Keep pores, freckles, moles. Photoreal, not plastic, not a filter
+- Do not add a new makeup look (no new lipstick, no smoky eye, no contour that changes the face)`;
 
   if (opts.compact) {
     return `${core}
-Hair and clothes must clearly change. Face identity stays locked. Skin looks younger.`;
+Hair and clothes must clearly change. Same face, gaze, and smile as Image 1. Visagiste skin only.`;
   }
 
   return `${core}
 
-HAIR/CLOTHES DETAILS (ignore anything here about changing the face, jaw, nose, or bones):
+HAIR/CLOTHES DETAILS (ignore anything here about changing the face, jaw, nose, bones, gaze, or smile):
 ${details || `${name}, ${color}`}
 
 ${groomingAgePromptBlock(opts.agePolicy)}
 
-FINAL: same face as Image 1. New hair + new clothes + visibly younger-looking skin.`;
+FINAL: same face, same gaze, same smile as Image 1. New hair + new clothes + visagiste skin only.`;
 }
 
 function groomingDefaultAfterNote(policy: GroomingAgePolicy): string {
   if (policy === "teenKeep") {
-    return "Справа — ориентир: новая причёска и ухоженный вид. Возраст тот же, лицо своё. Это не гарантия; решение за вами и мастером.";
+    return "Справа — ориентир: новая причёска и ухоженный вид. Взгляд, улыбка и лицо — как на вашем фото. Это не гарантия; решение за вами и мастером.";
   }
-  if (policy === "deage5" || policy === "deage5mature") {
-    return "Справа — ориентир: новая причёска и вы примерно на 5–7 лет моложе за счёт свежей кожи, лицо своё. Это не гарантия; решение за вами и специалистом.";
-  }
-  if (policy === "deage2") {
-    return "Справа — ориентир: новая причёска и вы свежее и чуть моложе. Лицо своё. Это не гарантия.";
-  }
-  return "Справа — ориентир: новая причёска и вы заметно моложе, лицо то же. Это не гарантия; решение за вами и специалистом.";
+  return "Справа — ориентир: новая причёска и кожа как после визажиста (чуть меньше мешков и морщинок, если они есть). Взгляд, улыбка и лицо — как на вашем фото. Это не гарантия; решение за вами и специалистом.";
 }
 
 function safeJsonParse(text: string): any {
@@ -4968,9 +4967,9 @@ ${perLookVenues}
 
       const userText = `Режим: ${mode}. Рост: ${height} см. Вес: ${weight} кг.
 Проанализируй лицо: пол, возраст, ageBand (teen / under25 / 25to34 / 35plus / 60plus), овал, цветотип, состояние волос. Верни JSON для режима ${mode}.
-ДВЕ ЦЕЛИ «после»: (1) ТОЧНОЕ то же лицо — нос, ширина челюсти, глаза, губы 1:1, друг узнаёт за секунду. (2) Человек ЗАМЕТНО моложе — только кожа, сияние, меньше усталости под глазами, свежий взгляд. Не другое лицо, не уже челюсть, не другой нос, не новый череп.
-35plus ~6–7 лет моложе кожей; 25to34 ~4–5; under25 ~2–3; teen — тот же возраст.
-В editPromptAfter ПИШИ: looks about N years younger through skin only; exact same face bones as Image 1. НЕ ПИСАТЬ: younger face / tighter jaw / slimmer face / new skull.
+«После»: ТО ЖЕ лицо, тот же взгляд, то же положение головы, та же улыбка если она есть на фото. Не добавлять улыбку, если её нет.
+Кожа — как после визажиста: чуть убрать мешки под глазами если есть, чуть смягчить морщинки на лбу если есть, ровный тон и лёгкое сияние. Не другое лицо, не уже челюсть, не другой нос, не новый возраст.
+В editPromptAfter ПИШИ: same gaze, same head position, same smile as Image 1; visagiste skin (slight bags/forehead only). НЕ ПИСАТЬ: younger face / tighter jaw / slimmer face / years younger / new skull.
 Причёска — ИМЯ из каталога (Italian bob, butterfly, hush, octopus, collarbone, 90s blowout, glass lob…). Не «чуть свои волосы».
 Paid — три кадра, которые нельзя перепутать в крупном плане:
 1) короткое до подбородка (уши видны);
