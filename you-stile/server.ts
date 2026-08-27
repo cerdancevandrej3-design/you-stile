@@ -963,8 +963,8 @@ if (!POLZA_API_KEY) {
 }
 const POLZA_BASE_URL = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
 
-const ANALYSIS_MODEL = "google/gemini-3.7-flash";
-const GENDER_MODEL = "google/gemini-3.5-flash-lite";
+const ANALYSIS_MODEL = "z-ai/glm-5.3-flash";
+const GENDER_MODEL = "z-ai/glm-5.3-flash";
 // OpenAI GPT-5.4 Image 2 — сильное сохранение лица при редактировании по референсу (Polza /media)
 const IMAGE_MODEL = "openai/gpt-5.4-image-2";
 const IMAGE_PROMPT_MAX = 4900; // лимит модели ~5000 символов
@@ -1164,7 +1164,7 @@ async function detectGenderFromPhoto(imageBase64: string, mimeType: string): Pro
           },
         ],
         temperature: 0,
-        max_tokens: 10,
+        max_tokens: 256,
       }),
     }, 30000);
     if (!genderResp.ok) return null;
@@ -1482,11 +1482,10 @@ async function callPolzaChat(options: {
     max_tokens: options.maxTokens ?? 8192,
   };
 
-  // Only use response_format for Gemini models. YandexGPT и Perplexity Sonar
-  // часто возвращают пустой {} либо ломают разметку при response_format=json_object.
+  // JSON-режим: Gemini и GLM. YandexGPT / Perplexity часто ломают разметку.
   if (
     options.useJsonFormat !== false &&
-    options.model.includes("gemini")
+    (options.model.includes("gemini") || options.model.includes("glm"))
   ) {
     requestBody.response_format = { type: "json_object" };
   }
@@ -1514,8 +1513,8 @@ async function callPolzaChat(options: {
 }
 
 const ANALYSIS_FALLBACK_MODELS = [
+  "google/gemini-3.7-flash",
   "google/gemini-2.5-flash",
-  "google/gemini-3.5-flash",
 ];
 
 function isRetryableAnalysisError(err: unknown): boolean {
