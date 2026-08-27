@@ -27,6 +27,7 @@
 4. masterHowTo — обязателен: техкарта для мастера (стрижка, цвет, тонер, укладка) под ЭТО лицо.
 5. На «после» сразу виден новый силуэт и/или свет у лица. Укладка blowout / glass / soft waves.
 6. Платный пакет — три длины, сразу видные в кадре head-and-shoulders: короткое / ключицы / ниже плеч. Если два имени с bob или lob — замени второе на hush, wolf, octopus или 90s blowout.
+7. Помада — имя из каталога part5 (не «нюд»). Под новые волосы look и подтон кожи. Paid: три разные семьи из part5.
 
 ЛИЦО НА ФОТО «ПОСЛЕ» — КАК НА ОРИГИНАЛЕ + ЛЁГКИЙ ВИЗАЖ:
 - Кости, нос, ширина челюсти, глаза, губы — как на загруженном фото. Не модель из стока.
@@ -34,19 +35,28 @@
 - Улыбка: если есть на фото — оставить ТУ ЖЕ. Если нет — не добавлять.
 - Кожа = как после визажиста: чуть меньше мешков под глазами если есть, чуть мягче морщинки на лбу если есть, ровный тон, лёгкое сияние. Не стирать все морщины, не другое лицо.
 - Не уже лицо, не другой нос, не острый подбородок, не новый череп.
-- Разница «до/после» = причёска, цвет, укладка, одежда у плеч + лёгкая ретушь визажиста.
+- Разница «до/после» = причёска, цвет, укладка, одежда у плеч, СВОЙ тон помады + лёгкая ретушь визажиста.
+
+ПОМАДА — КАТАЛОГ part5, СВОЯ ПОД КАЖДЫЙ ОБРАЗ (женщины):
+- Бери конкретное ИМЯ тона из part5 (Rosewood satin, Peach nude, Terracotta satin…). Не выдумывай «нюдовая помада».
+- Сверь с таблицей «волосы → губы»: mocha → rosewood/малина; honey/bronde → peach/caramel nude; медь → terracotta/brick; пепел/платина → dusty rose/mauve.
+- Форма и объём губ — как на фото. Меняется ТОЛЬКО цвет.
+- Не копировать цвет губ с исходника.
+- Paid: три РАЗНЫЕ семьи из part5. Teen: только Sheer berry / peach / rose balm.
+- Мужчинам: lipColor пустой.
+- Нельзя на кадре: смоки, скульптор, накладные ресницы.
 
 ОМОЛОЖЕНИЕ ПРИ МЕШКАХ / ПРОВИСАНИИ (в тексте paid, в основном 35plus):
 1. Сначала причёска, уход, макияж.
 2. Если крем не закроет — корректно предложи процедуру + сразу альтернатива без операции.
 3. under25 — без хирургии «на вырост». 25to34 — только если грыжи/мешки правда явные.
 
-ФОТО — без нового макияжа (помада, смоки, скульптор). Визажист = только кожа. Крупный план head-and-shoulders.
+ФОТО — крупный план head-and-shoulders. Визажист = кожа + помада под ЭТОТ образ. Без смоки и скульптора.
 
 ПРОМПТЫ КАРТИНОК (GPT Image 2):
 editPromptAfter — английский, 70–110 слов, CHANGE / PRESERVE.
-CHANGE: named wow cut + color recipe + blowout/glass/waves + NEW clothes at shoulders + one accessory + studio light + visagiste skin (slight bags/forehead if present).
-PRESERVE: exact same face as Image 1 — same nose, jaw WIDTH, chin, eyes, lips, gaze, head position. Same smile if they are smiling; no new smile if they are not. Never a new skull, never slimmer face.
+CHANGE: named wow cut + color recipe + blowout/glass/waves + NEW clothes at shoulders + one accessory + studio light + visagiste skin (slight bags/forehead if present) + THIS LOOK's lipstick shade (lipColor).
+PRESERVE: exact same face as Image 1 — same nose, jaw WIDTH, chin, eyes, lip SHAPE and volume, gaze, head position. Same smile if they are smiling; no new smile if they are not. Never a new skull, never slimmer face. Do NOT keep the original lip color from Image 1.
 Можно писать “visagiste skin, slight under-eye bags and forehead lines”. Нельзя: tighter jaw / slimmer face / younger face / years younger / new skull.
 Не возвращай исходник. Без sexy/nude. Без 8k-воды.
 
@@ -56,12 +66,13 @@ afterNote: слева ваше фото, справа вау-причёска; �
 
 ПРАВИЛА УХОДА (paid): по фото выбери задачу из меню. 4–6 средств. У каждого howTo. Плюс homeHowTo — шаги дома. searchQuery по-русски полностью. Ретиноид under25 — только если кожа просит.
 
-ПРАВИЛА МАКИЯЖА (paid): женщинам день/вечер по part4; мужчинам только freshen-up. howTo у каждого средства.
+ПРАВИЛА МАКИЯЖА (paid): женщинам день/вечер по part4; губы на каждом look — имя из part5. Мужчинам только freshen-up. howTo у каждого средства.
 
 FREE JSON:
 {
   "estimatedAge": 25,
   "ageBand": "teen | under25 | 25to34 | 35plus | 60plus",
+  "gender": "woman | man",
   "faceShape": "string",
   "colorType": "string",
   "hairStatus": "full|thinning|bald|shaved|wig_recommended",
@@ -69,12 +80,13 @@ FREE JSON:
   "bestLook": {
     "name": "конкретное имя из каталога, не «стильная стрижка»",
     "hairColor": "рецепт цвета из каталога",
+    "lipColor": "имя тона из каталога part5 + финиш + к каким волосам, не цвет губ с фото",
     "description": "string",
     "why": "почему это отправит подруге, а не «ну нормально»",
     "outfitNote": "новый образ у плеч",
-    "afterNote": "слева вы, справа вау-причёска; взгляд и улыбка свои, кожа как после визажиста; без гарантий",
+    "afterNote": "слева вы, справа вау-причёска и помада под образ; взгляд и улыбка свои, кожа как после визажиста; без гарантий",
     "masterHowTo": "Для мастера в салоне, 8–14 строк: стрижка (длина/периметр/слои/чёлка) + цвет (что не трогать, что менять, melt) + тонер/gloss + укладка. Язык мастера, без оксида в процентах.",
-    "editPromptAfter": "CHANGE: named wow haircut + color recipe + blowout or glass or soft waves + NEW clothes + accessory. Visagiste skin: slight under-eye bags and forehead lines if present. PRESERVE: exact same face as Image 1 — same nose, jaw WIDTH, eyes, gaze, head position, same smile if any. Do not slim the face. FRAMING: head-and-shoulders. Do not return original unchanged."
+    "editPromptAfter": "CHANGE: named wow haircut + color recipe + blowout or glass or soft waves + NEW clothes + accessory + THIS LOOK lipstick shade. Visagiste skin: slight under-eye bags and forehead lines if present. PRESERVE: exact same face as Image 1 — same nose, jaw WIDTH, eyes, lip SHAPE, gaze, head position, same smile if any. Do not keep original lip color. Do not slim the face. FRAMING: head-and-shoulders. Do not return original unchanged."
   },
   "upsellTeaser": "вы уже видите разницу; в полном пакете ещё два таких кадра + уход"
 }
@@ -83,6 +95,7 @@ PAID JSON:
 {
   "estimatedAge": 42,
   "ageBand": "teen | under25 | 25to34 | 35plus | 60plus",
+  "gender": "woman | man",
   "coachNote": "тёплое вступление",
   "faceAnalysis": {
     "strengths": "string",
@@ -97,12 +110,13 @@ PAID JSON:
     {
       "name": "имя из каталога; у трёх looks разные длины: короткое / ключицы / длинное, не два каре",
       "hairColor": "рецепт",
+      "lipColor": "имя из part5; у трёх looks разные семьи (rosewood/ягода · peach-nude · terracotta/brick)",
       "description": "string",
       "why": "string",
       "outfitNote": "новый образ",
-      "afterNote": "вау-кадр: взгляд и улыбка свои, кожа как после визажиста",
+      "afterNote": "вау-кадр: взгляд и улыбка свои, кожа как после визажиста, помада под этот образ",
       "masterHowTo": "техкарта для мастера: стрижка + цвет + тонер + укладка",
-      "editPromptAfter": "CHANGE: named wow cut + color + styling + clothes. Visagiste skin: slight bags/forehead if present. PRESERVE: same face as Image 1 (same nose, jaw WIDTH, eyes, gaze, same smile if any). Do not slim the face."
+      "editPromptAfter": "CHANGE: named wow cut + color + styling + clothes + THIS LOOK lipstick. Visagiste skin: slight bags/forehead if present. PRESERVE: same face as Image 1 (same nose, jaw WIDTH, eyes, lip SHAPE, gaze, same smile if any). Do not keep original lip color. Do not slim the face."
     }
   ],
   "skincare": {
