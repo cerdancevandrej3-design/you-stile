@@ -2378,7 +2378,7 @@ async function fixLastLookPhoto(): Promise<{ ok: boolean; reason?: string; title
   if (!dest) return { ok: false, reason: "no-zoe-photo-slot", title: last.title };
   console.log(`[Hermes] zoe fix slot ${zoeIdx} → ${path.basename(dest)}`);
   const story: DigestStory = {
-    name: "Зои Кравиц",
+    name: "женщина",
     kicker: "белая футболка, синие джинсы, чёрная сумка-хобо через плечо",
     line:
       "white t-shirt, blue jeans, black Saint Laurent slouchy hobo bag worn on the shoulder with the strap over the shoulder and the bag hanging at the hip, Cassandre hardware, NYC street style",
@@ -3857,7 +3857,7 @@ async function photoMatchesStory(filePath: string, story: DigestStory): Promise<
   const lookBits = `${story.kicker} ${String(story.line || "").slice(0, 220)}`.replace(/\s+/g, " ").trim();
   const bagRule =
     /сумк|bag|hobo|хобо|tote|crossbody/i.test(`${story.kicker} ${story.line} ${lookBits}`)
-      ? ` SUMKA: if the look includes a bag, YES only if the strap is OVER THE SHOULDER or crossbody and the bag hangs at the hip. NO if the bag hangs from the elbow, crook of the arm, forearm, or is held in the hand — unless the text explicitly says «на локте» or «в руке».`
+      ? ` SUMKA: if the look includes a bag, YES if a strap is ON THE SHOULDER or worn crossbody (bag may rest at the hip or against the side). NO only if there is no shoulder strap and the bag hangs from the elbow, crook of the arm, forearm, or is held in the hand — unless the text explicitly says «на локте» or «в руке».`
       : "";
   const expect =
     story.angle === "nails"
@@ -3885,12 +3885,12 @@ async function photoMatchesStory(filePath: string, story: DigestStory): Promise<
           ],
         },
       ],
-      max_tokens: 120,
+      max_tokens: 300,
       temperature: 0,
       response_format: { type: "json_object" },
     } as any);
     const ans = String(r.choices?.[0]?.message?.content || "").trim();
-    console.log(`[Hermes] vision ${story.name}: ${ans.slice(0, 180)}`);
+    console.log(`[Hermes] vision ${story.name}: ${ans.replace(/\s+/g, " ").slice(0, 220)}`);
     try {
       const j = JSON.parse(ans.replace(/^```json\s*/i, "").replace(/```$/, "").trim());
       return j?.ok === true || j?.ok === "true";
