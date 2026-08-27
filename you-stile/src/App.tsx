@@ -179,8 +179,22 @@ const WelcomeScreen = ({ onSubmit }: { onSubmit: (name: string) => void }) => {
   );
 };
 
-// --- Magic Mirror Component ---
-const MagicMirror = () => {
+// --- Before / After comparison slider ---
+const BeforeAfterSlider = ({
+  beforeSrc,
+  afterSrc,
+  beforeAlt = "До",
+  afterAlt = "После",
+  className = "relative w-full aspect-[3/4] md:aspect-[4/5] overflow-hidden rounded-2xl cursor-ew-resize select-none touch-none shadow-2xl",
+  onOpenAfter,
+}: {
+  beforeSrc: string;
+  afterSrc: string;
+  beforeAlt?: string;
+  afterAlt?: string;
+  className?: string;
+  onOpenAfter?: () => void;
+}) => {
   const [sliderPosition, setSliderPosition] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -231,31 +245,26 @@ const MagicMirror = () => {
   }, [isDragging]);
 
   return (
-    <div 
+    <div
       ref={containerRef}
-      className="relative w-full aspect-[3/4] md:aspect-[4/5] overflow-hidden rounded-2xl cursor-ew-resize select-none touch-none shadow-2xl"
+      className={className}
       onMouseDown={onMouseDown}
       onTouchStart={onTouchStart}
     >
-      {/* Before Image (Bottom) */}
       <img
-        src="/after.jpg"
-        alt="Before: Casual Home Clothes"
+        src={beforeSrc}
+        alt={beforeAlt}
         loading="lazy"
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
       />
-
-      {/* After Image (Top, Clipped) */}
       <img
-        src="/before.jpg"
-        alt="After: Premium Styled Look"
+        src={afterSrc}
+        alt={afterAlt}
         loading="lazy"
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
         style={{ clipPath: `inset(0 0 0 ${sliderPosition}%)` }}
       />
-
-      {/* Slider Handle */}
-      <div 
+      <div
         className="absolute top-0 bottom-0 w-0.5 bg-white/80 shadow-[0_0_10px_rgba(0,0,0,0.3)] z-10"
         style={{ left: `${sliderPosition}%` }}
       >
@@ -264,17 +273,35 @@ const MagicMirror = () => {
           <ChevronRight className="w-4 h-4 -ml-1 opacity-70" />
         </div>
       </div>
-
-      {/* Labels */}
       <div className="absolute top-6 left-6 px-4 py-1.5 bg-charcoal/40 backdrop-blur-md rounded-full text-white text-xs font-medium tracking-widest uppercase">
         До
       </div>
       <div className="absolute top-6 right-6 px-4 py-1.5 bg-gold/80 backdrop-blur-md rounded-full text-white text-xs font-medium tracking-widest uppercase">
         После
       </div>
+      {onOpenAfter && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onOpenAfter(); }}
+          className="absolute bottom-3 right-3 z-20 px-3 py-1.5 rounded-full bg-charcoal/70 text-ivory text-xs font-medium flex items-center gap-1.5 hover:bg-charcoal/90 transition-colors"
+        >
+          <Sparkles className="w-3.5 h-3.5" /> Открыть
+        </button>
+      )}
     </div>
   );
 };
+
+const MagicMirror = () => (
+  <BeforeAfterSlider
+    beforeSrc="/after.jpg"
+    afterSrc="/before.jpg"
+    beforeAlt="До: как было"
+    afterAlt="После: преображение"
+  />
+);
 
 // --- Pricing & Payment Modal ---
 
@@ -2220,6 +2247,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
           bodyTypeSummary: recoveredResult.bodyTypeSummary,
           astroReading: recoveredResult.astroReading || null,
           looks: recoveredResult.looks,
+          sourceImage: recoveredResult.sourceImage || null,
         });
         setViewMode('result');
         onRecoveredResultShown?.();
@@ -2232,6 +2260,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
     greetingAndAnalysis: string;
     bodyTypeSummary?: string;
     astroReading?: string | null;
+    sourceImage?: string | null;
     looks: {
       lookName: string;
       shortName?: string;
@@ -2412,7 +2441,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
               greetingAndAnalysis: data.greetingAndAnalysis,
               bodyTypeSummary: data.bodyTypeSummary,
               astroReading: data.astroReading || null,
-              looks: data.looks
+              looks: data.looks,
+              sourceImage: previewUrls[0] || data.sourceImage || null,
             });
             setViewMode('result');
             setTimeout(() => {
@@ -2434,7 +2464,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
               greetingAndAnalysis: data.greetingAndAnalysis,
               bodyTypeSummary: data.bodyTypeSummary,
               astroReading: data.astroReading || null,
-              looks: data.looks
+              looks: data.looks,
+              sourceImage: previewUrls[0] || data.sourceImage || null,
             });
             setViewMode('result');
           } else if (data.type === "error") {
@@ -2860,13 +2891,25 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
 
                 {/* 3 Looks */}
                 <div className="space-y-16">
-                  {result.looks.map((look, lookIdx) => (
+                  {result.looks.map((look, lookIdx) => {
+                    const beforePhoto = previewUrls[0] || result.sourceImage || null;
+                    const openLookLightbox = () => onOpenLightbox?.({ images: result.looks.filter((l: any) => l.image).map((l: any) => ({ src: l.image, alt: l.lookName, lookName: l.lookName })), index: result.looks.filter((l: any) => l.image).findIndex((l: any) => l === look) });
+                    return (
                     <div key={lookIdx} className="grid md:grid-cols-2 gap-6 md:gap-12 items-start">
                       {/* Result Image */}
                       <div className="flex flex-col gap-3 md:sticky md:top-8">
                         <div className="rounded-2xl overflow-hidden shadow-xl relative">
-                          {look.image ? (
-                            <button type="button" onClick={() => onOpenLightbox?.({ images: result.looks.filter((l: any) => l.image).map((l: any) => ({ src: l.image, alt: l.lookName, lookName: l.lookName })), index: result.looks.filter((l: any) => l.image).findIndex((l: any) => l === look) })} className="block w-full touch-manipulation cursor-zoom-in group">
+                          {look.image && beforePhoto ? (
+                            <BeforeAfterSlider
+                              beforeSrc={beforePhoto}
+                              afterSrc={look.image}
+                              beforeAlt="Ваше фото"
+                              afterAlt={look.lookName}
+                              className="relative w-full aspect-[3/4] overflow-hidden cursor-ew-resize select-none touch-none"
+                              onOpenAfter={openLookLightbox}
+                            />
+                          ) : look.image ? (
+                            <button type="button" onClick={openLookLightbox} className="block w-full touch-manipulation cursor-zoom-in group">
                               <img src={look.image} alt={look.lookName} className="w-full h-auto transition-transform duration-500 group-hover:scale-[1.02]" />
                               <span className="absolute bottom-3 right-3 px-3 py-1.5 rounded-full bg-charcoal/70 text-ivory text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none flex items-center gap-1.5">
                                 <Sparkles className="w-3.5 h-3.5" /> Открыть
@@ -2919,6 +2962,9 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
                             </div>
                           )}
                         </div>
+                        {look.image && beforePhoto && (
+                          <p className="text-center text-xs text-charcoal/50">Потяните ползунок: слева ваше фото, справа — новый образ</p>
+                        )}
                         {/* Short Description — below image, before buttons */}
                         {look.shortName && (
                           <div className="text-center">
@@ -3120,7 +3166,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
                         </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <button
