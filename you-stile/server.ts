@@ -1327,6 +1327,58 @@ function groomingAgePromptBlock(policy: GroomingAgePolicy): string {
   return `SKIN: well-rested vs Image 1. Do not change bone structure. Hair must be a dramatic named change, not the same hair shinier.`;
 }
 
+function groomingColorFamily(color: string): "dark" | "light" | "warm" {
+  const t = String(color || "").toLowerCase();
+  if (/copper|cinnamon|auburn|ginger|рыж|медн/.test(t)) return "warm";
+  if (/cherry|вишн|red/.test(t) && !/cola|mocha|espresso|chocolate/.test(t)) return "warm";
+  if (/blonde|butter|champagne|honey|bronde|wheat|pearl|beige|caramel|money piece|face-frame|светл/.test(t)) return "light";
+  return "dark";
+}
+
+function isBobLikeName(name: string): boolean {
+  return /bob|lob|каре|пикс|pixie|bixie|glass lob/i.test(String(name || ""));
+}
+
+/** Paid: не два каре и не два тёмных каштана — иначе «после» в крупном плане сливаются. */
+function enforceGroomingLookDiversity(looks: any[]): any[] {
+  if (!Array.isArray(looks) || looks.length < 2) return looks;
+  const next = looks.map((l) => ({ ...l }));
+
+  const bobIdx = next.map((l, i) => (isBobLikeName(l.name) ? i : -1)).filter((i) => i >= 0);
+  if (bobIdx.length >= 2) {
+    const alts = ["Hush cut with curtain bangs", "Soft wolf cut", "Octopus cut", "90s blowout layers"];
+    let n = 0;
+    for (const i of bobIdx.slice(1)) {
+      next[i].name = alts[n++ % alts.length];
+    }
+  }
+
+  const darkIdx = next
+    .map((l, i) => (groomingColorFamily(l.hairColor || "") === "dark" ? i : -1))
+    .filter((i) => i >= 0);
+  if (darkIdx.length >= 2) {
+    const alts = [
+      "bronde melt + honey face-frame +2 tones + beige toner",
+      "cinnamon copper + root melt + glass gloss",
+    ];
+    darkIdx.slice(1).forEach((i, k) => {
+      next[i].hairColor = alts[k % alts.length];
+    });
+  }
+
+  const lengthCue = [
+    "LENGTH IN FRAME: short — ends at chin/jaw, ears and nape visible.",
+    "LENGTH IN FRAME: mid — clearly to collarbone, longer than a chin bob.",
+    "LENGTH IN FRAME: long — past shoulders, ends below collarbone in this close-up.",
+  ];
+  next.forEach((l, i) => {
+    const cue = lengthCue[Math.min(i, 2)];
+    const ep = String(l.editPromptAfter || l.editPrompt || "");
+    if (!/LENGTH IN FRAME/i.test(ep)) l.editPromptAfter = `${ep}\n${cue}`.trim();
+  });
+  return next;
+}
+
 function buildGroomingAfterPrompt(opts: {
   lookName?: string;
   hairColor?: string;
@@ -1334,16 +1386,23 @@ function buildGroomingAfterPrompt(opts: {
   editPrompt?: string;
   agePolicy: GroomingAgePolicy;
   compact?: boolean;
+  lengthSlot?: "short" | "mid" | "long";
 }): string {
   const name = (opts.lookName || "salon cut").trim();
   const color = (opts.hairColor || "toned").trim();
   const outfit = (opts.outfitNote || "new elegant shoulder outfit, not the original clothes").trim();
   const details = stripGroomingFaceMorphLanguage(sanitizeEditPrompt(opts.editPrompt || "")).slice(0, 700);
+  const lengthLine = opts.lengthSlot === "short"
+    ? "LENGTH IN FRAME: hair ends at chin/jaw. Ears and nape visible. Neck open. NOT collarbone length."
+    : opts.lengthSlot === "long"
+      ? "LENGTH IN FRAME: hair past the shoulders. Ends visible below the collarbone in this close-up."
+      : "LENGTH IN FRAME: hair clearly reaches the collarbone — longer than a chin bob, shorter than mid-back.";
   const core = `Edit Image 1. This is an IMAGE EDIT of the same real person — not a new generation, not a beauty-filter model.
 
 CHANGE only:
 - Haircut: ${name}
-- Hair color: ${color}
+- Hair color: ${color} — this color must read clearly different from the other looks in the set
+- ${lengthLine}
 - Finished salon styling (blowout or glass or soft waves)
 - Clothes visible at shoulders: ${outfit}
 - Soft studio light, head-and-shoulders close-up, facing camera
@@ -1551,7 +1610,7 @@ async function callAnalysisChat(options: {
   let lastErr: unknown;
   for (let mi = 0; mi < chain.length; mi++) {
     const model = chain[mi];
-    const attempts = mi === 0 ? 2 : 1;
+    const attempts = mi === 0 ? (String(primary).includes("glm") ? 1 : 2) : 1;
     for (let i = 0; i < attempts; i++) {
       try {
         const { onRetry: _onRetry, ...chatOpts } = options;
@@ -3712,12 +3771,14 @@ updatePromoHint();
       const ref = await resolveImageToBase64(saved.sourceImage || look.imageClose);
       if (!ref) return res.status(409).json({ error: "Исходное фото не сохранилось. Загрузите фото ещё раз." });
       const agePolicy = groomingAgePolicy(saved.analysis || saved.result || {});
+      const lengthSlot = lookIndex === 0 ? "short" : lookIndex === 2 ? "long" : "mid";
       const prompt = buildGroomingAfterPrompt({
         lookName: look.name,
         hairColor: look.hairColor,
         outfitNote: look.outfitNote,
         editPrompt: look.editPromptAfter || look.editPromptClose || look.editPrompt,
         agePolicy,
+        lengthSlot,
       });
       let image: string | null = null;
       for (let attempt = 0; attempt < 3 && !image; attempt++) {
@@ -3731,6 +3792,7 @@ updatePromoHint();
                   outfitNote: look.outfitNote,
                   agePolicy,
                   compact: true,
+                  lengthSlot,
                 })
               : prompt,
             ref.base64,
@@ -4891,7 +4953,11 @@ ${perLookVenues}
 Проанализируй лицо: пол, возраст, ageBand (teen / under25 / 25to34 / 35plus / 60plus), овал, цветотип, состояние волос. Верни JSON для режима ${mode}.
 «После»: ТО ЖЕ лицо (нос, ширина челюсти, глаза, губы как на фото). Моложе = только свежее кожа и отдохнувший взгляд, не другое лицо, не уже челюсть, не другой нос. 35plus ~5 лет свежее кожа; 25to34 ~3–4; under25 ~2; teen — тот же возраст. В editPromptAfter не писать younger face / tighter jaw / slimmer.
 Причёска — ИМЯ из каталога (Italian bob, butterfly, hush, octopus, collarbone, 90s blowout, glass lob…). Не «чуть свои волосы».
-Цвет — рецепт из каталога, ротируй. Paid: три разных силуэта И хотя бы один светлый акцент (bronde / butter / champagne / honey / money piece), если это идёт цветотипу. Не три espresso.
+Paid — три кадра, которые нельзя перепутать в крупном плане:
+1) короткое до подбородка (уши видны);
+2) другая форма до ключиц — не второе каре/bob/lob;
+3) длинные слои ниже плеч.
+Цвет: не два тёмных каштана (mocha и cherry cola без красного блика = одно и то же). Один тёмный, один светлый акцент у лица, третий — медь/вишня или явный блонд-блик.
 Укладка blowout или glass или soft waves. Только close-up.`;
 
       const analysisRaw = await callAnalysisChat({
@@ -4903,6 +4969,7 @@ ${perLookVenues}
         }],
         temperature: 0.55,
         maxTokens: mode === "paid" ? 9000 : 3500,
+        timeoutMs: 90000,
         onRetry: () => {
           safeWrite(JSON.stringify({
             type: "progress",
@@ -4920,6 +4987,10 @@ ${perLookVenues}
         parsed = JSON.parse(cleaned);
       } catch {
         return fail("Не удалось разобрать ответ стилиста. Попробуйте ещё раз.", 502);
+      }
+
+      if (mode === "paid" && Array.isArray(parsed.looks)) {
+        parsed.looks = enforceGroomingLookDiversity(parsed.looks);
       }
 
       saveGroomingResult(jobId, {
@@ -5005,6 +5076,7 @@ ${perLookVenues}
                 editPrompt: afterSrc,
                 agePolicy,
                 compact: attempt >= 1,
+                lengthSlot: opts.lookIndex === 0 ? "short" : opts.lookIndex === 2 ? "long" : "mid",
               });
               a = await generateImageWithFlux(prompt, referenceImageBase64, mimeType, { quality: "medium" });
             } catch (genErr: any) {
