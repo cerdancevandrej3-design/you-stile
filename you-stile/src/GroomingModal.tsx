@@ -1071,9 +1071,12 @@ export function GroomingModal({
             if (chunk.type === "progress") {
               setLoadingState({ step: chunk.step, text: chunk.text });
             } else if (chunk.type === "partial_result") {
+              const done = Number(chunk.looksDone);
+              const total = Number(chunk.looksTotal);
               setLoadingState({
-                step: Math.max(4.5, Number(chunk.step) || 4.5),
-                text: "Причёски готовы — собираем уход и фото товаров…",
+                step: Number(chunk.step) || 3.5,
+                text: chunk.text
+                  || (done && total ? `Готово ${done} из ${total} фото…` : "Ещё рисуем фото «после»…"),
               });
             } else if (chunk.type === "result") {
               data = chunk as Result;

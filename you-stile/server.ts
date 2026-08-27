@@ -4951,7 +4951,14 @@ updatePromoHint();
 
       const generateLookPair = async (
         look: any,
-        opts: { stepAfter: number; textAfter: string; lookIndex: number; looksTotal: number; draftLooks: any[] }
+        opts: {
+          stepAfter: number;
+          textAfter: string;
+          lookIndex: number;
+          looksTotal: number;
+          draftLooks: any[];
+          skipStartProgress?: boolean;
+        }
       ) => {
         const afterSrc = look.editPromptAfter || look.editPromptClose || look.editPrompt || "";
         const lookName = look.name || "Причёска";
@@ -4959,11 +4966,13 @@ updatePromoHint();
         let imageClose: string | null = imageBeforeUrl;
         let imageAfter: string | null = null;
         let imageError: string | null = null;
-        const folderId = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+        const folderId = `g${Date.now().toString(36)}${opts.lookIndex}${Math.random().toString(36).slice(2, 8)}`;
         try {
-          safeWrite(JSON.stringify({ type: "progress", jobId, step: opts.stepAfter, text: opts.textAfter }) + "\n");
+          if (!opts.skipStartProgress) {
+            safeWrite(JSON.stringify({ type: "progress", jobId, step: opts.stepAfter, text: opts.textAfter }) + "\n");
+          }
           let a: string | null = null;
-          for (let attempt = 0; attempt < 4 && !a; attempt++) {
+          for (let attempt = 0; attempt < 2 && !a; attempt++) {
             try {
               const prompt = buildGroomingAfterPrompt({
                 lookName,
@@ -4971,12 +4980,12 @@ updatePromoHint();
                 outfitNote: look.outfitNote,
                 editPrompt: afterSrc,
                 agePolicy,
-                compact: attempt >= 2,
+                compact: attempt >= 1,
               });
               a = await generateImageWithFlux(prompt, referenceImageBase64, mimeType, { quality: "medium" });
             } catch (genErr: any) {
               console.error("[Grooming] after image attempt", attempt + 1, genErr?.message);
-              if (attempt < 3) await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+              if (attempt < 1) await new Promise((r) => setTimeout(r, 800));
             }
           }
           imageAfter = await persistGroomingImage(folderId, "after", a);
@@ -5079,38 +5088,49 @@ updatePromoHint();
         looksDone: 0,
         looksTotal: looksIn.length,
       });
-      const stepAfters = [2.2, 3.2, 4.2];
-      // По очереди — так реже падает третье фото в Polza
-      const looks: any[] = [];
-      for (let i = 0; i < looksIn.length; i++) {
-        looks[i] = await generateLookPair(looksIn[i], {
-          stepAfter: stepAfters[i] ?? 4.2,
-          textAfter: `Причёска ${i + 1}/${looksIn.length}: рисуем «после»…`,
+      const productsRaw = mapGroomingShopProducts(parsed.skincare?.products, "dosage");
+      const makeupProductsRaw = mapGroomingShopProducts(parsed.makeup?.products, "howTo");
+      const thumbsPromise = Promise.all([
+        enrichShopProductsWithThumbs(productsRaw).catch((e) => {
+          console.error("[Grooming] shop thumbs failed:", (e as Error).message);
+          return productsRaw;
+        }),
+        enrichShopProductsWithThumbs(makeupProductsRaw).catch((e) => {
+          console.error("[Grooming] makeup thumbs failed:", (e as Error).message);
+          return makeupProductsRaw;
+        }),
+      ]);
+
+      safeWrite(JSON.stringify({
+        type: "progress",
+        jobId,
+        step: 2.4,
+        text: "Рисуем 3 фото сразу — обычно около минуты…",
+      }) + "\n");
+
+      let finished = 0;
+      const looks = await Promise.all(looksIn.map((look: any, i: number) =>
+        generateLookPair(look, {
+          stepAfter: 2.4,
+          textAfter: "Рисуем 3 фото сразу…",
           lookIndex: i,
           looksTotal: looksIn.length,
           draftLooks,
-        });
-        safeWrite(JSON.stringify({
-          type: "partial_result",
-          jobId,
-          mode: "paid",
-          looks: draftLooks,
-          coachNote: parsed.coachNote || "",
-        }) + "\n");
-      }
-
-      const productsRaw = mapGroomingShopProducts(parsed.skincare?.products, "dosage");
-      const makeupProductsRaw = mapGroomingShopProducts(parsed.makeup?.products, "howTo");
+          skipStartProgress: true,
+        }).then((pair) => {
+          finished += 1;
+          safeWrite(JSON.stringify({
+            type: "progress",
+            jobId,
+            step: 2.4 + finished * 0.7,
+            text: `Готово ${finished} из ${looksIn.length} фото «после»…`,
+          }) + "\n");
+          return pair;
+        })
+      ));
 
       safeWrite(JSON.stringify({ type: "progress", jobId, step: 4.8, text: "Подбираем фото товаров для ухода…" }) + "\n");
-      let products = productsRaw;
-      let makeupProducts = makeupProductsRaw;
-      try {
-        products = await enrichShopProductsWithThumbs(productsRaw);
-        makeupProducts = await enrichShopProductsWithThumbs(makeupProductsRaw);
-      } catch (shopErr) {
-        console.error("[Grooming] shop thumbs failed:", (shopErr as Error).message);
-      }
+      const [products, makeupProducts] = await thumbsPromise;
 
       const paidResult = {
         type: "result" as const,
