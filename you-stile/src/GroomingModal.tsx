@@ -41,6 +41,18 @@ type GroomingLook = {
   imageError?: string | null;
 };
 
+function lookHasAfterPhoto(look?: GroomingLook | null) {
+  return !!(look?.imageAfter && String(look.imageAfter).trim());
+}
+
+function resultMissingAfter(data: Result | null) {
+  if (!data) return true;
+  if (data.mode === "free") return !lookHasAfterPhoto(data.bestLook);
+  const looks = data.looks || [];
+  if (!looks.length) return true;
+  return looks.some((look) => !lookHasAfterPhoto(look));
+}
+
 function downloadGroomingAdvice(result: any, filename = "pricheska-i-uhod.txt") {
   const lines: string[] = ["Причёска и уход — рекомендации", ""];
   const pushLook = (look: GroomingLook, i: number) => {
@@ -528,6 +540,10 @@ function LookCard({
   const safeName = (look.name || "pricheska").replace(/[^\wа-яё\-]+/gi, "_").slice(0, 40);
   const hasAny = !!(beforeSrc || look.imageAfter);
 
+  useEffect(() => {
+    setBroken({});
+  }, [look.imageAfter, look.imageClose, beforeSrc]);
+
   const slots = [
     { key: "close", src: beforeSrc, label: "До", sub: "ваше фото" },
     { key: "after", src: look.imageAfter, label: "После", sub: "причёска · помада · одежда" },
@@ -537,41 +553,48 @@ function LookCard({
     <div className="rounded-2xl border border-charcoal/10 bg-white overflow-hidden shadow-sm">
       <div className="grid grid-cols-2 gap-1 bg-charcoal/5">
         {slots.map((slot) => {
-          const failed = !slot.src || broken[slot.key];
           return (
-            <button
+            <div
               key={slot.key}
-              type="button"
-              disabled={failed}
-              onClick={() => slot.src && !broken[slot.key] && onOpen?.(slot.src)}
               className="relative aspect-[3/4] bg-charcoal/10 overflow-hidden"
             >
               {slot.src && !broken[slot.key] ? (
-                <img
-                  src={slot.src}
-                  alt={`${look.name} — ${slot.label}`}
-                  className="w-full h-full object-cover"
-                  loading="eager"
-                  onError={() => setBroken((b) => ({ ...b, [slot.key]: true }))}
-                />
+                <button
+                  type="button"
+                  onClick={() => onOpen?.(slot.src as string)}
+                  className="absolute inset-0"
+                >
+                  <img
+                    src={slot.src}
+                    alt={`${look.name} — ${slot.label}`}
+                    className="w-full h-full object-cover"
+                    loading="eager"
+                    onError={() => setBroken((b) => ({ ...b, [slot.key]: true }))}
+                  />
+                </button>
               ) : (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-[11px] text-charcoal/40 p-3 text-center gap-2">
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center text-[11px] text-charcoal/40 p-3 text-center gap-2">
                   <span>
                     {slot.key === "close"
                       ? "Исходное фото не открылось — скачайте «После» или обновите страницу"
-                      : (look.imageError || "Фото «после» не создалось — подождите или повторите")}
+                      : (look.imageError || "Фото «после» ещё рисуется — подождите или нажмите «Повторить»")}
                   </span>
                   {slot.key === "after" && onRetryAfter && (
                     <button
                       type="button"
                       disabled={retrying}
                       onClick={async (e) => {
+                        e.preventDefault();
                         e.stopPropagation();
                         setRetrying(true);
-                        try { await onRetryAfter(); }
-                        finally { setRetrying(false); }
+                        try {
+                          await onRetryAfter();
+                          setBroken((b) => ({ ...b, after: false }));
+                        } finally {
+                          setRetrying(false);
+                        }
                       }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gold text-charcoal text-[11px] font-medium disabled:opacity-50"
+                      className="relative z-20 pointer-events-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gold text-charcoal text-[11px] font-medium disabled:opacity-50"
                     >
                       <RotateCcw className="w-3 h-3" />
                       {retrying ? "Рисуем…" : "Повторить фото"}
@@ -579,13 +602,13 @@ function LookCard({
                   )}
                 </div>
               )}
-              <span className="absolute bottom-2 left-2 right-2 text-left">
+              <span className="absolute bottom-2 left-2 right-2 text-left pointer-events-none">
                 <span className="inline-block text-[10px] uppercase tracking-wide bg-charcoal/75 text-ivory px-2 py-0.5 rounded-full">
                   {slot.label}
                 </span>
                 <span className="block text-[10px] text-ivory/90 mt-1 drop-shadow">{slot.sub}</span>
               </span>
-            </button>
+            </div>
           );
         })}
       </div>
@@ -709,27 +732,36 @@ export function GroomingModal({
 
   const applyGroomingResult = (data: Result, mode: "free" | "paid") => {
     setResult(data);
-    localStorage.removeItem(JOB_KEY);
+    const jobId = (data as any)?.jobId;
+    if (jobId) localStorage.setItem(LAST_JOB_KEY, String(jobId));
+    if (jobId && resultMissingAfter(data)) localStorage.setItem(JOB_KEY, String(jobId));
+    else localStorage.removeItem(JOB_KEY);
     setLoading(false);
     setLoadingState(null);
     setDisplayPercent(100);
     if (mode === "free") {
       const bl = (data as FreeResult).bestLook || ({} as GroomingLook);
-      if (bl.imageClose || bl.imageAfter) {
+      if (lookHasAfterPhoto(bl)) {
         localStorage.setItem(FREE_KEY, "1");
         setFreeUsed(true);
         onToast?.("Готово: сравните «до» и «после»", "success");
+      } else if (bl.imageClose) {
+        onToast?.("Текст готов. Фото «после» ещё дорисовывается — сейчас появится.", "success");
       } else {
-        onToast?.(bl.imageError || "Фото не создалось — нажмите бесплатно ещё раз", "error");
+        onToast?.(bl.imageError || "Фото не создалось — нажмите «Повторить фото»", "error");
       }
     } else {
-      if ((data as any).jobId) localStorage.setItem(LAST_JOB_KEY, String((data as any).jobId));
       localStorage.removeItem(PAID_KEY);
       setPaidId("");
       setPromoCode("");
       setPromoStatus("idle");
       setPromoApplied(false);
-      onToast?.("Готово: 3 причёски и уход", "success");
+      onToast?.(
+        resultMissingAfter(data)
+          ? "Текст готов. Фото «после» ещё дорисовываются — сейчас появятся."
+          : "Готово: 3 причёски и уход",
+        "success"
+      );
     }
   };
 
@@ -866,16 +898,61 @@ export function GroomingModal({
     if (!lastJob || result) return;
     const genLast = ++openGenRef.current;
     (async () => {
-      try {
-        const r = await fetch(`/api/grooming-result/${encodeURIComponent(lastJob)}`);
-        if (!r.ok) return;
-        const json = await r.json();
-        if (json?.status === "ready" && json.result && genLast === openGenRef.current && !userDismissedRef.current) {
-          applyGroomingResult(json.result as Result, json.result.mode === "paid" ? "paid" : "free");
+      for (let i = 0; i < 90; i++) {
+        if (userDismissedRef.current || genLast !== openGenRef.current) return;
+        try {
+          const r = await fetch(`/api/grooming-result/${encodeURIComponent(lastJob)}`);
+          if (r.status === 202) {
+            const j = await r.json().catch(() => ({}));
+            setLoading(true);
+            setLoadingState({
+              step: 3.5,
+              text: j.progressText || "Фото ещё рисуется — не закрывайте окно…",
+            });
+            await new Promise((res) => setTimeout(res, 4000));
+            continue;
+          }
+          if (!r.ok) return;
+          const json = await r.json();
+          if (json?.status === "ready" && json.result && genLast === openGenRef.current && !userDismissedRef.current) {
+            applyGroomingResult(json.result as Result, json.result.mode === "paid" ? "paid" : "free");
+          }
+          return;
+        } catch {
+          await new Promise((res) => setTimeout(res, 4000));
         }
-      } catch {}
+      }
     })();
   }, [isOpen, paymentIdProp]);
+
+  useEffect(() => {
+    if (!isOpen || !result || !resultMissingAfter(result)) return;
+    const jobId = (result as any)?.jobId || localStorage.getItem(LAST_JOB_KEY) || localStorage.getItem(JOB_KEY);
+    if (!jobId) return;
+    localStorage.setItem(JOB_KEY, String(jobId));
+    let stop = false;
+    const gen = openGenRef.current;
+    (async () => {
+      for (let i = 0; i < 90 && !stop; i++) {
+        await new Promise((res) => setTimeout(res, 4000));
+        if (stop || gen !== openGenRef.current || userDismissedRef.current) return;
+        try {
+          const r = await fetch(`/api/grooming-result/${encodeURIComponent(jobId)}`);
+          if (r.status === 202) continue;
+          if (!r.ok) continue;
+          const json = await r.json();
+          if (json?.result) {
+            setResult(json.result as Result);
+            if (!resultMissingAfter(json.result as Result)) {
+              localStorage.removeItem(JOB_KEY);
+              return;
+            }
+          }
+        } catch {}
+      }
+    })();
+    return () => { stop = true; };
+  }, [isOpen, result]);
 
   useEffect(() => {
     return () => {
@@ -1064,11 +1141,12 @@ export function GroomingModal({
             break;
           }
           const { done, value } = chunkRead;
-          if (done) break;
           if (userDismissedRef.current || gen !== openGenRef.current) return;
-          buffer += decoder.decode(value, { stream: true });
+          if (value) buffer += decoder.decode(value, { stream: true });
+          if (done) buffer += decoder.decode();
           const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
+          if (!done) buffer = lines.pop() || "";
+          else buffer = "";
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed) continue;
@@ -1078,12 +1156,12 @@ export function GroomingModal({
             if (chunk.type === "progress") {
               setLoadingState({ step: chunk.step, text: chunk.text });
             } else if (chunk.type === "partial_result") {
-              const done = Number(chunk.looksDone);
+              const doneLooks = Number(chunk.looksDone);
               const total = Number(chunk.looksTotal);
               setLoadingState({
                 step: Number(chunk.step) || 3.5,
                 text: chunk.text
-                  || (done && total ? `Готово ${done} из ${total} фото…` : "Ещё рисуем фото «после»…"),
+                  || (doneLooks && total ? `Готово ${doneLooks} из ${total} фото…` : "Ещё рисуем фото «после»…"),
               });
             } else if (chunk.type === "result") {
               data = chunk as Result;
@@ -1093,6 +1171,7 @@ export function GroomingModal({
               throw new Error(chunk.error || "Ошибка");
             }
           }
+          if (done) break;
         }
       } else {
         const json = await res.json().catch(() => ({}));
@@ -1490,7 +1569,7 @@ export function GroomingModal({
                   fallbackBefore={preview}
                   onOpen={(src) => openImg(src, result.bestLook.name)}
                   onToast={onToast}
-                  onRetryAfter={!result.bestLook?.imageAfter ? () => retryLookAfter(0) : undefined}
+                  onRetryAfter={() => retryLookAfter(0)}
                 />
                 {!(result.bestLook?.imageClose || result.bestLook?.imageAfter) && (
                   <button
@@ -1606,7 +1685,7 @@ export function GroomingModal({
                       fallbackBefore={preview}
                       onOpen={(src) => openImg(src, look.name)}
                       onToast={onToast}
-                      onRetryAfter={!look.imageAfter ? () => retryLookAfter(i) : undefined}
+                      onRetryAfter={() => retryLookAfter(i)}
                     />
                   ))}
                 </div>
