@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, ChangeEvent } from "react";
 import { createPortal } from "react-dom";
-import { X, Upload, Camera, ArrowRight, Check, Share2, Download, Sparkles, RotateCcw } from "lucide-react";
+import { X, Upload, Camera, ArrowRight, Check, Share2, Download, Sparkles, RotateCcw, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { MasterHowTo, HomeHowTo } from "./grooming/MasterHowTo";
 
@@ -693,6 +693,7 @@ export function GroomingModal({
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState<"idle" | "checking" | "valid" | "invalid" | "used" | "wrong">("idle");
   const [promoApplied, setPromoApplied] = useState(false);
+  const [formError, setFormError] = useState("");
   /** offer = описание/оплата; upload = экран загрузки фото (после промо или оплаты) */
   const [screen, setScreen] = useState<"offer" | "upload">("offer");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -976,6 +977,7 @@ export function GroomingModal({
     });
     setDisplayPercent(2);
     setResult(null);
+    setFormError("");
     userDismissedRef.current = false;
 
     const jobId =
@@ -1120,14 +1122,21 @@ export function GroomingModal({
         }
         onToast?.("Генерация ещё идёт. Откройте «Причёска и уход» снова через пару минут — результат подтянется.", "error");
       } else {
-        setLoadingState({ step: 4.5, text: "Сбой связи — ищем уже готовый результат…" });
-        const recovered = await pollRecover(36);
-        if (userDismissedRef.current || gen !== openGenRef.current) return;
-        if (recovered) {
-          applyGroomingResult(recovered, mode);
-          return;
+        const recoverable = /aborted|Failed to fetch|сеть|прерв|timeout|ожидания|нестабильн/i.test(errMsg);
+        if (recoverable) {
+          setLoadingState({ step: 4.5, text: "Сбой связи — ищем уже готовый результат…" });
+          const recovered = await pollRecover(36);
+          if (userDismissedRef.current || gen !== openGenRef.current) return;
+          if (recovered) {
+            applyGroomingResult(recovered, mode);
+            return;
+          }
         }
-        onToast?.(e.message || "Ошибка. Фото, рост и вес сохранены — нажмите генерацию ещё раз.", "error");
+        const shown = errMsg.includes("Polza") || errMsg.includes("503")
+          ? "Стилист временно не ответил. Нажмите генерацию ещё раз — фото уже на месте."
+          : (e.message || "Ошибка. Фото, рост и вес сохранены — нажмите генерацию ещё раз.");
+        setFormError(shown);
+        onToast?.(shown, "error");
       }
     } finally {
       clearTimeout(hardTimer);
@@ -1402,6 +1411,13 @@ export function GroomingModal({
                   )}
                   <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={onPick} />
                 </div>
+
+                {formError && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <p>{formError}</p>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-sm text-charcoal/70">

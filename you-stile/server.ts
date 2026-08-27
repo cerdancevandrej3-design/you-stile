@@ -1506,7 +1506,69 @@ async function callPolzaChat(options: {
   }
 
   const data = await response.json();
-  return data.choices[0].message.content;
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content || (typeof content === "string" && !content.trim())) {
+    throw new Error("Пустой ответ модели анализа");
+  }
+  return content;
+}
+
+const ANALYSIS_FALLBACK_MODELS = [
+  "google/gemini-2.5-flash",
+  "google/gemini-3.5-flash",
+];
+
+function isRetryableAnalysisError(err: unknown): boolean {
+  const m = String((err as Error)?.message || err || "");
+  return /503|502|504|429|SERVICE_UNAVAILABLE|RESOURCE_EXHAUSTED|finish_reason|Пустой ответ|timeout|ожидания|ECONNRESET|aborted/i.test(m);
+}
+
+function userFacingAnalysisError(raw: string): string {
+  const m = String(raw || "");
+  if (/503|SERVICE_UNAVAILABLE|недоступен|finish_reason/i.test(m)) {
+    return "Стилист временно не ответил. Нажмите генерацию ещё раз — фото уже на месте.";
+  }
+  if (/429|Quota|RESOURCE_EXHAUSTED/i.test(m)) {
+    return "Слишком много запросов. Подождите минуту и нажмите генерацию ещё раз.";
+  }
+  if (/401|API key|API_KEY/i.test(m)) {
+    return "Ошибка ключа API. Напишите нам внизу сайта.";
+  }
+  return "Не удалось разобрать лицо. Нажмите генерацию ещё раз — фото уже на месте.";
+}
+
+async function callAnalysisChat(options: {
+  model?: string;
+  systemPrompt: string;
+  messages: Array<any>;
+  temperature?: number;
+  maxTokens?: number;
+  useJsonFormat?: boolean;
+  timeoutMs?: number;
+  onRetry?: (info: { model: string; attempt: number }) => void;
+}) {
+  const primary = options.model || ANALYSIS_MODEL;
+  const chain = [primary, ...ANALYSIS_FALLBACK_MODELS.filter((m) => m !== primary)];
+  let lastErr: unknown;
+  for (let mi = 0; mi < chain.length; mi++) {
+    const model = chain[mi];
+    const attempts = mi === 0 ? 2 : 1;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const { onRetry: _onRetry, ...chatOpts } = options;
+        const text = await callPolzaChat({ ...chatOpts, model });
+        if (mi > 0 || i > 0) console.log(`[Analysis] recovered via ${model} attempt ${i + 1}`);
+        return text;
+      } catch (e) {
+        lastErr = e;
+        console.error(`[Analysis] ${model} attempt ${i + 1}/${attempts}:`, (e as Error).message);
+        if (!isRetryableAnalysisError(e)) throw e;
+        options.onRetry?.({ model, attempt: i + 1 });
+        if (i < attempts - 1) await new Promise((r) => setTimeout(r, 2500 * (i + 1)));
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Анализ не удался");
 }
 
 async function generateImageWithFlux(
@@ -4203,20 +4265,15 @@ ${perLookVenues}
       let analysisData: any;
       let analysisText = "";
       try {
-        const analysis = await callWithRetry(async () => {
-          const text = await callPolzaChat({
-            model: ANALYSIS_MODEL,
-            systemPrompt,
-            messages,
-            temperature: analysisTemp,
-            maxTokens: looksCount >= 4 ? 12288 : 8192,
-            timeoutMs: looksCount >= 4 ? 180000 : 120000,
-          });
-          const data = typeof text === "string" ? safeJsonParse(text) : text;
-          return { text, data };
-        }, 2, 4000);
-        analysisText = analysis.text;
-        analysisData = analysis.data;
+        analysisText = await callAnalysisChat({
+          model: ANALYSIS_MODEL,
+          systemPrompt,
+          messages,
+          temperature: analysisTemp,
+          maxTokens: looksCount >= 4 ? 12288 : 8192,
+          timeoutMs: looksCount >= 4 ? 180000 : 120000,
+        });
+        analysisData = typeof analysisText === "string" ? safeJsonParse(analysisText) : analysisText;
       } catch (e: any) {
         console.error("[Analysis] failed:", e?.message || e);
         clearInterval(heartbeat);
@@ -4838,7 +4895,7 @@ ${perLookVenues}
 Цвет — рецепт из каталога, ротируй. Paid: три разных силуэта И хотя бы один светлый акцент (bronde / butter / champagne / honey / money piece), если это идёт цветотипу. Не три espresso.
 Укладка blowout или glass или soft waves. Только close-up.`;
 
-      const analysisRaw = await callPolzaChat({
+      const analysisRaw = await callAnalysisChat({
         model: ANALYSIS_MODEL,
         systemPrompt: buildGroomingSystemPrompt(mode),
         messages: [{
@@ -4847,6 +4904,14 @@ ${perLookVenues}
         }],
         temperature: 0.55,
         maxTokens: mode === "paid" ? 9000 : 3500,
+        onRetry: () => {
+          safeWrite(JSON.stringify({
+            type: "progress",
+            jobId,
+            step: 0.8,
+            text: "Стилист задумался — пробуем ещё раз…",
+          }) + "\n");
+        },
       });
 
       let parsed: any;
@@ -5156,9 +5221,10 @@ ${perLookVenues}
         });
       }
       clearInterval(heartbeat);
+      const rawErr = (error as Error).message || "Ошибка подбора причёски";
       safeWrite(JSON.stringify({
         type: "error",
-        error: (error as Error).message || "Ошибка подбора причёски",
+        error: userFacingAnalysisError(rawErr),
         jobId: jobId || undefined,
       }) + "\n");
       return res.end();
@@ -5221,7 +5287,7 @@ ${perLookVenues}
         { role: "user", content: contentParts.length > 1 ? contentParts : userText },
       ];
 
-      const reply = await callPolzaChat({
+      const reply = await callAnalysisChat({
         model: ANALYSIS_MODEL,
         systemPrompt: buildStylistChatPrompt(),
         messages,
