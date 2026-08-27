@@ -639,6 +639,7 @@ function groomingLookFromParsed(look: any, agePolicy: GroomingAgePolicy) {
   return {
     name: look?.name || "Причёска",
     hairColor: look?.hairColor || "",
+    lipColor: look?.lipColor || "",
     description: look?.description || "",
     why: look?.why || "",
     outfitNote: look?.outfitNote || "",
@@ -925,7 +926,7 @@ const systemPrompt = systemPromptTemplate.replace("{{FASHION_KNOWLEDGE_BASE}}", 
 
 // Grooming (причёски + уход) knowledge + prompt
 const GROOMING_PRICE = 100;
-const groomingParts = ["part0_trends_2026.md", "part1_haircuts.md", "part2_color.md", "part3_skincare.md", "part4_makeup.md"]
+const groomingParts = ["part0_trends_2026.md", "part1_haircuts.md", "part2_color.md", "part3_skincare.md", "part4_makeup.md", "part5_lipstick.md"]
   .map((f) => {
     const p = path.join(PROJECT_ROOT, "src", "grooming", f);
     return fs.existsSync(p) ? fs.readFileSync(p, "utf-8") : "";
@@ -1345,12 +1346,41 @@ function groomingColorFamily(color: string): "dark" | "light" | "warm" {
   return "dark";
 }
 
+function groomingLipFamily(lip: string): "rose" | "nude" | "warm" | "sheer" | "empty" {
+  const t = String(lip || "").toLowerCase();
+  if (!t.trim()) return "empty";
+  if (/sheer|balm|gloss|тинт|бальзам/.test(t) && /teen|berry|peach|rose/.test(t)) return "sheer";
+  if (/peach|nude|caramel|latte|beige|apricot|персик|нюд|латте/.test(t)) return "nude";
+  if (/terra|brick|coral|cinnamon rose|коралл|кирпич|терракот/.test(t)) return "warm";
+  if (/rose|berry|raspberry|mauve|plum|rosewood|blue-red|ягод|малин|слив|бордо/.test(t)) return "rose";
+  return "rose";
+}
+
+function groomingLipFallback(i: number, hairColor: string, agePolicy: GroomingAgePolicy): string {
+  if (agePolicy === "teenKeep") {
+    return ["Sheer berry balm — teen, no adult lipstick", "Sheer peach balm — teen, no adult lipstick", "Sheer rose gloss — teen, no adult lipstick"][i % 3];
+  }
+  const family = groomingColorFamily(hairColor);
+  const byHair = {
+    dark: "Rosewood satin — matches dark brunette, not the original lip color",
+    light: "Peach nude satin — matches honey/bronde face-frame, not the original lip color",
+    warm: "Terracotta satin — matches copper/cinnamon hair, not the original lip color",
+  };
+  const cycle = [
+    byHair.dark,
+    byHair.light,
+    byHair.warm,
+  ];
+  if (i === 0) return byHair[family] || cycle[0];
+  return cycle[i % 3];
+}
+
 function isBobLikeName(name: string): boolean {
   return /bob|lob|каре|пикс|pixie|bixie|glass lob/i.test(String(name || ""));
 }
 
 /** Paid: не два каре и не два тёмных каштана — иначе «после» в крупном плане сливаются. */
-function enforceGroomingLookDiversity(looks: any[]): any[] {
+function enforceGroomingLookDiversity(looks: any[], agePolicy: GroomingAgePolicy = "unknown"): any[] {
   if (!Array.isArray(looks) || looks.length < 2) return looks;
   const next = looks.map((l) => ({ ...l }));
 
@@ -1386,12 +1416,28 @@ function enforceGroomingLookDiversity(looks: any[]): any[] {
     const ep = String(l.editPromptAfter || l.editPrompt || "");
     if (!/LENGTH IN FRAME/i.test(ep)) l.editPromptAfter = `${ep}\n${cue}`.trim();
   });
+
+  const lipIdx = next.map((l, i) => (groomingLipFamily(l.lipColor || "") === "empty" ? i : -1)).filter((i) => i >= 0);
+  for (const i of lipIdx) {
+    next[i].lipColor = groomingLipFallback(i, next[i].hairColor || "", agePolicy);
+  }
+  const families = next.map((l) => groomingLipFamily(l.lipColor || ""));
+  const seen = new Set<string>();
+  next.forEach((l, i) => {
+    const fam = families[i];
+    if (fam === "empty") return;
+    if (seen.has(fam) && i > 0) {
+      l.lipColor = groomingLipFallback(i, l.hairColor || "", agePolicy);
+    }
+    seen.add(groomingLipFamily(l.lipColor || ""));
+  });
   return next;
 }
 
 function buildGroomingAfterPrompt(opts: {
   lookName?: string;
   hairColor?: string;
+  lipColor?: string;
   outfitNote?: string;
   editPrompt?: string;
   agePolicy: GroomingAgePolicy;
@@ -1402,6 +1448,21 @@ function buildGroomingAfterPrompt(opts: {
   const color = (opts.hairColor || "toned").trim();
   const outfit = (opts.outfitNote || "new elegant shoulder outfit, not the original clothes").trim();
   const details = stripGroomingFaceMorphLanguage(sanitizeEditPrompt(opts.editPrompt || "")).slice(0, 700);
+  const lipRaw = String(opts.lipColor || "").trim();
+  const skipLip = /^(без помады|none|-)$/i.test(lipRaw) || /для мужчин|мужчин/i.test(lipRaw);
+  const lip = skipLip
+    ? ""
+    : (lipRaw || groomingLipFallback(
+      opts.lengthSlot === "short" ? 0 : opts.lengthSlot === "long" ? 2 : 1,
+      color,
+      opts.agePolicy,
+    ));
+  const lipChange = skipLip
+    ? "- Keep natural lip color from Image 1. No lipstick."
+    : `- Lipstick for THIS look only: ${lip}. Keep the SAME lip shape and volume as Image 1 — change only the lipstick shade. Do NOT copy the original lip color from Image 1.`;
+  const lipSkin = skipLip
+    ? "- Do not add a new makeup look (no lipstick, no smoky eye, no contour that changes the face)"
+    : "- Lipstick shade IS required (see CHANGE). Do not add smoky eye, false lashes, or contour that changes the face";
   const lengthLine = opts.lengthSlot === "short"
     ? "LENGTH IN FRAME: hair ends at chin/jaw. Ears and nape visible. Neck open. NOT collarbone length."
     : opts.lengthSlot === "long"
@@ -1419,11 +1480,12 @@ CHANGE only:
 - ${lengthLine}
 - Finished salon styling (blowout or glass or soft waves)
 - Clothes visible at shoulders: ${outfit}
+${lipChange}
 - Soft studio light, head-and-shoulders close-up
 - Visagiste skin: slight concealer on bags if any, slightly softened forehead lines if any, even glow
 
 PRESERVE from Image 1 (copy exactly — do not drift):
-- Exact nose (bridge width, tip, length), jaw WIDTH and shape, chin, eye spacing, brows, lip volume, cheeks, forehead, ears
+- Exact nose (bridge width, tip, length), jaw WIDTH and shape, chin, eye spacing, brows, lip SHAPE and volume, cheeks, forehead, ears
 - Same gaze and eye direction as Image 1
 - Same head position, tilt, and face angle as Image 1 — do not turn the head
 - Same mouth: if they smile, keep THAT smile; if they are not smiling, do NOT add a smile
@@ -1435,11 +1497,11 @@ SKIN (visagiste, subtle):
 - If forehead wrinkles are visible, soften them a little — leave natural texture, do not freeze the face
 - Slightly more even tone and a healthy glow
 - Keep pores, freckles, moles. Photoreal, not plastic, not a filter
-- Do not add a new makeup look (no new lipstick, no smoky eye, no contour that changes the face)`;
+${lipSkin}`;
 
   if (opts.compact) {
     return `${core}
-Hair and clothes must clearly change. Same face, gaze, and smile as Image 1. Visagiste skin only.`;
+Hair, clothes${skipLip ? "" : ", and lipstick shade"} must clearly change. Same face, gaze, and smile as Image 1. Visagiste skin only.`;
   }
 
   return `${core}
@@ -1449,7 +1511,7 @@ ${details || `${name}, ${color}`}
 
 ${groomingAgePromptBlock(opts.agePolicy)}
 
-FINAL: same face, same gaze, same smile as Image 1. New hair + new clothes + visagiste skin only.`;
+FINAL: same face, same gaze, same smile as Image 1. New hair + new clothes + visagiste skin${skipLip ? "" : " + this look's lipstick"}.`;
 }
 
 function groomingDefaultAfterNote(policy: GroomingAgePolicy): string {
@@ -3791,6 +3853,7 @@ updatePromoHint();
       const prompt = buildGroomingAfterPrompt({
         lookName: look.name,
         hairColor: look.hairColor,
+        lipColor: look.lipColor,
         outfitNote: look.outfitNote,
         editPrompt: look.editPromptAfter || look.editPromptClose || look.editPrompt,
         agePolicy,
@@ -3805,6 +3868,7 @@ updatePromoHint();
               ? buildGroomingAfterPrompt({
                   lookName: look.name,
                   hairColor: look.hairColor,
+                  lipColor: look.lipColor,
                   outfitNote: look.outfitNote,
                   agePolicy,
                   compact: true,
@@ -4976,6 +5040,8 @@ Paid — три кадра, которые нельзя перепутать в 
 2) другая форма до ключиц — не второе каре/bob/lob;
 3) длинные слои ниже плеч.
 Цвет: не два тёмных каштана (mocha и cherry cola без красного блика = одно и то же). Один тёмный, один светлый акцент у лица, третий — медь/вишня или явный блонд-блик.
+Помада: женщинам — имя тона из каталога part5 в lipColor, под НОВЫЕ волосы этого look и подтон кожи. Не копировать цвет губ с фото. Paid — три разные семьи (rosewood/ягода, peach-nude, terracotta/brick). Teen — только sheer balm. Мужчинам lipColor пустой.
+В editPromptAfter для губ пиши конкретный lipstick shade из part5; форму губ сохрани.
 Укладка blowout или glass или soft waves. Только close-up.`;
 
       const analysisRaw = await callAnalysisChat({
@@ -5008,7 +5074,16 @@ Paid — три кадра, которые нельзя перепутать в 
       }
 
       if (mode === "paid" && Array.isArray(parsed.looks)) {
-        parsed.looks = enforceGroomingLookDiversity(parsed.looks);
+        parsed.looks = enforceGroomingLookDiversity(parsed.looks, groomingAgePolicy(parsed));
+      }
+      if (mode === "free" && parsed.bestLook && !String(parsed.bestLook.lipColor || "").trim()) {
+        parsed.bestLook.lipColor = groomingLipFallback(0, parsed.bestLook.hairColor || "", groomingAgePolicy(parsed));
+      }
+      const genderBlob = String(parsed.gender || parsed.faceAnalysis?.gender || "");
+      if (/\b(man|male|мужчин|парень)\b/i.test(genderBlob) && !/\b(woman|female|женщин|девуш)\b/i.test(genderBlob)) {
+        const wipe = (l: any) => { if (l) l.lipColor = "без помады"; };
+        wipe(parsed.bestLook);
+        (parsed.looks || []).forEach(wipe);
       }
 
       saveGroomingResult(jobId, {
@@ -5090,6 +5165,7 @@ Paid — три кадра, которые нельзя перепутать в 
               const prompt = buildGroomingAfterPrompt({
                 lookName,
                 hairColor,
+                lipColor: look.lipColor,
                 outfitNote: look.outfitNote,
                 editPrompt: afterSrc,
                 agePolicy,
@@ -5111,6 +5187,7 @@ Paid — три кадра, которые нельзя перепутать в 
           ...groomingLookFromParsed(look, agePolicy),
           name: lookName,
           hairColor,
+          lipColor: look.lipColor || "",
           imageClose,
           imageAfter,
           imageFull: null,

@@ -29,6 +29,7 @@ function getGroomingStageIndex(s: number): number {
 type GroomingLook = {
   name: string;
   hairColor: string;
+  lipColor?: string;
   description: string;
   why: string;
   outfitNote?: string;
@@ -45,6 +46,7 @@ function downloadGroomingAdvice(result: any, filename = "pricheska-i-uhod.txt") 
   const pushLook = (look: GroomingLook, i: number) => {
     lines.push(`— ${i}. ${look.name || "Причёска"}`);
     if (look.hairColor) lines.push(`Цвет: ${look.hairColor}`);
+    if (look.lipColor) lines.push(`Помада: ${look.lipColor}`);
     if (look.description) lines.push(look.description);
     if (look.why) lines.push(`Почему вам: ${look.why}`);
     if (look.outfitNote) lines.push(`Образ: ${look.outfitNote}`);
@@ -528,7 +530,7 @@ function LookCard({
 
   const slots = [
     { key: "close", src: beforeSrc, label: "До", sub: "ваше фото" },
-    { key: "after", src: look.imageAfter, label: "После", sub: "причёска · одежда · уход" },
+    { key: "after", src: look.imageAfter, label: "После", sub: "причёска · помада · одежда" },
   ];
 
   return (
@@ -592,6 +594,9 @@ function LookCard({
         {look.hairColor && (
           <p className="text-sm text-gold font-medium">Цвет: {look.hairColor}</p>
         )}
+        {look.lipColor && (
+          <p className="text-sm text-charcoal/70">Помада: {look.lipColor}</p>
+        )}
         {look.description && (
           <p className="text-sm text-charcoal/75 leading-relaxed whitespace-pre-wrap">{look.description}</p>
         )}
@@ -608,7 +613,7 @@ function LookCard({
         )}
         <MasterHowTo text={look.masterHowTo} />
         <p className="text-[11px] text-charcoal/40 leading-relaxed">
-          «После» — ориентир: новая причёска, взгляд и улыбка как на вашем фото, кожа как после визажиста. Не гарантия и не медзаключение. Решение — за вами и специалистом.
+          «После» — ориентир: новая причёска, помада под этот образ, взгляд и улыбка как на вашем фото, кожа как после визажиста. Не гарантия и не медзаключение. Решение — за вами и специалистом.
         </p>
         {hasAny && (
           <div className="pt-2 space-y-2">
