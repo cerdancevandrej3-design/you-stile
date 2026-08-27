@@ -1,0 +1,23 @@
+{
+  "name": "hermes",
+  "version": "1.0.0",
+  "description": "Hermes — auto-publisher для Telegram и MAX каналов о моде, красоте и трендах 2026",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --import tsx ./hermes.ts",
+    "build": "tsc hermes.ts --outDir dist --module esnext --target es2022 --module-resolution node --esModuleInterop true",
+    "test-once": "node --import tsx ./hermes.ts --once"
+  },
+  "dependencies": {
+    "node-cron": "^3.0.3",
+    "openai": "^4.79.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "tsx": "^4.22.0",
+    "typescript": "^5.8.2",
+    "@types/node": "^22.10.0",
+    "@types/node-cron": "^3.0.11"
+  }
+}
