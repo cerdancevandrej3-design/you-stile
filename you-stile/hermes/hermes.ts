@@ -13,6 +13,7 @@
  *  - HERMES_TG_TOKEN       — токен Hermes Stilist Bot (@hermes_stilist_bot), НЕ @Alex_tel_12bot
  *  - HERMES_TG_CHAT_ID     — chat_id канала https://t.me/stilist_ai_ru (@stilist_ai_ru), напр. -1003892047761
  *                            НЕ путать с @stilist_ai без _ru
+ *  - FIRECRAWL_API_KEY     — открытые статьи журналов (текст + фото), не кабинеты и не paywall
  *  - HERMES_IMAGE_MODEL    — модель картинок (см. .env.example)
  *  - HERMES_MAX_TOKEN      — токен бота MAX (platform-api2.max.ru)
  *  - HERMES_MAX_CHAT_ID    — chat_id канала MAX (узнать: npx tsx hermes.ts --max-discover)
@@ -2883,6 +2884,8 @@ type FeedItem = {
   image?: string;
   /** Сколько лент принесли ту же ссылку — грубый «это сейчас читают». */
   buzz?: number;
+  /** Текст открытой статьи (Firecrawl), не RSS-анонс. */
+  articleBody?: string;
 };
 
 type DigestStory = {
@@ -3058,6 +3061,170 @@ function magazinePrestige(item: FeedItem): number {
   if (/instyle|glamour|allure|grazia|thevoicemag|the voice|buro|peopletalk/.test(s)) return 8;
   if (/who what wear|fashionista|w magazine|town & country/.test(s)) return 6;
   return 0;
+}
+
+const FIRECRAWL_API_KEY = (process.env.FIRECRAWL_API_KEY || process.env.HERMES_FIRECRAWL_API_KEY || "").trim();
+const FIRECRAWL_BASE = (process.env.FIRECRAWL_BASE_URL || "https://api.firecrawl.dev").replace(/\/$/, "");
+const firecrawlCache = new Map<string, FirecrawlDoc | null>();
+
+type FirecrawlDoc = {
+  markdown: string;
+  images: string[];
+  title?: string;
+};
+
+const FIRECRAWL_BLOCK_PATH =
+  /\/(login|log-in|signin|sign-in|signup|subscribe|subscription|account|checkout|cart|paywall|premium|billing)(\/|$|\?)/i;
+const FIRECRAWL_PAYWALL_TEXT =
+  /subscribe to (continue|read)|already a subscriber|create an account to|paywall|metered paywall|remaining free articles|sign in to (read|continue)|this article is for subscribers/i;
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function magazineHostsFromRss(): Set<string> {
+  const set = new Set<string>([
+    "vogue.com", "vogue.co.uk", "vogue.fr", "vogue.it", "vogue.de", "vogue.es", "vogue.in",
+    "elle.com", "harpersbazaar.com", "wwd.com", "vanityfair.com", "gq.com", "gq-magazine.co.uk",
+    "people.com", "instyle.com", "glamour.com", "allure.com", "graziamagazine.com",
+    "fashionista.com", "wmagazine.com", "whowhatwear.com", "businessoffashion.com",
+    "highsnobiety.com", "hypebeast.com", "dazeddigital.com", "teenvogue.com",
+    "esquire.com", "townandcountrymag.com", "refinery29.com", "anothermag.com",
+    "i-d.co", "variety.com", "hollywoodreporter.com", "footwearnews.com",
+    "crfashionbook.com", "numero.com", "thecut.com", "nymag.com",
+  ]);
+  for (const f of RSS_FEEDS) {
+    const h = hostnameOf(f.url);
+    if (h) set.add(h.replace(/^rss\./, "").replace(/^feeds?\./, ""));
+  }
+  return set;
+}
+const MAGAZINE_HOSTS = magazineHostsFromRss();
+
+function isPublicMagazineUrl(url: string): boolean {
+  if (!/^https:\/\//i.test(url)) return false;
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:") return false;
+  if (FIRECRAWL_BLOCK_PATH.test(u.pathname)) return false;
+  const host = u.hostname.replace(/^www\./i, "").toLowerCase();
+  if (/accounts?\.google|login\.|auth\.|paywall|checkout/.test(host)) return false;
+  for (const allowed of MAGAZINE_HOSTS) {
+    if (host === allowed || host.endsWith(`.${allowed}`)) return true;
+  }
+  return magazinePrestige({ title: "", link: url, description: "", pubDate: "", source: host }) > 0;
+}
+
+function imagesFromMarkdown(md: string): string[] {
+  const out: string[] = [];
+  const re = /!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(md)) !== null) {
+    const url = m[1].replace(/[),.;]+$/, "");
+    if (/^https:\/\//i.test(url) && !out.includes(url)) out.push(url);
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+/** Открытая статья журнала → чистый текст. Кабинеты, логин и paywall не трогаем. */
+async function scrapePublicMagazine(url: string): Promise<FirecrawlDoc | null> {
+  const key = String(url || "").replace(/[?#].*$/, "");
+  if (firecrawlCache.has(key)) return firecrawlCache.get(key) || null;
+  if (!FIRECRAWL_API_KEY) {
+    firecrawlCache.set(key, null);
+    return null;
+  }
+  if (!isPublicMagazineUrl(url)) {
+    console.warn(`[Hermes] firecrawl skip (not a public magazine page): ${url.slice(0, 90)}`);
+    firecrawlCache.set(key, null);
+    return null;
+  }
+  const endpoints = [`${FIRECRAWL_BASE}/v2/scrape`, `${FIRECRAWL_BASE}/v1/scrape`];
+  for (const endpoint of endpoints) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 25000);
+      const r = await fetch(endpoint, {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: {
+          Authorization: `Bearer ${FIRECRAWL_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url,
+          formats: ["markdown", "links"],
+          onlyMainContent: true,
+          blockAds: true,
+          removeBase64Images: true,
+        }),
+      } as any);
+      clearTimeout(timer);
+      const raw = await r.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        data = {};
+      }
+      if (!r.ok) {
+        console.warn(`[Hermes] firecrawl ${r.status}: ${String(data?.error || raw).slice(0, 120)}`);
+        continue;
+      }
+      const payload = data.data || data;
+      const markdown = String(payload.markdown || payload.content || "").trim();
+      if (markdown.length < 280) continue;
+      if (FIRECRAWL_PAYWALL_TEXT.test(markdown.slice(0, 1500))) {
+        console.warn(`[Hermes] firecrawl paywall/login page skipped: ${url.slice(0, 90)}`);
+        firecrawlCache.set(key, null);
+        return null;
+      }
+      const meta = payload.metadata || {};
+      const images = [
+        ...imagesFromMarkdown(markdown),
+        meta.ogImage,
+        meta["og:image"],
+        meta.image,
+        ...(Array.isArray(payload.images) ? payload.images : []),
+      ]
+        .map((x: unknown) => String(x || "").trim())
+        .filter((u: string) => /^https:\/\//i.test(u));
+      const uniq = [...new Set(images)];
+      const doc: FirecrawlDoc = {
+        markdown: markdown.slice(0, 8000),
+        images: uniq.slice(0, 12),
+        title: String(meta.title || "").trim() || undefined,
+      };
+      firecrawlCache.set(key, doc);
+      console.log(`[Hermes] firecrawl ${hostnameOf(url)}: ${doc.markdown.length} chars, ${doc.images.length} images`);
+      return doc;
+    } catch (e) {
+      console.warn("[Hermes] firecrawl failed:", (e as Error).message.slice(0, 140));
+    }
+  }
+  firecrawlCache.set(key, null);
+  return null;
+}
+
+async function enrichItemWithFirecrawl(item: FeedItem): Promise<void> {
+  if (!item?.link) return;
+  if ((item.articleBody || "").length >= 400) return;
+  const doc = await scrapePublicMagazine(item.link);
+  if (!doc) return;
+  item.articleBody = doc.markdown;
+  if ((!item.description || item.description.length < 120) && doc.markdown) {
+    item.description = stripHtml(doc.markdown).slice(0, 900);
+  }
+  if (!item.image && doc.images[0]) item.image = doc.images[0];
 }
 
 /** Звёздный слот: наряд и журнал, не короткая заметка про лак. */
@@ -4112,6 +4279,15 @@ async function extractArticleImages(link: string): Promise<Array<{ url: string; 
   } catch (e) {
     console.warn("[Hermes] article images failed:", (e as Error).message);
   }
+  if (out.length < 2) {
+    const doc = await scrapePublicMagazine(link);
+    if (doc) {
+      for (const url of doc.images) {
+        if (url.startsWith("http") && !out.some((x) => x.url === url)) out.push({ url, alt: "firecrawl" });
+        if (out.length > 10) break;
+      }
+    }
+  }
   return out;
 }
 
@@ -4238,10 +4414,16 @@ async function findProductPhotos(story: DigestStory, item: FeedItem): Promise<{ 
 }
 
 function rssResearchFallback(item: FeedItem): string {
-  return [`Заголовок: ${item.title}`, `Издание: ${item.source}`, `Ссылка: ${item.link}`, String(item.description || "").trim()]
+  return [
+    `Заголовок: ${item.title}`,
+    `Издание: ${item.source}`,
+    `Ссылка: ${item.link}`,
+    String(item.description || "").trim(),
+    item.articleBody ? `Текст открытой статьи:\n${item.articleBody.slice(0, 2200)}` : "",
+  ]
     .filter(Boolean)
     .join("\n")
-    .slice(0, 2500);
+    .slice(0, 3500);
 }
 
 async function researchStarLook(item: FeedItem): Promise<string> {
@@ -4257,7 +4439,10 @@ async function researchStarLook(item: FeedItem): Promise<string> {
     `Заголовок: ${item.title}\n` +
     `Статья: ${item.link}\n` +
     `Издание: ${item.source}\n` +
-    `Кратко в RSS: ${item.description || "нет"}\n\n` +
+    `Кратко в RSS: ${item.description || "нет"}\n` +
+    (item.articleBody
+      ? `Текст открытой страницы журнала (только публичная статья, не paywall):\n${item.articleBody.slice(0, 2500)}\n\n`
+      : "\n") + +
     `Нужно только то, что есть в источниках: что надето (силуэт, цвет, ткань, бренд латиницей), волосы, макияж, ногти, уход.\n` +
     `Если в образе дом моды (Gucci, Dolce & Gabbana, Chanel, Dior, Louis Vuitton, Prada, Versace и другие топы) — напиши дом, линейку (кутюр / ready-to-wear / сумка) и чем этот дом узнают. Не подставляй Gucci, если его нет в источниках.\n` +
     `Не пиши сплетни, романы, разводы. Не выдумывай кремы и бренды.\n` +
@@ -4565,6 +4750,14 @@ async function publishNewsOnce(slot: DaySlotKind = "women"): Promise<{ ok: boole
   const lane = contentLane(slot);
   const storiesIn = pack.stories.slice(0, 6);
   console.log(`[Hermes] digest ${storiesIn.length}: ${storiesIn.map((s) => s.source + " / " + s.title.slice(0, 40)).join(" | ")}`);
+
+  for (const it of storiesIn) {
+    try {
+      await enrichItemWithFirecrawl(it);
+    } catch (e) {
+      console.warn("[Hermes] firecrawl enrich:", (e as Error).message.slice(0, 120));
+    }
+  }
 
   const researches: string[] = [];
   for (const it of storiesIn) {
@@ -5813,6 +6006,7 @@ async function main(): Promise<void> {
   const republishLast = argv.includes("--republish-last");
   const rewriteLastNews = argv.includes("--rewrite-last-news");
   const fixLastLook = argv.includes("--fix-last-look");
+  const testFirecrawlArg = argv.find((a) => a.startsWith("--test-firecrawl="));
   const retryPending = argv.includes("--retry-pending");
   const wardrobeLast = argv.includes("--wardrobe-last");
   const titleHintArg = argv.find((a) => a.startsWith("--title-hint="));
@@ -5837,9 +6031,31 @@ async function main(): Promise<void> {
     console.error("[Hermes] HERMES_TG_TOKEN невалиден (placeholder?). Нужен токен Hermes Stilist Bot (@hermes_stilist_bot) из BotFather — НЕ @Alex_tel_12bot");
   }
   console.log(
-    `[Hermes] start | MODE=${MODE} | SEARCH=${SEARCH_MODEL} | DRY_RUN=${DRY_RUN} | TG=${TG_TOKEN ? "yes" : "no"} | MAX=${MAX_TOKEN ? "yes" : "no"} | MAX_CHAT=${MAX_CHAT_ID || "—"} | RSS=${RSS_FEEDS.length} | chat=${TG_CHAT_ID || "?"}`,
+    `[Hermes] start | MODE=${MODE} | SEARCH=${SEARCH_MODEL} | DRY_RUN=${DRY_RUN} | TG=${TG_TOKEN ? "yes" : "no"} | MAX=${MAX_TOKEN ? "yes" : "no"} | MAX_CHAT=${MAX_CHAT_ID || "—"} | RSS=${RSS_FEEDS.length} | FIRECRAWL=${FIRECRAWL_API_KEY ? "yes" : "no"} | chat=${TG_CHAT_ID || "?"}`,
   );
 
+  if (testFirecrawlArg) {
+    const url = testFirecrawlArg.split("=").slice(1).join("=").trim();
+    if (!FIRECRAWL_API_KEY) {
+      console.error("[Hermes] нет FIRECRAWL_API_KEY — положите ключ в hermes/.env");
+      return;
+    }
+    const doc = await scrapePublicMagazine(url);
+    console.log(
+      JSON.stringify(
+        {
+          ok: !!doc,
+          allowed: isPublicMagazineUrl(url),
+          chars: doc?.markdown.length || 0,
+          images: doc?.images.slice(0, 5) || [],
+          preview: (doc?.markdown || "").slice(0, 400),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
   if (maxDiscover) {
     await discoverMaxChatId(180);
     return;
