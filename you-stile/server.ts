@@ -1391,40 +1391,82 @@ function groomingAgePolicy(parsed: any): GroomingAgePolicy {
   return "unknown";
 }
 
+/** Убирает из промпта анализа формулировки, из‑за которых модель рисует чужое лицо. */
+function stripGroomingFaceMorphLanguage(text: string): string {
+  if (!text) return "";
+  return text
+    .replace(/\b(\d+\s*[–-]?\s*)?years?\s+younger\b/gi, "more rested skin")
+    .replace(/\b(looks?|appear(?:s|ing)?|face)\s+younger\b/gi, "more rested skin")
+    .replace(/\byounger\s+(face|look|appearance|skin|woman|man|person)\b/gi, "rested skin")
+    .replace(/\b(anti[- ]age\w*|rejuvenat\w*|de[- ]?age\w*|youthful\s+face|baby[- ]?face|plastic\s+surgery|facelift)\b/gi, "")
+    .replace(/\b(slim(?:mer)?|narrow(?:er)?|sculpt(?:ed|ing)?|refine[d]?|sharpen(?:ed)?|point(?:ed)?|v[- ]?shaped?)\s+(the\s+)?(face|jaw|jawline|chin|nose|features)\b/gi, "")
+    .replace(/\b(tighter|lift(?:ed|ing)?|contour(?:ed|ing)?)\s+(the\s+)?(jaw|jawline|face|cheeks?|chin)\b/gi, "")
+    .replace(/\b(stock\s+model|beauty\s+filter|different\s+person|new\s+face|swap(?:ped)?\s+face)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function groomingAgePromptBlock(policy: GroomingAgePolicy): string {
-  const lock = `FACE LOCK (never break — users complain when after-face is a stranger):
-- SAME person as Image 1. A parent/friend must recognize them in 1 second.
-- Keep the EXACT nose (bridge width, tip, length), jaw WIDTH and shape, chin shape, eye spacing, brow shape, lip volume, cheekbone placement, forehead height, ears.
-- Do NOT slim the face, do NOT point the chin, do NOT narrow the nose, do NOT change ethnicity, do NOT beautify into a stock model.
-- Youth = SKIN QUALITY only: slightly brighter, more even tone, less tired under-eyes, healthy glow, visible pores. NOT a new skull.`;
   if (policy === "teenKeep") {
-    return `${lock}
-AGE: teenager (~14–17). SAME apparent age as Image 1. Not a woman in her 20s, not younger/childlike. WOW = new hairstyle + healthy glow only.
-CLOTHES: modest knit/shirt/crew neck.
-CRITICAL: Ignore any "years younger" in AFTER DETAILS. Hair must still change clearly.`;
+    return `AGE: teenager. SAME apparent age as Image 1. Not a woman in her 20s, not a child. Glow only — no years-younger. Modest knit/shirt. Hair must still change clearly.`;
   }
   if (policy === "deage5mature") {
-    return `${lock}
-AGE: 60+. About 5 years FRESHER skin than Image 1 — rested, healthier — still this generation. NOT 40, NOT 35, NOT plastic surgery.
-Hair: elegant bob/lob, volume, gray blending or silver shine — not wolf, not platinum money piece.`;
+    return `AGE: 60+. Skin a bit more rested than Image 1 — still this generation, not 40, not 35, not surgery. Hair: elegant bob/lob, volume, gray blending or silver shine.`;
   }
   if (policy === "deage5") {
-    return `${lock}
-AGE: 35+. Skin looks about 5 years more rested than Image 1 (glow, less puffiness under eyes) — SAME bones. NOT 10–15 years younger, not a teen, not a different model.
-CRITICAL: Hair silhouette and/or color MUST clearly change vs Image 1. Outfit at shoulders is new. Face identity stays locked.`;
+    return `AGE: 35+ adult. Skin a bit more rested than Image 1 (glow, less tired under-eyes) — SAME bones, not 10–15 years younger, not a teen, not a model. Hair and outfit MUST clearly change.`;
   }
   if (policy === "deage2") {
-    return `${lock}
-AGE: 18–24. About 2 years fresher skin — clearer, rested, adult. NOT a child, NOT baby-face. Main wow = named new hairstyle and color.`;
+    return `AGE: 18–24 adult. Slightly clearer rested skin. Not a child, not baby-face. Wow = new named hairstyle and color.`;
   }
   if (policy === "deage3") {
-    return `${lock}
-AGE: 25–34. Skin about 3–4 years more rested than Image 1 (less tired shadows, glow). SAME adult face bones. NOT a teenager, NOT 10 years younger, NOT a different person.
-CRITICAL: Difference vs Image 1 is the HAIR + outfit + glow, not a new face.`;
+    return `AGE: 25–34 adult. Slightly less tired shadows, glow. SAME face bones. Not a teenager, not a different person. Difference = HAIR + outfit + glow.`;
   }
-  return `${lock}
-AGE from Image 1: teen = same age; 18–24 ~2y fresher skin; 25–34 ~3–4y fresher skin; 35–59 ~5y fresher skin; 60+ ~5y fresher still 60+.
-Hair must be a dramatic named change, not the same hair shinier.`;
+  return `SKIN: well-rested vs Image 1. Do not change bone structure. Hair must be a dramatic named change, not the same hair shinier.`;
+}
+
+function buildGroomingAfterPrompt(opts: {
+  lookName?: string;
+  hairColor?: string;
+  outfitNote?: string;
+  editPrompt?: string;
+  agePolicy: GroomingAgePolicy;
+  compact?: boolean;
+}): string {
+  const name = (opts.lookName || "salon cut").trim();
+  const color = (opts.hairColor || "toned").trim();
+  const outfit = (opts.outfitNote || "new elegant shoulder outfit, not the original clothes").trim();
+  const details = stripGroomingFaceMorphLanguage(sanitizeEditPrompt(opts.editPrompt || "")).slice(0, 700);
+  const core = `Edit Image 1. This is an IMAGE EDIT of the same real person — not a new generation, not a beauty-filter model.
+
+CHANGE only:
+- Haircut: ${name}
+- Hair color: ${color}
+- Finished salon styling (blowout or glass or soft waves)
+- Clothes visible at shoulders: ${outfit}
+- Soft studio light, head-and-shoulders close-up, facing camera
+
+PRESERVE from Image 1 (a close friend must recognize them in 1 second):
+- Exact nose (bridge width, tip, length), jaw WIDTH and shape, chin, eye spacing, brows, lip volume, cheeks, forehead, ears
+- Same expression as Image 1 — do not add a smile if they are not smiling
+- Freckles, moles, scars, asymmetry, ethnicity, gender
+- Do NOT slim the face, do NOT narrow the nose, do NOT point the chin, do NOT change skull shape
+
+SKIN (the only "younger"): slightly brighter, more even, less tired under-eyes, healthy glow. Pores stay. Same adult age group as Image 1.`;
+
+  if (opts.compact) {
+    return `${core}
+Hair and clothes must clearly change. Face identity stays locked.`;
+  }
+
+  return `${core}
+
+HAIR/CLOTHES DETAILS (ignore anything here about changing the face, jaw, nose, or age):
+${details || `${name}, ${color}`}
+
+${groomingAgePromptBlock(opts.agePolicy)}
+
+FINAL: same face as Image 1. New hair + new clothes + slightly rested skin only.`;
 }
 
 function groomingDefaultAfterNote(policy: GroomingAgePolicy): string {
@@ -3706,14 +3748,32 @@ updatePromoHint();
       if (!look) return res.status(404).json({ error: "Причёска не найдена" });
       const ref = await resolveImageToBase64(saved.sourceImage || look.imageClose);
       if (!ref) return res.status(409).json({ error: "Исходное фото не сохранилось. Загрузите фото ещё раз." });
-      const name = look.name || "Причёска";
-      const color = look.hairColor || "";
-      const prompt =
-        `Edit Image 1. Same person and same face. New hairstyle: ${name}. Hair color: ${color}. Professional salon photo, head and shoulders, natural skin.`;
+      const agePolicy = groomingAgePolicy(saved.analysis || saved.result || {});
+      const prompt = buildGroomingAfterPrompt({
+        lookName: look.name,
+        hairColor: look.hairColor,
+        outfitNote: look.outfitNote,
+        editPrompt: look.editPromptAfter || look.editPromptClose || look.editPrompt,
+        agePolicy,
+      });
       let image: string | null = null;
       for (let attempt = 0; attempt < 3 && !image; attempt++) {
         try {
-          image = await generateImageWithFlux(prompt, ref.base64, ref.mime, { quality: "medium" });
+          const useCompact = attempt >= 2;
+          image = await generateImageWithFlux(
+            useCompact
+              ? buildGroomingAfterPrompt({
+                  lookName: look.name,
+                  hairColor: look.hairColor,
+                  outfitNote: look.outfitNote,
+                  agePolicy,
+                  compact: true,
+                })
+              : prompt,
+            ref.base64,
+            ref.mime,
+            { quality: "medium" }
+          );
         } catch (e: any) {
           console.error("[Grooming] retry attempt", attempt + 1, e?.message);
           if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
@@ -4813,7 +4873,7 @@ updatePromoHint();
 
       const userText = `Режим: ${mode}. Рост: ${height} см. Вес: ${weight} кг.
 Проанализируй лицо: пол, возраст, ageBand (teen / under25 / 25to34 / 35plus / 60plus), овал, цветотип, состояние волос. Верни JSON для режима ${mode}.
-«После»: ТО ЖЕ лицо (нос, челюсть, глаза как на фото). Моложе = только свежее кожа, не другое лицо. 35plus ~5 лет свежее кожа; 25to34 ~3–4; under25 ~2; teen — тот же возраст.
+«После»: ТО ЖЕ лицо (нос, ширина челюсти, глаза, губы как на фото). Моложе = только свежее кожа и отдохнувший взгляд, не другое лицо, не уже челюсть, не другой нос. 35plus ~5 лет свежее кожа; 25to34 ~3–4; under25 ~2; teen — тот же возраст. В editPromptAfter не писать younger face / tighter jaw / slimmer.
 Причёска — ИМЯ из каталога (Italian bob, butterfly, hush, octopus, collarbone, 90s blowout, glass lob…). Не «чуть свои волосы».
 Цвет — рецепт из каталога, ротируй. Paid: три разных силуэта И хотя бы один светлый акцент (bronde / butter / champagne / honey / money piece), если это идёт цветотипу. Не три espresso.
 Укладка blowout или glass или soft waves. Только close-up.`;
@@ -4886,19 +4946,8 @@ updatePromoHint();
         }
       }
 
-      // Вау-кадр: новая причёска из каталога. Лицо — то же; кожа чуть свежее.
+      // Вау-кадр: новая причёска и одежда. Лицо — то же; кожа чуть свежее.
       const agePolicy = groomingAgePolicy(parsed);
-      const afterPromptWrap = (editPrompt: string, lookName = "", hairColor = "") =>
-        `Edit Image 1. Keep the SAME adult face (same nose, jaw, eyes, identity).
-Change only: haircut "${lookName || "salon cut"}", hair color "${hairColor || "toned"}", shoulder outfit, soft studio light.
-Finished styling: blowout or glass or soft waves. Skin a bit more rested, pores stay.
-Do not swap the face, do not slim the skull, do not add heavy makeup.
-Head-and-shoulders close-up, facing camera, photoreal.
-${sanitizeEditPrompt(editPrompt || "").slice(0, 900)}
-${groomingAgePromptBlock(agePolicy)}`;
-
-      const afterPromptSimple = (lookName = "", hairColor = "") =>
-        `Edit Image 1. Same person and same face. New hairstyle: ${lookName || "collarbone lob"}. Hair color: ${hairColor || "mocha gloss"}. Professional salon photo, head and shoulders, natural skin.`;
 
       const generateLookPair = async (
         look: any,
@@ -4916,9 +4965,14 @@ ${groomingAgePromptBlock(agePolicy)}`;
           let a: string | null = null;
           for (let attempt = 0; attempt < 4 && !a; attempt++) {
             try {
-              const prompt = attempt >= 2
-                ? afterPromptSimple(lookName, hairColor)
-                : afterPromptWrap(afterSrc, lookName, hairColor);
+              const prompt = buildGroomingAfterPrompt({
+                lookName,
+                hairColor,
+                outfitNote: look.outfitNote,
+                editPrompt: afterSrc,
+                agePolicy,
+                compact: attempt >= 2,
+              });
               a = await generateImageWithFlux(prompt, referenceImageBase64, mimeType, { quality: "medium" });
             } catch (genErr: any) {
               console.error("[Grooming] after image attempt", attempt + 1, genErr?.message);

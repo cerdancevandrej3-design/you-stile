@@ -42,9 +42,9 @@
 
 ПРОМПТЫ КАРТИНОК (GPT Image 2):
 editPromptAfter — английский, 70–110 слов, CHANGE / PRESERVE.
-CHANGE: named wow cut + color recipe + blowout/glass/waves + NEW clothes at shoulders + one accessory + studio + face younger per ageBand.
-PRESERVE: exact same face as Image 1, identity locked, women bare face.
-Не возвращай исходник. Без sexy/nude. Без 8k-воды.
+CHANGE: named wow cut + color recipe + blowout/glass/waves + NEW clothes at shoulders + one accessory + studio light.
+PRESERVE: exact same face as Image 1 — same nose, jaw WIDTH, chin, eyes, lips. Women: bare face. Skin slightly more rested (glow, less tired under-eyes) ONLY — never a new skull, never slimmer face, never “years younger” as a new person.
+Не возвращай исходник. Без sexy/nude. Без 8k-воды. Не пиши tighter jaw / slimmer face / younger face.
 
 afterNote: слева ваше фото, справа вау-причёска и вы чуть моложе (по возрасту). Не гарантия.
 
@@ -70,7 +70,7 @@ FREE JSON:
     "outfitNote": "новый образ у плеч",
     "afterNote": "слева вы, справа вау-причёска и вы свежее/моложе по возрасту; без гарантий",
     "masterHowTo": "Для мастера в салоне, 8–14 строк: стрижка (длина/периметр/слои/чёлка) + цвет (что не трогать, что менять, melt) + тонер/gloss + укладка. Язык мастера, без оксида в процентах.",
-    "editPromptAfter": "CHANGE: named wow haircut + color recipe + blowout or glass or soft waves + NEW clothes + accessory. Skin slightly fresher only. PRESERVE: exact same face as Image 1 — same nose, jaw, eyes. FRAMING: head-and-shoulders. Do not return original unchanged."
+    "editPromptAfter": "CHANGE: named wow haircut + color recipe + blowout or glass or soft waves + NEW clothes + accessory. Skin slightly fresher only. PRESERVE: exact same face as Image 1 — same nose, jaw WIDTH, eyes. Do not slim the face. FRAMING: head-and-shoulders. Do not return original unchanged."
   },
   "upsellTeaser": "вы уже видите разницу; в полном пакете ещё два таких кадра + уход"
 }
@@ -98,7 +98,7 @@ PAID JSON:
       "outfitNote": "новый образ",
       "afterNote": "вау-кадр и чуть моложе по возрасту",
       "masterHowTo": "техкарта для мастера: стрижка + цвет + тонер + укладка",
-      "editPromptAfter": "CHANGE: named wow cut + color + styling + clothes. Skin slightly fresher only. PRESERVE: same face as Image 1 (same nose/jaw/eyes), women bare face."
+      "editPromptAfter": "CHANGE: named wow cut + color + styling + clothes. Skin slightly fresher only. PRESERVE: same face as Image 1 (same nose, jaw WIDTH, eyes), women bare face. Do not slim the face."
     }
   ],
   "skincare": {
