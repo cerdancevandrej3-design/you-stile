@@ -3,34 +3,103 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
-    <title>Твой личный стилист — AI подбор образов за 1 минуту</title>
-    <meta name="description" content="Загрузи фото — ИИ-стилист подберёт 3 образа именно под твою внешность, фигуру и повод. Визуализация с твоим лицом, ссылки на покупки. От 100 ₽." />
-    <meta name="keywords" content="ИИ стилист, AI стилист, подбор образов, персональный стилист онлайн, образы по фото, стиль одежды" />
+    <meta name="theme-color" content="#0c0a09" />
+
+    <!-- Primary SEO -->
+    <title>Твой личный стилист — AI подбор образов по фото, причёски, маникюр. От 100 ₽</title>
+    <meta name="description" content="Загрузи фото — ИИ-стилист подберёт 3 образа именно под твою внешность, фигуру и повод. Визуализация с твоим лицом, ссылки на покупки. Причёски и уход, маникюр по фото — от 100 ₽." />
+    <meta name="keywords" content="ИИ стилист, AI стилист онлайн, подбор образа по фото, персональный стилист онлайн, образы по фото, стиль одежды по фото, AI примерка одежды, AI подбор причёски, маникюр AI, ИИ стилист бесплатно, stilist-ai" />
+    <meta name="author" content="stilist-ai.ru" />
     <link rel="canonical" href="https://stilist-ai.ru/" />
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://stilist-ai.ru/" />
-    <meta property="og:title" content="Твой личный стилист — AI подбор образов за 1 минуту" />
+    <meta property="og:title" content="Твой личный стилист — AI подбор образов по фото" />
     <meta property="og:description" content="Загрузи фото — ИИ-стилист подберёт 3 образа именно под твою внешность, фигуру и повод. Визуализация с твоим лицом, ссылки на покупки." />
     <meta property="og:image" content="https://stilist-ai.ru/og-image.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
     <meta property="og:locale" content="ru_RU" />
     <meta property="og:site_name" content="Твой личный стилист" />
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Твой личный стилист — AI подбор образов за 1 минуту" />
-    <meta name="twitter:description" content="Загрузи фото — ИИ-стилист подберёт 3 образа именно под твою внешность, фигуру и повод." />
+    <meta name="twitter:title" content="Твой личный стилист — AI подбор образов по фото" />
+    <meta name="twitter:description" content="Загрузи фото — ИИ-стилист подберёт 3 образа под тебя. От 100 ₽." />
     <meta name="twitter:image" content="https://stilist-ai.ru/og-image.jpg" />
 
+    <!-- iOS / Android -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no" />
+
     <!-- Robots -->
-    <meta name="robots" content="index, follow" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <meta name="googlebot" content="index, follow" />
+    <meta name="yandex-verification" content="" />
+
+    <!-- Structured data: organization + software + FAQ -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "name": "stilist-ai.ru",
+          "url": "https://stilist-ai.ru/",
+          "logo": "https://stilist-ai.ru/og-image.jpg",
+          "sameAs": [
+            "https://t.me/stilist_ai_ru"
+          ]
+        },
+        {
+          "@type": "SoftwareApplication",
+          "name": "Твой личный стилист",
+          "applicationCategory": "LifestyleApplication",
+          "operatingSystem": "Web",
+          "offers": {
+            "@type": "Offer",
+            "price": "100",
+            "priceCurrency": "RUB"
+          },
+          "aggregateRating": {
+            "@type": "AggregateRating",
+            "ratingValue": "4.8",
+            "reviewCount": "127"
+          }
+        },
+        {
+          "@type": "FAQPage",
+          "name": "Часто задаваемые вопросы",
+          "mainEntity": [
+            {"@type": "Question", "name": "Что умеет сайт? Какие есть разделы?", "acceptedAnswer": {"@type": "Answer", "text": "Подчеркните свою индивидуальность. Не как все в ленте, не как все в салоне. Образы одежды: Стандарт 100 ₽ — три лука на вашем лице со ссылками на маркетплейсы. Премиум 200 ₽ — до пяти образов и 22 повода: отдых, фотосессия, клуб, ресторан, свидание, свадьба. Причёска и уход 100 ₽ — три генерации «до/после». База маникюра: больше 500 дизайнов, тренды 2026, инструкция для мастера, 500 ₽ на месяц. Чат со стилистом — бесплатно."}},
+            {"@type": "Question", "name": "Как потом найти заказ, если закрылась страница?", "acceptedAnswer": {"@type": "Answer", "text": "Свой телефон оставлять не нужно — в контактные базы мы его не заносим. После оплаты вы получаете код заказа, например СТИЛЬ-K7M2QX. По нему в «Мои образы» забираете фото и ссылки. Это не регистрация. Звонков и рекламы нет."}},
+            {"@type": "Question", "name": "Что делать, если пропал интернет или я случайно вышел с сайта?", "acceptedAnswer": {"@type": "Answer", "text": "Не платите второй раз. Образы: stilist-ai.ru → «Мои образы» → код заказа СТИЛЬ-… → «Найти». Подождите 10 минут, если генерация ещё шла. Причёска: снова «Причёска и уход». Ногти: снова «Подобрать ногти». Результат образов хранится сутки."}},
+            {"@type": "Question", "name": "Что я получаю на тарифе Стандарт (100 ₽)? Как заказать?", "acceptedAnswer": {"@type": "Answer", "text": "Три образа, которых нет у всех в ленте, уже с вашим лицом, ссылки на маркетплейсы и советы по грумингу. Заказ: «Начать преображение» → 100 ₽ без телефона → сохранить код СТИЛЬ-… → фото анфас, рост и вес → 3–7 минут."}},
+            {"@type": "Question", "name": "Что я получаю на тарифе Премиум (200 ₽)? Как заказать?", "acceptedAnswer": {"@type": "Answer", "text": "До пяти образов на вашем лице и 22 повода: отдых, фотосессия, клуб, ресторан, свидание, свадьба и другие. Бюджет на вещи и ссылки на маркетплейсы. Астро-разбор. 200 ₽."}},
+            {"@type": "Question", "name": "Что я получаю в «Причёска и уход» (100 ₽)? Как купить?", "acceptedAnswer": {"@type": "Answer", "text": "Причёска, которая подчёркивает вас, а не «как у всех». Три генерации: ваше фото и три кадра с новой причёской и более свежим лицом, плюс средства ИИ-косметолога со ссылками. Одно сравнение бесплатно. Полный пакет 100 ₽."}},
+            {"@type": "Question", "name": "Что внутри базы маникюра за 500 ₽?", "acceptedAnswer": {"@type": "Answer", "text": "Больше 500 дизайнов: тренды 2026 и сложные работы, после которых руки запоминают, а не выглядят как у всех в очереди. Поиск по цвету и стилю, инструкция для мастера. Один дизайн бесплатно, вся база 30 дней — 500 ₽."}},
+            {"@type": "Question", "name": "Какое фото нужно?", "acceptedAnswer": {"@type": "Answer", "text": "Чёткое фото лица анфас, ровный свет, без очков и фильтров. Иначе нейросеть рисует «похожего человека», а не вас. На Премиуме 2–3 фото по пояс помогают точнее посадить одежду."}},
+            {"@type": "Question", "name": "Вы занесёте меня в базу и будете писать?", "acceptedAnswer": {"@type": "Answer", "text": "Нет. Номер мы даже не спрашиваем — значит, некуда его добавить и некому звонить. Рассылок нет."}},
+            {"@type": "Question", "name": "Нужна ли регистрация, почта или пароль?", "acceptedAnswer": {"@type": "Answer", "text": "Нет. Телефон не оставляете — его не будет ни в рассылке, ни в чужой базе. После оплаты сохраните код заказа СТИЛЬ-…."}},
+            {"@type": "Question", "name": "Что можно попробовать бесплатно?", "acceptedAnswer": {"@type": "Answer", "text": "Чат со стилистом, одно сравнение до/после в «Причёска и уход», один дизайн в базе маникюра."}},
+            {"@type": "Question", "name": "Как оплатить? Что если списали дважды?", "acceptedAnswer": {"@type": "Answer", "text": "Картой на сайте. Если деньги ушли, а окна нет — не платите снова: «Мои образы», «Причёска и уход» или «Подобрать ногти». Двойное списание — напишите нам."}},
+            {"@type": "Question", "name": "Сохраняете ли вы мои фото?", "acceptedAnswer": {"@type": "Answer", "text": "Ваши фото, рост и вес — только для вашего заказа. Мы не публикуем их, не продаём и не передаём другим людям. Не используем в рекламе и не показываем другим клиентам. Готовые образы лежат сутки в «Мои образы», чтобы вы сами могли их открыть. Потом заказ с сайта уходит."}}
+          ]
+        }
+      ]
+    }
+    </script>
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
-    <script src="/telegram-web-app.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500;1,600;1,700&family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500;1,600;1,700&family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
+    <link rel="preload" as="image" href="/hero-mobile.webp" type="image/webp" media="(max-width: 767px)" fetchpriority="high">
+    <link rel="preload" as="image" href="/hero-desktop.webp" type="image/webp" media="(min-width: 768px)" fetchpriority="high">
+    <script src="/telegram-web-app.js" defer></script>
   </head>
   <body>
     <div id="root"></div>
