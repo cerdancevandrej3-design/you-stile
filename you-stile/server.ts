@@ -1625,18 +1625,11 @@ loadList(1);
       const data = JSON.parse(fs.readFileSync(file, "utf-8"));
       const looks = Array.isArray(data.looks) ? data.looks : [];
       const complete = looks.length > 0 && looks.every((look: any) => !!look.image);
-      const resultDir = path.join(RESULTS_DIR, id);
-      let sourceImage: string | null = data.sourceImage || null;
-      if (!sourceImage && fs.existsSync(resultDir)) {
-        const sourceName = fs.readdirSync(resultDir).find(name => /^source_0\.(jpg|png|webp)$/i.test(name));
-        if (sourceName) sourceImage = `/api/result-image/${id}/${sourceName}`;
-      }
       res.json({
         ready: true,
         status: complete ? "ready" : (order?.status || "partial"),
         expiresAt: order?.resultExpiresAt || null,
         ...data,
-        sourceImage,
       });
     } catch {
       res.status(500).json({ error: "read failed" });
