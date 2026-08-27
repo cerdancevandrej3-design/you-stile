@@ -2356,11 +2356,11 @@ async function rewriteLastNewsPost(): Promise<{ ok: boolean; reason?: string; ti
 /** Кадр Зои: белая футболка, джинсы, хобо Saint Laurent через плечо (не на локте). */
 function zoeSaintLaurentStreetPrompt(): string {
   return withEditorialTitle(
-    `photoreal fashion magazine street style of a stylish woman in New York City: white crewneck t-shirt, medium-wash blue jeans, black Saint Laurent slouchy leather hobo bag WORN ON THE SHOULDER. ` +
-      `The thin strap sits ON THE SHOULDER, the bag hangs at the hip against the thigh. Cassandre YSL hardware readable. Walking or standing on a NYC sidewalk, full body or 3/4, cinematic daylight, real fabric. ` +
-      `CRITICAL: bag must be on the shoulder. FORBIDDEN: bag hooked on the elbow, crook of the arm, dangling from the forearm, held in the hand, clutch pose, bag on the ground. No fake celebrity likeness.`,
+    `photoreal fashion magazine street style of Zoe Kravitz in New York City: white crewneck t-shirt tucked into medium-wash blue jeans, black Saint Laurent slouchy leather hobo bag WORN ON THE SHOULDER. ` +
+      `The strap sits ON HER SHOULDER, the bag hangs at her hip against the thigh. Cassandre YSL hardware readable. Dark sunglasses, hair in a bun, gold hoop earrings, walking a NYC sidewalk, 3/4 or full body, cinematic daylight, real fabric. ` +
+      `CRITICAL: bag must be on the shoulder. FORBIDDEN: bag hooked on the elbow, crook of the arm, dangling from the forearm, held in the hand, clutch pose, bag on the ground.`,
     "Saint Laurent",
-    { celebIdentity: false },
+    { celebIdentity: true, celebName: "Zoe Kravitz" },
   );
 }
 
@@ -2369,11 +2369,16 @@ async function fixLastLookPhoto(): Promise<{ ok: boolean; reason?: string; title
   const log = loadLog();
   const last = [...log.posts].reverse().find((p) => p.tgMessageId && /Мода, о которой сейчас говорят/.test(String(p.text || "")));
   if (!last) return { ok: false, reason: "no-news-post" };
-  const raw = String(last.text || "");
-  const zoe = /зои|зое|зоя|kravitz|кравиц/i.test(raw);
-  if (!zoe) return { ok: false, reason: "no-zoe-in-last-post", title: last.title };
+  const raw = `${last.title || ""} ${last.text || ""}`;
+  if (!/зои|зое|зоя|kravitz|кравиц/i.test(raw)) return { ok: false, reason: "no-zoe-in-last-post", title: last.title };
+  const names = String(last.title || "").split(/\s*·\s*/);
+  const zoeIdx = names.findIndex((n) => /зои|зое|зоя|kravitz|кравиц/i.test(n));
+  const photos = digestPhotosForLog(last);
+  const dest = (zoeIdx >= 0 && photos[zoeIdx]) || photos.find((p) => /hero-1-0|p1-/.test(p)) || "";
+  if (!dest) return { ok: false, reason: "no-zoe-photo-slot", title: last.title };
+  console.log(`[Hermes] zoe fix slot ${zoeIdx} → ${path.basename(dest)}`);
   const story: DigestStory = {
-    name: "женщина",
+    name: "Зои Кравиц",
     kicker: "белая футболка, синие джинсы, чёрная сумка-хобо через плечо",
     line:
       "white t-shirt, blue jeans, black Saint Laurent slouchy hobo bag worn on the shoulder with the strap over the shoulder and the bag hanging at the hip, Cassandre hardware, NYC street style",
@@ -2383,7 +2388,6 @@ async function fixLastLookPhoto(): Promise<{ ok: boolean; reason?: string; title
     link: "",
     source: "Harper's Bazaar",
   };
-  const dest = path.join(PUBLIC_HERMES_DIR, `${last.id}-hero-extra-c-1.jpg`);
   let okFile = "";
   for (let g = 0; g < 4 && !okFile; g++) {
     try {
@@ -2391,7 +2395,13 @@ async function fixLastLookPhoto(): Promise<{ ok: boolean; reason?: string; title
       const tryPath = path.join(PUBLIC_HERMES_DIR, `${last.id}-zoe-fix-${g}.jpg`);
       await saveGeneratedUrl(imgUrl, tryPath);
       if (await photoMatchesStory(tryPath, story)) {
-        const cropped = await cropHeroPortrait(tryPath, dest, heroCropMode(story));
+        const bak = dest.replace(/(\.[a-z0-9]+)$/i, "-elbow-bak$1");
+        try {
+          fs.copyFileSync(dest, bak);
+        } catch {
+          /* ignore */
+        }
+        const cropped = await cropHeroPortrait(tryPath, dest, "body");
         okFile = cropped;
         console.log(`[Hermes] zoe fix accepted try ${g + 1}: ${path.basename(cropped)}`);
       } else {
