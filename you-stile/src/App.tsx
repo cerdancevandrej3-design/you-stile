@@ -762,6 +762,18 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
         }),
       });
       const data = await res.json();
+      if (data.ownerFree && data.paymentId) {
+        if (data.pickupCode) {
+          savePickupCode(data.pickupCode);
+          localStorage.setItem("pending_pickup_code", data.pickupCode);
+        }
+        localStorage.setItem("pending_payment_id", data.paymentId);
+        localStorage.setItem("pending_payment_tier", outfitTier);
+        saveMyOrder({ paymentId: data.paymentId, tier: outfitTier, createdAt: Date.now() });
+        onPaid(outfitTier);
+        onClose();
+        return;
+      }
       if (data.confirmationUrl) {
         if (data.pickupCode) {
           savePickupCode(data.pickupCode);
@@ -1472,10 +1484,12 @@ const NailsQuizModal = ({
   isOpen,
   onClose,
   initialStep,
+  ownerFree = false,
 }: {
   isOpen: boolean;
   onClose: () => void;
   initialStep?: "intro" | "catalog";
+  ownerFree?: boolean;
 }) => {
   const [step, setStep] = useState<"intro" | "swipe" | "result" | "catalog">("intro");
   const [pool, setPool] = useState<NailRecord[]>([]);
@@ -1499,9 +1513,20 @@ const NailsQuizModal = ({
   const [detailNail, setDetailNail] = useState<NailRecord | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const hasAccess = !!access?.token;
+  const hasAccess = !!access?.token || ownerFree;
 
   const refreshAccess = async () => {
+    if (ownerFree) {
+      try {
+        const r = await fetch("/api/nails/access");
+        const d = await r.json();
+        if (d.allowed) {
+          const next: NailsAccessState = { token: d.token || "owner", kind: "month", expiresAt: d.expiresAt || null };
+          setAccess(next);
+          return next;
+        }
+      } catch {}
+    }
     const local = loadNailsAccess();
     if (!local) {
       setAccess(null);
@@ -1764,6 +1789,24 @@ const NailsQuizModal = ({
         body: JSON.stringify({ tier: "nails_month" }),
       });
       const d = await r.json();
+      if (d.ownerFree) {
+        if (d.nailsToken) {
+          saveNailsAccess({ token: d.nailsToken, kind: "month", expiresAt: d.expiresAt || null });
+          setAccess({ token: d.nailsToken, kind: "month", expiresAt: d.expiresAt || null });
+        }
+        setPromoMsg(null);
+        setLoading(true);
+        try {
+          const data = await loadPool();
+          setPool(data);
+          setStep("catalog");
+        } catch (e: any) {
+          setError(e.message || "Ошибка загрузки каталога");
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
       if (d.error || !d.confirmationUrl) {
         setPromoMsg(d.error || "Не удалось создать оплату");
         return;
@@ -4136,6 +4179,7 @@ export default function App() {
   const [activeOrderId, setActiveOrderId] = useState(() => localStorage.getItem("pending_payment_id") || "");
   const [userName, setUserName] = useState(getSavedName);
   const [prices, setPrices] = useState({ standard: 100, premium: 200, nailsMonth: NAILS_MONTH_PRICE_RUB, grooming: 100 });
+  const [ownerFree, setOwnerFree] = useState(false);
   const [recoveredResult, setRecoveredResult] = useState<any>(null);
   const [showProcessing, setShowProcessing] = useState(false);
   const processingDismissedRef = useRef(false);
@@ -4205,8 +4249,18 @@ export default function App() {
     }
   }, []);
 
-  // Загружаем цены с сервера
   useEffect(() => {
+    const pin = new URLSearchParams(window.location.search).get("pin");
+    if (pin) {
+      fetch("/api/admin-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin }),
+      })
+        .then((r) => r.json())
+        .then((d) => { if (d?.ok || d?.ownerFree) setOwnerFree(true); })
+        .catch(() => {});
+    }
     fetch("/api/prices")
       .then(r => r.json())
       .then(d => {
@@ -4218,6 +4272,7 @@ export default function App() {
             grooming: Number.isFinite(d.grooming) ? d.grooming : 100,
           });
         }
+        if (d.ownerFree) setOwnerFree(true);
       })
       .catch(() => {});
   }, []);
@@ -4347,9 +4402,9 @@ export default function App() {
   const [selectedPricingTier, setSelectedPricingTier] = useState<Tier>("standard");
 
   const openModal = (tier?: PricingSelection) => {
-    // Ногти — только через «Подобрать ногти», не смешиваем с образами
     if (tier === "nails_month") {
-      setNailsInitialStep("intro");
+      if (ownerFree) setNailsInitialStep("catalog");
+      else setNailsInitialStep("intro");
       setIsNailsQuizOpen(true);
       return;
     }
@@ -4359,6 +4414,34 @@ export default function App() {
       return;
     }
     const t: Tier = tier === "premium" ? "premium" : "standard";
+    if (ownerFree) {
+      (async () => {
+        try {
+          const res = await fetch("/api/create-payment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              tier: t,
+              visitorId: getOrCreateVisitorId(),
+              userName: getSavedName() || "",
+            }),
+          });
+          const data = await res.json();
+          if (data.ownerFree && data.paymentId) {
+            if (data.pickupCode) savePickupCode(data.pickupCode);
+            localStorage.setItem("pending_payment_id", data.paymentId);
+            localStorage.setItem("pending_payment_tier", t);
+            saveMyOrder({ paymentId: data.paymentId, tier: t, createdAt: Date.now() });
+            setActiveOrderId(data.paymentId);
+            handlePaid(t);
+            return;
+          }
+        } catch {}
+        setSelectedPricingTier(t);
+        setIsPricingOpen(true);
+      })();
+      return;
+    }
     setSelectedPricingTier(t);
     setIsPricingOpen(true);
   };
@@ -4562,6 +4645,7 @@ export default function App() {
       <NailsQuizModal
         isOpen={isNailsQuizOpen}
         initialStep={nailsInitialStep}
+        ownerFree={ownerFree}
         onClose={() => { setIsNailsQuizOpen(false); setNailsInitialStep("intro"); }}
       />
       <GroomingModal
@@ -4569,6 +4653,7 @@ export default function App() {
         onClose={() => setIsGroomingOpen(false)}
         price={prices.grooming}
         paymentId={groomingPaymentId || undefined}
+        ownerFree={ownerFree}
         onToast={(msg, type) => setToast({ message: msg, type })}
         onOpenLightbox={setLightbox}
       />
@@ -4782,7 +4867,7 @@ export default function App() {
                 Причёска и уход
               </button>
               <button
-                onClick={() => { trackClick("nails"); setIsNailsQuizOpen(true); }}
+                onClick={() => { trackClick("nails"); if (ownerFree) setNailsInitialStep("catalog"); setIsNailsQuizOpen(true); }}
                 className="bg-gold text-charcoal px-8 py-3 sm:py-4 rounded-full text-base font-semibold hover:bg-gold/90 transition-all flex items-center justify-center gap-2 group"
               >
                 <Heart className="w-4 h-4 fill-charcoal/20 group-hover:scale-110 transition-transform" />

@@ -170,6 +170,17 @@ export function createNailsSubscription(
     });
 
     app.get("/api/nails/access", (req: Request, res: Response) => {
+      if (allowAdmin(req)) {
+        return res.json({
+          allowed: true,
+          token: "owner",
+          kind: "month",
+          expiresAt: null,
+          canBrowseCatalog: true,
+          canSeeMasterGuide: true,
+          ownerFree: true,
+        });
+      }
       const entry = resolveAccess(req.query.token);
       if (!entry) return res.json({ allowed: false, reason: "invalid_or_expired" });
       res.json(publicAccessView(entry));
@@ -289,7 +300,7 @@ export function createNailsSubscription(
     /** Full master guide for one design — requires valid access token. */
     app.get("/api/nails/guide", (req: Request, res: Response) => {
       const entry = resolveAccess(req.query.token);
-      if (!entry) return res.status(403).json({ error: "access_denied" });
+      if (!entry && !allowAdmin(req)) return res.status(403).json({ error: "access_denied" });
       const filename = String(req.query.filename || "").trim();
       if (!filename) return res.status(400).json({ error: "filename_required" });
       const item = loadCatalogRaw().find((c) => c?.filename === filename);
@@ -307,7 +318,7 @@ export function createNailsSubscription(
     /** Batch guides for top-3 etc. */
     app.post("/api/nails/guides", (req: Request, res: Response) => {
       const entry = resolveAccess(req.body?.token);
-      if (!entry) return res.status(403).json({ error: "access_denied" });
+      if (!entry && !allowAdmin(req)) return res.status(403).json({ error: "access_denied" });
       const filenames: string[] = Array.isArray(req.body?.filenames) ? req.body.filenames.map(String) : [];
       const catalog = loadCatalogRaw();
       const byName = new Map(catalog.map((c) => [c.filename, c]));
@@ -322,7 +333,7 @@ export function createNailsSubscription(
           techniques: Array.isArray(item.techniques) ? item.techniques : [],
         };
       }
-      res.json({ guides, kind: entry.kind, expiresAt: entry.expiresAt });
+      res.json({ guides, kind: entry?.kind || "month", expiresAt: entry?.expiresAt || null });
     });
   }
 

@@ -514,12 +514,53 @@ function adminSessionToken(): string {
 function isAdminRequest(req: Request): boolean {
   if (!ADMIN_PIN || !ADMIN_KEY) return false;
   const token = adminSessionToken();
-  const cookie = parseCookies(req).ys_admin || "";
+  const cookies = parseCookies(req);
+  const cookie = cookies.ys_admin || cookies.ys_owner || "";
   if (token && cookie && cookie.length === token.length && crypto.timingSafeEqual(Buffer.from(cookie), Buffer.from(token))) {
     return true;
   }
   const provided = String(req.body?.secret || req.query.secret || "").trim();
   return !!provided && provided === ADMIN_KEY;
+}
+
+const OWNER_IPS_FILE = path.join(PROJECT_ROOT, "data", "owner-ips.json");
+function clientIp(req: Request): string {
+  const xf = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  const xr = String(req.headers["x-real-ip"] || "").trim();
+  const sock = String(req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+  return xf || xr || sock || "";
+}
+function loadOwnerIps(): string[] {
+  try {
+    if (fs.existsSync(OWNER_IPS_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(OWNER_IPS_FILE, "utf-8"));
+      return Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+    }
+  } catch {}
+  return [];
+}
+function rememberOwnerIp(ip: string) {
+  const clean = String(ip || "").trim();
+  if (!clean || clean === "127.0.0.1" || clean === "::1" || clean === "localhost") return;
+  const list = loadOwnerIps();
+  if (list.includes(clean)) return;
+  list.push(clean);
+  writeJsonAtomic(OWNER_IPS_FILE, list);
+}
+function isOwnerRequest(req: Request): boolean {
+  if (isAdminRequest(req)) return true;
+  const ip = clientIp(req);
+  return !!ip && loadOwnerIps().includes(ip);
+}
+function ownerCookieHeaders(req: Request): string[] {
+  const token = adminSessionToken();
+  if (!token) return [];
+  const secure = req.secure || req.headers["x-forwarded-proto"] === "https";
+  const base = `HttpOnly; SameSite=Lax; Path=/; Max-Age=${400 * 86400}${secure ? "; Secure" : ""}`;
+  return [
+    `ys_admin=${token}; ${base}`,
+    `ys_owner=${token}; ${base}`,
+  ];
 }
 
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
@@ -569,17 +610,104 @@ function saveGroomingResult(jobId: string, payload: Record<string, unknown>) {
   const id = sanitizeOrderId(jobId);
   if (!id) return;
   try {
-    const paid = String(payload.mode || "") === "paid";
+    const prev = readGroomingResult(id) || {};
+    const mode = String(payload.mode || prev.mode || "");
+    const paid = mode === "paid";
     const ttl = paid ? RESULTS_TTL_PAID_MS : GROOMING_RESULTS_TTL_MS;
-    writeJsonAtomic(groomingResultPath(id), {
-      ...payload,
-      jobId: id,
-      updatedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + ttl).toISOString(),
-    });
+    const merged: Record<string, unknown> = { ...prev, ...payload, mode, jobId: id };
+    if (prev.analysis && payload.analysis && typeof payload.analysis === "object") {
+      merged.analysis = { ...prev.analysis, ...(payload.analysis as Record<string, unknown>) };
+    }
+    if (Array.isArray(prev.draftLooks) && !payload.draftLooks) {
+      merged.draftLooks = prev.draftLooks;
+    }
+    if (prev.result && !payload.result) merged.result = prev.result;
+    if (prev.sourceImage && !payload.sourceImage) merged.sourceImage = prev.sourceImage;
+    if (prev.referenceMime && !payload.referenceMime) merged.referenceMime = prev.referenceMime;
+    merged.updatedAt = new Date().toISOString();
+    merged.expiresAt = new Date(Date.now() + ttl).toISOString();
+    writeJsonAtomic(groomingResultPath(id), merged);
   } catch (e) {
     console.error("[Grooming] save result failed:", (e as Error).message);
   }
+}
+
+function groomingLookFromParsed(look: any, agePolicy: GroomingAgePolicy) {
+  return {
+    name: look?.name || "Причёска",
+    hairColor: look?.hairColor || "",
+    description: look?.description || "",
+    why: look?.why || "",
+    outfitNote: look?.outfitNote || "",
+    afterNote: look?.afterNote || groomingDefaultAfterNote(agePolicy),
+    masterHowTo: look?.masterHowTo || "",
+    editPromptAfter: look?.editPromptAfter || look?.editPromptClose || look?.editPrompt || "",
+    imageClose: null as string | null,
+    imageAfter: null as string | null,
+    imageFull: null as string | null,
+    imageError: null as string | null,
+  };
+}
+
+function mapGroomingShopProducts(list: any[], howKey: "dosage" | "howTo") {
+  return (Array.isArray(list) ? list : []).map((p: any) => {
+    const query = encodeURIComponent((p.searchQuery || `${p.brand || ""} ${p.name || ""}`).toString().trim());
+    return {
+      name: p.name || "",
+      brand: p.brand || "",
+      dosage: howKey === "dosage" ? (p.dosage || "") : undefined,
+      howTo: howKey === "howTo" ? (p.howTo || p.dosage || "") : undefined,
+      why: p.why || "",
+      searchQuery: p.searchQuery || "",
+      price: p.price || "",
+      wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${query}`,
+      ozonUrl: `https://www.ozon.ru/search/?text=${query}`,
+      ymUrl: `https://market.yandex.ru/search?text=${query}`,
+    };
+  });
+}
+
+function buildGroomingClientResult(saved: any, jobId: string) {
+  if (saved?.result) return saved.result;
+  const a = saved?.analysis || {};
+  const looks = Array.isArray(saved?.draftLooks) ? saved.draftLooks : [];
+  if (saved?.mode === "free") {
+    return {
+      type: "result",
+      mode: "free",
+      faceShape: a.faceShape || "",
+      colorType: a.colorType || "",
+      hairStatus: a.hairStatus || "",
+      coachNote: a.coachNote || "",
+      bestLook: looks[0] || {},
+      upsellTeaser: a.upsellTeaser || "",
+      groomingPrice: GROOMING_PRICE,
+      jobId,
+    };
+  }
+  return {
+    type: "result",
+    mode: "paid",
+    coachNote: a.coachNote || "",
+    faceAnalysis: a.faceAnalysis || {},
+    looks,
+    skincare: {
+      summary: a.skincare?.summary || "",
+      amRoutine: a.skincare?.amRoutine || "",
+      pmRoutine: a.skincare?.pmRoutine || "",
+      homeHowTo: a.skincare?.homeHowTo || "",
+      products: mapGroomingShopProducts(a.skincare?.products, "dosage"),
+    },
+    makeup: a.makeup ? {
+      summary: a.makeup.summary || "",
+      dayLook: a.makeup.dayLook || "",
+      eveningLook: a.makeup.eveningLook || "",
+      placement: a.makeup.placement || "",
+      products: mapGroomingShopProducts(a.makeup.products, "howTo"),
+    } : undefined,
+    groomingPrice: GROOMING_PRICE,
+    jobId,
+  };
 }
 function cleanupOldGroomingResults(): number {
   let removed = 0;
@@ -1952,7 +2080,7 @@ async function startServer() {
   app.set("trust proxy", 1); // trust Nginx X-Forwarded-Proto
   app.use(express.json());
 
-  const nailsSub = createNailsSubscription(PROJECT_ROOT, { isAdmin: isAdminRequest });
+  const nailsSub = createNailsSubscription(PROJECT_ROOT, { isAdmin: isOwnerRequest });
   nailsSub.registerRoutes(app);
 
   // Do not expose full master guides via static catalog files.
@@ -2203,7 +2331,11 @@ img{width:100%;height:auto;display:block}
 
   // Admin page (открытый доступ)
   app.get("/api/admin", (req: Request, res: Response) => {
-    if (!isAdminRequest(req)) {
+    const pinQ = String(req.query.pin || "");
+    if (!isAdminRequest(req) && ADMIN_PIN && pinQ && pinQ === ADMIN_PIN) {
+      rememberOwnerIp(clientIp(req));
+      res.setHeader("Set-Cookie", ownerCookieHeaders(req));
+    } else if (!isAdminRequest(req)) {
       return res.send(`<!DOCTYPE html>
 <html lang="ru">
 <head><meta charset="UTF-8"><title>Админка — Вход</title>
@@ -2869,14 +3001,16 @@ updatePromoHint();
 
   // Lightweight public pricing endpoint for the landing page.
   // Admin analytics are intentionally kept out of the initial page load.
-  app.get("/api/prices", (_req: Request, res: Response) => {
+  app.get("/api/prices", (req: Request, res: Response) => {
     const stats = loadStats();
-    res.setHeader("Cache-Control", "public, max-age=300");
+    const ownerFree = isOwnerRequest(req);
+    res.setHeader("Cache-Control", ownerFree ? "private, no-store" : "public, max-age=300");
     res.json({
       standard: stats.standardPrice,
       premium: stats.premiumPrice,
       nailsMonth: stats.nailsMonthPrice || NAILS_MONTH_PRICE,
       grooming: stats.groomingPrice || GROOMING_PRICE,
+      ownerFree,
     });
   });
 
@@ -3051,12 +3185,9 @@ updatePromoHint();
     if (!ADMIN_PIN || !ADMIN_KEY || String(req.body?.pin || "") !== ADMIN_PIN) {
       return res.status(403).json({ error: "wrong" });
     }
-    const secure = req.secure || req.headers["x-forwarded-proto"] === "https";
-    res.setHeader(
-      "Set-Cookie",
-      `ys_admin=${adminSessionToken()}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${7 * 86400}${secure ? "; Secure" : ""}`,
-    );
-    res.json({ ok: true });
+    rememberOwnerIp(clientIp(req));
+    res.setHeader("Set-Cookie", ownerCookieHeaders(req));
+    res.json({ ok: true, ownerFree: true });
   });
 
   app.get("/api/admin-behavior", requireAdmin, (req: Request, res: Response) => {
@@ -3093,8 +3224,8 @@ updatePromoHint();
     const paymentId = sanitizeOrderId(paymentIdRaw);
     if (!paymentId) return null;
     const existing = readOrder(paymentId);
-    // Промо-заказы (promo_*) — не ЮKassa, только локальная запись
-    if (paymentId.startsWith("promo_")) return existing;
+    // Промо и владелец ПК — не ЮKassa, только локальная запись
+    if (paymentId.startsWith("promo_") || paymentId.startsWith("owner_")) return existing;
     const canRecoverLatePayment = existing?.status === "expired" && !existing.startedAt && !existing.completedAt;
     if (existing && existing.status !== "awaiting_payment" && !canRecoverLatePayment) return existing;
     try {
@@ -3176,6 +3307,50 @@ updatePromoHint();
       const stats = loadStats();
       const isNailsMonth = tier === "nails_month";
       const isGrooming = tier === "grooming";
+      if (isOwnerRequest(req)) {
+        const paymentId = sanitizeOrderId(
+          `owner_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+        );
+        const nowIso = new Date().toISOString();
+        if (isNailsMonth) {
+          const granted = nailsSub.grantFromPayment(paymentId);
+          return res.json({
+            paymentId,
+            ownerFree: true,
+            confirmationUrl: null,
+            nailsToken: granted.token,
+            expiresAt: granted.expiresAt,
+            kind: "month",
+            days: 30,
+          });
+        }
+        if (!isGrooming) {
+          const pickupBody = createUniquePickupCode();
+          linkOrderToPickupCode(pickupBody, paymentId);
+          if (phone) linkOrderToPhone(phone, paymentId);
+          if (visitorId) ensureUserProfile(visitorId, userName);
+          saveOrder({
+            paymentId,
+            tier: tier === "premium" ? "premium" : "standard",
+            status: "awaiting_input",
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            paidAt: nowIso,
+            unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+            error: null,
+            pickupCode: displayPickupCode(pickupBody),
+            phone: phone || undefined,
+            visitorId: visitorId || undefined,
+            userName: userName || undefined,
+          });
+        }
+        return res.json({
+          paymentId,
+          ownerFree: true,
+          confirmationUrl: null,
+          pickupCode: !isNailsMonth && !isGrooming ? readOrder(paymentId)?.pickupCode : undefined,
+        });
+      }
       const amount = isNailsMonth
         ? (stats.nailsMonthPrice || NAILS_MONTH_PRICE)
         : isGrooming
@@ -3372,6 +3547,10 @@ updatePromoHint();
     try {
       const paymentId = req.query.paymentId as string;
       if (!paymentId) return res.json({ paid: false });
+      if (paymentId.startsWith("owner_") || paymentId.startsWith("promo_")) {
+        const order = readOrder(paymentId);
+        return res.json({ paid: !!order?.paidAt, tier: order?.tier || "standard", ownerFree: paymentId.startsWith("owner_") });
+      }
 
       const payment = await yooKassa.getPayment(paymentId);
       if (payment.status === "succeeded") {
@@ -3494,63 +3673,11 @@ updatePromoHint();
     if (saved.status === "ready" && saved.result) {
       return res.json({ status: "ready", jobId: id, result: saved.result });
     }
-    // Если все фото уже есть в черновике, а финальный пакет не успел уйти клиенту
     const draftLooks = Array.isArray(saved.draftLooks) ? saved.draftLooks : [];
     const looksTotal = saved.looksTotal || 0;
-    if (draftLooks.length > 0 && looksTotal > 0 && draftLooks.length >= looksTotal && saved.analysis) {
-      const a = saved.analysis;
-      const mapShopProducts = (list: any[], howKey: "dosage" | "howTo") =>
-        (Array.isArray(list) ? list : []).map((p: any) => {
-          const query = encodeURIComponent((p.searchQuery || `${p.brand || ""} ${p.name || ""}`).toString().trim());
-          return {
-            name: p.name || "",
-            brand: p.brand || "",
-            dosage: howKey === "dosage" ? (p.dosage || "") : undefined,
-            howTo: howKey === "howTo" ? (p.howTo || p.dosage || "") : undefined,
-            why: p.why || "",
-            searchQuery: p.searchQuery || "",
-            price: p.price || "",
-            wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${query}`,
-            ozonUrl: `https://www.ozon.ru/search/?text=${query}`,
-            ymUrl: `https://market.yandex.ru/search?text=${query}`,
-          };
-        });
-      const recovered =
-        saved.mode === "free"
-          ? {
-              type: "result",
-              mode: "free",
-              faceShape: a.faceShape || "",
-              colorType: a.colorType || "",
-              hairStatus: a.hairStatus || "",
-              coachNote: a.coachNote || "",
-              bestLook: draftLooks[0],
-              upsellTeaser: a.upsellTeaser || "",
-              groomingPrice: GROOMING_PRICE,
-              jobId: id,
-            }
-          : {
-              type: "result",
-              mode: "paid",
-              coachNote: a.coachNote || "",
-              faceAnalysis: a.faceAnalysis || {},
-              looks: draftLooks,
-              skincare: {
-                summary: a.skincare?.summary || "",
-                amRoutine: a.skincare?.amRoutine || "",
-                pmRoutine: a.skincare?.pmRoutine || "",
-                products: mapShopProducts(a.skincare?.products, "dosage"),
-              },
-              makeup: a.makeup ? {
-                summary: a.makeup.summary || "",
-                dayLook: a.makeup.dayLook || "",
-                eveningLook: a.makeup.eveningLook || "",
-                placement: a.makeup.placement || "",
-                products: mapShopProducts(a.makeup.products, "howTo"),
-              } : undefined,
-              groomingPrice: GROOMING_PRICE,
-              jobId: id,
-            };
+    const hasAdvice = !!(saved.analysis || saved.result);
+    if (hasAdvice && draftLooks.length > 0 && (saved.status !== "processing" || draftLooks.length >= looksTotal)) {
+      const recovered = buildGroomingClientResult(saved, id);
       saveGroomingResult(id, { status: "ready", mode: saved.mode, result: recovered, looksDone: draftLooks.length, looksTotal });
       return res.json({ status: "ready", jobId: id, result: recovered });
     }
@@ -3561,6 +3688,57 @@ updatePromoHint();
       looksDone: saved.looksDone || 0,
       looksTotal: saved.looksTotal || 0,
     });
+  });
+
+  app.post("/api/grooming-retry-image", async (req: Request, res: Response) => {
+    try {
+      const jobId = sanitizeOrderId(req.body?.jobId);
+      const lookIndex = parseInt(String(req.body?.lookIndex ?? "0"), 10);
+      if (!jobId || !Number.isInteger(lookIndex) || lookIndex < 0) {
+        return res.status(400).json({ error: "Некорректный запрос" });
+      }
+      const saved = readGroomingResult(jobId);
+      if (!saved) return res.status(404).json({ error: "Результат не найден" });
+      const looks: any[] = saved.mode === "free"
+        ? [saved.result?.bestLook || saved.draftLooks?.[0]].filter(Boolean)
+        : (saved.result?.looks || saved.draftLooks || []);
+      const look = looks[lookIndex];
+      if (!look) return res.status(404).json({ error: "Причёска не найдена" });
+      const ref = await resolveImageToBase64(saved.sourceImage || look.imageClose);
+      if (!ref) return res.status(409).json({ error: "Исходное фото не сохранилось. Загрузите фото ещё раз." });
+      const name = look.name || "Причёска";
+      const color = look.hairColor || "";
+      const prompt =
+        `Edit Image 1. Same person and same face. New hairstyle: ${name}. Hair color: ${color}. Professional salon photo, head and shoulders, natural skin.`;
+      let image: string | null = null;
+      for (let attempt = 0; attempt < 3 && !image; attempt++) {
+        try {
+          image = await generateImageWithFlux(prompt, ref.base64, ref.mime, { quality: "medium" });
+        } catch (e: any) {
+          console.error("[Grooming] retry attempt", attempt + 1, e?.message);
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        }
+      }
+      const folderId = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      const imageAfter = await persistGroomingImage(folderId, "after", image);
+      if (!imageAfter) return res.status(503).json({ error: "Не удалось создать фото «после». Попробуйте ещё раз." });
+      look.imageAfter = imageAfter;
+      look.imageError = null;
+      looks[lookIndex] = look;
+      if (saved.result) {
+        if (saved.mode === "free") saved.result.bestLook = look;
+        else saved.result.looks = looks;
+      }
+      saveGroomingResult(jobId, {
+        status: "ready",
+        mode: saved.mode,
+        result: saved.result || buildGroomingClientResult({ ...saved, draftLooks: looks }, jobId),
+        draftLooks: looks,
+      });
+      res.json({ imageAfter, look });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Ошибка повтора" });
+    }
   });
 
   // Превью товара по поисковому запросу (WB) — для карточек ухода/макияжа
@@ -3685,7 +3863,36 @@ updatePromoHint();
 
       paymentId = sanitizeOrderId(req.body.paymentId);
       const promoCodeForAccess = (req.body.promoCode || "").toString().trim().toUpperCase();
-      if (paymentId) {
+      if (!paymentId && !promoCodeForAccess && isOwnerRequest(req)) {
+        paymentId = sanitizeOrderId(
+          `owner_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+        );
+        const nowIso = new Date().toISOString();
+        const pickupBody = createUniquePickupCode();
+        linkOrderToPickupCode(pickupBody, paymentId);
+        saveOrder({
+          paymentId,
+          tier: req.body.looksCount && Number(req.body.looksCount) > 3 ? "premium" : "standard",
+          status: "processing",
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          paidAt: nowIso,
+          startedAt: nowIso,
+          unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+          error: null,
+          pickupCode: displayPickupCode(pickupBody),
+          visitorId: sanitizeVisitorId(req.body.visitorId) || undefined,
+          userName: String(req.body.userName || "").trim().slice(0, 80) || undefined,
+        });
+        activeOrderIds.add(paymentId);
+        lockedOrderId = paymentId;
+        safeWrite(JSON.stringify({
+          type: "order",
+          paymentId,
+          pickupCode: displayPickupCode(pickupBody),
+          text: "Владелец — генерация без оплаты, результат в «Мои образы».",
+        }) + "\n");
+      } else if (paymentId) {
         const paidOrder = await ensurePaidOrder(paymentId);
         if (!paidOrder?.paidAt) {
           safeWrite(JSON.stringify({ type: "error", error: "Оплата заказа не подтверждена." }) + "\n");
@@ -4537,7 +4744,7 @@ updatePromoHint();
       if (!height || !weight) return fail("Укажите рост и вес");
       if (!groomingSystemPromptTemplate) return fail("База причёсок временно недоступна", 503);
 
-      if (mode === "free") {
+      if (mode === "free" && !isOwnerRequest(req)) {
         if (!groomVisitorId) return fail("Обновите страницу и попробуйте снова", 400);
         if (hasUsedFreeGrooming(groomVisitorId)) {
           return fail("Бесплатная причёска уже использована. Полный пакет — 100 ₽ или промокод «Причёска и уход».", 402);
@@ -4546,6 +4753,9 @@ updatePromoHint();
 
       let accessViaPromo = false;
       if (mode === "paid") {
+        if (isOwnerRequest(req) || paymentId.startsWith("owner_")) {
+          accessViaPromo = true;
+        } else {
         syncPromosFromDisk();
         if (promoCode) {
           const entry = promos[promoCode];
@@ -4571,6 +4781,7 @@ updatePromoHint();
           }
         } else {
           return fail("Нужна оплата 100 ₽ или промокод «Причёска и уход»", 402);
+        }
         }
       }
 
@@ -4675,36 +4886,27 @@ updatePromoHint();
         }
       }
 
-      // Вау-кадр: новая причёска из каталога + лицо чуть моложе по возрасту (даже в 25)
+      // Вау-кадр: новая причёска из каталога. Лицо — то же; кожа чуть свежее.
       const agePolicy = groomingAgePolicy(parsed);
-      const afterPromptWrap = (editPrompt: string) =>
-        `Edit Image 1. Image 1 is a PHOTO of a REAL person — the BEFORE reference.
+      const afterPromptWrap = (editPrompt: string, lookName = "", hairColor = "") =>
+        `Edit Image 1. Keep the SAME adult face (same nose, jaw, eyes, identity).
+Change only: haircut "${lookName || "salon cut"}", hair color "${hairColor || "toned"}", shoulder outfit, soft studio light.
+Finished styling: blowout or glass or soft waves. Skin a bit more rested, pores stay.
+Do not swap the face, do not slim the skull, do not add heavy makeup.
+Head-and-shoulders close-up, facing camera, photoreal.
+${sanitizeEditPrompt(editPrompt || "").slice(0, 900)}
+${groomingAgePromptBlock(agePolicy)}`;
 
-WOW HAIR (this is the visible before/after):
-- Clearly NEW named salon cut and/or hair color vs Image 1, plus finished styling (blowout OR glass sleek OR soft waves)
-- NOT the same hair shinier. NOT flat box-dye.
-
-ALLOWED CHANGE ONLY:
-- Hairstyle, hair color/toner, clothing at shoulders + one accessory, soft studio background
-- Skin slightly fresher/more rested (glow) — pores remain
-
-FORBIDDEN:
-- Different person, face swap, celebrity, stock-model face
-- Changing nose shape, jaw width, chin pointiness, eye spacing, lip size, ethnicity
-- Slimming or reshaping the skull to look "prettier"
-
-FRAMING: head-and-shoulders CLOSE-UP, facing camera, photorealistic. Women: bare face, no makeup. Men: natural skin.
-AFTER DETAILS: ${sanitizeEditPrompt(editPrompt || "")}
-
-${groomingAgePromptBlock(agePolicy)}
-
-FINAL CHECK: if a family member would say "that's not her/him" — you failed. Same face as Image 1, new hair.`;
+      const afterPromptSimple = (lookName = "", hairColor = "") =>
+        `Edit Image 1. Same person and same face. New hairstyle: ${lookName || "collarbone lob"}. Hair color: ${hairColor || "mocha gloss"}. Professional salon photo, head and shoulders, natural skin.`;
 
       const generateLookPair = async (
         look: any,
-        opts: { stepAfter: number; textAfter: string; lookIndex: number; looksTotal: number }
+        opts: { stepAfter: number; textAfter: string; lookIndex: number; looksTotal: number; draftLooks: any[] }
       ) => {
         const afterSrc = look.editPromptAfter || look.editPromptClose || look.editPrompt || "";
+        const lookName = look.name || "Причёска";
+        const hairColor = look.hairColor || "";
         let imageClose: string | null = imageBeforeUrl;
         let imageAfter: string | null = null;
         let imageError: string | null = null;
@@ -4712,50 +4914,64 @@ FINAL CHECK: if a family member would say "that's not her/him" — you failed. S
         try {
           safeWrite(JSON.stringify({ type: "progress", jobId, step: opts.stepAfter, text: opts.textAfter }) + "\n");
           let a: string | null = null;
-          for (let attempt = 0; attempt < 3 && !a; attempt++) {
+          for (let attempt = 0; attempt < 4 && !a; attempt++) {
             try {
-              a = await generateImageWithFlux(afterPromptWrap(afterSrc), referenceImageBase64, mimeType, { quality: "medium" });
+              const prompt = attempt >= 2
+                ? afterPromptSimple(lookName, hairColor)
+                : afterPromptWrap(afterSrc, lookName, hairColor);
+              a = await generateImageWithFlux(prompt, referenceImageBase64, mimeType, { quality: "medium" });
             } catch (genErr: any) {
               console.error("[Grooming] after image attempt", attempt + 1, genErr?.message);
-              if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+              if (attempt < 3) await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
             }
           }
           imageAfter = await persistGroomingImage(folderId, "after", a);
-
           if (!imageAfter) imageError = "Не удалось создать фото «после»";
         } catch (e: any) {
           imageError = e.message || "Ошибка генерации";
         }
         const pair = {
-          name: look.name || "Причёска",
-          hairColor: look.hairColor || "",
-          description: look.description || "",
-          why: look.why || "",
-          outfitNote: look.outfitNote || "",
-          afterNote: look.afterNote || groomingDefaultAfterNote(agePolicy),
-          masterHowTo: look.masterHowTo || "",
+          ...groomingLookFromParsed(look, agePolicy),
+          name: lookName,
+          hairColor,
           imageClose,
           imageAfter,
           imageFull: null,
           imageError,
         };
+        opts.draftLooks[opts.lookIndex] = pair;
         saveGroomingResult(jobId, {
           status: "processing",
           mode,
           progressText: opts.textAfter,
-          looksDone: opts.lookIndex + 1,
+          looksDone: opts.draftLooks.filter((l) => l).length,
           looksTotal: opts.looksTotal,
-          partialLooks: undefined,
+          draftLooks: opts.draftLooks,
+          sourceImage: imageBeforeUrl,
+          referenceMime: mimeType,
         });
         return pair;
       };
 
       if (mode === "free") {
+        const draftLooks: any[] = [groomingLookFromParsed(parsed.bestLook || {}, agePolicy)];
+        draftLooks[0].imageClose = imageBeforeUrl;
+        saveGroomingResult(jobId, {
+          status: "processing",
+          mode,
+          analysis: parsed,
+          draftLooks,
+          sourceImage: imageBeforeUrl,
+          referenceMime: mimeType,
+          looksDone: 0,
+          looksTotal: 1,
+        });
         const look = await generateLookPair(parsed.bestLook || {}, {
           stepAfter: 3.0,
           textAfter: "Рисуем «после»: причёска, лучшая одежда и свежее лицо…",
           lookIndex: 0,
           looksTotal: 1,
+          draftLooks,
         });
         const freeResult = {
           type: "result" as const,
@@ -4770,9 +4986,8 @@ FINAL CHECK: if a family member would say "that's not her/him" — you failed. S
           groomingPrice: GROOMING_PRICE,
           jobId,
         };
-        saveGroomingResult(jobId, { status: "ready", mode, result: freeResult, looksDone: 1, looksTotal: 1 });
-        // Списываем бесплатную попытку только если кадр реально получился
-        if (look.imageClose || look.imageAfter) {
+        saveGroomingResult(jobId, { status: "ready", mode, result: freeResult, draftLooks, looksDone: 1, looksTotal: 1 });
+        if (!isOwnerRequest(req) && (look.imageClose || look.imageAfter)) {
           markFreeGroomingUsed(groomVisitorId);
         }
         safeWrite(JSON.stringify({ type: "progress", jobId, step: 5.0, text: "Готово! Сравните «до» и «после»." }) + "\n");
@@ -4783,62 +4998,65 @@ FINAL CHECK: if a family member would say "that's not her/him" — you failed. S
 
       const looksIn = Array.isArray(parsed.looks) ? parsed.looks.slice(0, 3) : [];
       while (looksIn.length < 3 && looksIn.length > 0) looksIn.push({ ...looksIn[0] });
-      const stepAfters = [2.2, 3.2, 4.2];
-      // Три причёски параллельно — по одному кадру «после» на каждую (слева всегда исходное фото)
-      const looks = await Promise.all(looksIn.map((look, i) => {
-        return generateLookPair(look, {
-          stepAfter: stepAfters[i] ?? 4.2,
-          textAfter: `Причёска ${i + 1}/${looksIn.length}: рисуем «после»…`,
-          lookIndex: i,
-          looksTotal: looksIn.length,
-        });
-      }));
-
+      const draftLooks = looksIn.map((l: any) => {
+        const t = groomingLookFromParsed(l, agePolicy);
+        t.imageClose = imageBeforeUrl;
+        return t;
+      });
       saveGroomingResult(jobId, {
         status: "processing",
         mode,
-        progressText: `Готово причёсок: ${looks.length}/${looksIn.length}`,
-        looksDone: looks.length,
-        looksTotal: looksIn.length,
-        draftLooks: looks,
+        progressText: "Текст причёсок и уход сохранены, рисуем фото…",
         analysis: {
+          estimatedAge: parsed.estimatedAge,
+          ageBand: parsed.ageBand,
+          faceShape: parsed.faceShape,
+          colorType: parsed.colorType,
+          hairStatus: parsed.hairStatus,
           coachNote: parsed.coachNote,
           faceAnalysis: parsed.faceAnalysis,
           skincare: parsed.skincare,
           makeup: parsed.makeup,
+          upsellTeaser: parsed.upsellTeaser,
         },
+        draftLooks,
+        sourceImage: imageBeforeUrl,
+        referenceMime: mimeType,
+        looksDone: 0,
+        looksTotal: looksIn.length,
       });
-      safeWrite(JSON.stringify({
-        type: "partial_result",
-        jobId,
-        mode: "paid",
-        looks,
-        coachNote: parsed.coachNote || "",
-      }) + "\n");
-
-      const mapShopProducts = (list: any[], howKey: "dosage" | "howTo") =>
-        (Array.isArray(list) ? list : []).map((p: any) => {
-          const query = encodeURIComponent((p.searchQuery || `${p.brand || ""} ${p.name || ""}`).toString().trim());
-          return {
-            name: p.name || "",
-            brand: p.brand || "",
-            dosage: howKey === "dosage" ? (p.dosage || "") : undefined,
-            howTo: howKey === "howTo" ? (p.howTo || p.dosage || "") : undefined,
-            why: p.why || "",
-            searchQuery: p.searchQuery || "",
-            price: p.price || "",
-            wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${query}`,
-            ozonUrl: `https://www.ozon.ru/search/?text=${query}`,
-            ymUrl: `https://market.yandex.ru/search?text=${query}`,
-          };
+      const stepAfters = [2.2, 3.2, 4.2];
+      // По очереди — так реже падает третье фото в Polza
+      const looks: any[] = [];
+      for (let i = 0; i < looksIn.length; i++) {
+        looks[i] = await generateLookPair(looksIn[i], {
+          stepAfter: stepAfters[i] ?? 4.2,
+          textAfter: `Причёска ${i + 1}/${looksIn.length}: рисуем «после»…`,
+          lookIndex: i,
+          looksTotal: looksIn.length,
+          draftLooks,
         });
+        safeWrite(JSON.stringify({
+          type: "partial_result",
+          jobId,
+          mode: "paid",
+          looks: draftLooks,
+          coachNote: parsed.coachNote || "",
+        }) + "\n");
+      }
 
-      const productsRaw = mapShopProducts(parsed.skincare?.products, "dosage");
-      const makeupProductsRaw = mapShopProducts(parsed.makeup?.products, "howTo");
+      const productsRaw = mapGroomingShopProducts(parsed.skincare?.products, "dosage");
+      const makeupProductsRaw = mapGroomingShopProducts(parsed.makeup?.products, "howTo");
 
       safeWrite(JSON.stringify({ type: "progress", jobId, step: 4.8, text: "Подбираем фото товаров для ухода…" }) + "\n");
-      const products = await enrichShopProductsWithThumbs(productsRaw);
-      const makeupProducts = await enrichShopProductsWithThumbs(makeupProductsRaw);
+      let products = productsRaw;
+      let makeupProducts = makeupProductsRaw;
+      try {
+        products = await enrichShopProductsWithThumbs(productsRaw);
+        makeupProducts = await enrichShopProductsWithThumbs(makeupProductsRaw);
+      } catch (shopErr) {
+        console.error("[Grooming] shop thumbs failed:", (shopErr as Error).message);
+      }
 
       const paidResult = {
         type: "result" as const,
@@ -4850,6 +5068,7 @@ FINAL CHECK: if a family member would say "that's not her/him" — you failed. S
           summary: parsed.skincare?.summary || "",
           amRoutine: parsed.skincare?.amRoutine || "",
           pmRoutine: parsed.skincare?.pmRoutine || "",
+          homeHowTo: parsed.skincare?.homeHowTo || "",
           products,
         },
         makeup: parsed.makeup ? {
@@ -4863,16 +5082,16 @@ FINAL CHECK: if a family member would say "that's not her/him" — you failed. S
         jobId,
       };
 
-      // Сначала на диск — потом промо и ответ клиенту (чтобы обрыв сети не терял результат)
       saveGroomingResult(jobId, {
         status: "ready",
         mode,
         result: paidResult,
+        draftLooks: looks,
         looksDone: looks.length,
         looksTotal: looksIn.length,
       });
 
-      if (accessViaPromo && promoCode) {
+      if (accessViaPromo && promoCode && !isOwnerRequest(req)) {
         try { markPromoUsed(promoCode); } catch (e) { console.error("[Promo] markPromoUsed grooming failed:", e); }
       }
 
@@ -4883,6 +5102,20 @@ FINAL CHECK: if a family member would say "that's not her/him" — you failed. S
     } catch (error) {
       console.error("Error in /api/grooming:", error);
       if (jobId) {
+        const prev = readGroomingResult(jobId);
+        const hasLooks = (Array.isArray(prev?.draftLooks) && prev.draftLooks.length > 0) || prev?.result;
+        if (hasLooks) {
+          const recovered = buildGroomingClientResult(prev, jobId);
+          saveGroomingResult(jobId, {
+            status: "ready",
+            result: recovered,
+            error: (error as Error).message || "Часть фото не создалась",
+          });
+          safeWrite(JSON.stringify({ type: "progress", jobId, step: 5.0, text: "Сохранили причёски и уход, даже если фото не все." }) + "\n");
+          safeWrite(JSON.stringify(recovered) + "\n");
+          clearInterval(heartbeat);
+          return res.end();
+        }
         saveGroomingResult(jobId, {
           status: "failed",
           error: (error as Error).message || "Ошибка подбора причёски",

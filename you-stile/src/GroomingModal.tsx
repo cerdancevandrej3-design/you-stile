@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect, ChangeEvent } from "react";
 import { createPortal } from "react-dom";
-import { X, Upload, Camera, ArrowRight, Check, Share2, Download, Sparkles } from "lucide-react";
+import { X, Upload, Camera, ArrowRight, Check, Share2, Download, Sparkles, RotateCcw } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { MasterHowTo, HomeHowTo } from "./grooming/MasterHowTo";
 
 const FREE_KEY = "grooming_free_used";
 const PAID_KEY = "grooming_payment_id";
 const JOB_KEY = "grooming_job_id";
+const LAST_JOB_KEY = "grooming_last_job_id";
 const GROOMING_MAX_MS = 30 * 60 * 1000; // 30 минут — запас на 6 кадров gpt-image
 
 const GROOMING_STAGES = [
@@ -38,6 +39,49 @@ type GroomingLook = {
   imageFull?: string | null;
   imageError?: string | null;
 };
+
+function downloadGroomingAdvice(result: any, filename = "pricheska-i-uhod.txt") {
+  const lines: string[] = ["Причёска и уход — рекомендации", ""];
+  const pushLook = (look: GroomingLook, i: number) => {
+    lines.push(`— ${i}. ${look.name || "Причёска"}`);
+    if (look.hairColor) lines.push(`Цвет: ${look.hairColor}`);
+    if (look.description) lines.push(look.description);
+    if (look.why) lines.push(`Почему вам: ${look.why}`);
+    if (look.outfitNote) lines.push(`Образ: ${look.outfitNote}`);
+    if (look.masterHowTo) lines.push("", "Для мастера:", look.masterHowTo);
+    lines.push("");
+  };
+  if (result.mode === "free") {
+    pushLook(result.bestLook, 1);
+  } else {
+    result.looks?.forEach((l, i) => pushLook(l, i + 1));
+    if (result.skincare) {
+      lines.push("Уход за лицом");
+      if (result.skincare.summary) lines.push(result.skincare.summary);
+      if (result.skincare.amRoutine) lines.push(`Утро: ${result.skincare.amRoutine}`);
+      if (result.skincare.pmRoutine) lines.push(`Вечер: ${result.skincare.pmRoutine}`);
+      result.skincare.products?.forEach((p) => {
+        lines.push(`• ${[p.brand, p.name].filter(Boolean).join(" ")}`);
+      });
+      lines.push("");
+    }
+    if (result.makeup) {
+      lines.push("Макияж / свежий вид");
+      if (result.makeup.summary) lines.push(result.makeup.summary);
+      if (result.makeup.dayLook) lines.push(`День: ${result.makeup.dayLook}`);
+      if (result.makeup.eveningLook) lines.push(`Вечер: ${result.makeup.eveningLook}`);
+    }
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 async function downloadGroomingImage(src: string, filename: string) {
   const res = await fetch(src);
@@ -467,13 +511,16 @@ function LookCard({
   onOpen,
   onToast,
   fallbackBefore,
+  onRetryAfter,
 }: {
   look: GroomingLook;
   onOpen?: (src: string) => void;
   onToast?: (msg: string, type: "success" | "error") => void;
   fallbackBefore?: string | null;
+  onRetryAfter?: () => Promise<void>;
 }) {
   const [broken, setBroken] = useState<Record<string, boolean>>({});
+  const [retrying, setRetrying] = useState(false);
   const beforeSrc = look.imageClose || fallbackBefore || "";
   const shareSrc = look.imageAfter || beforeSrc || "";
   const safeName = (look.name || "pricheska").replace(/[^\wа-яё\-]+/gi, "_").slice(0, 40);
@@ -506,10 +553,28 @@ function LookCard({
                   onError={() => setBroken((b) => ({ ...b, [slot.key]: true }))}
                 />
               ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-[11px] text-charcoal/40 p-3 text-center">
-                  {slot.key === "close"
-                    ? "Исходное фото не открылось — скачайте «После» или обновите страницу"
-                    : (look.imageError || "Фото «после» не создалось — подождите или повторите")}
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-[11px] text-charcoal/40 p-3 text-center gap-2">
+                  <span>
+                    {slot.key === "close"
+                      ? "Исходное фото не открылось — скачайте «После» или обновите страницу"
+                      : (look.imageError || "Фото «после» не создалось — подождите или повторите")}
+                  </span>
+                  {slot.key === "after" && onRetryAfter && (
+                    <button
+                      type="button"
+                      disabled={retrying}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        setRetrying(true);
+                        try { await onRetryAfter(); }
+                        finally { setRetrying(false); }
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gold text-charcoal text-[11px] font-medium disabled:opacity-50"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      {retrying ? "Рисуем…" : "Повторить фото"}
+                    </button>
+                  )}
                 </div>
               )}
               <span className="absolute bottom-2 left-2 right-2 text-left">
@@ -602,6 +667,7 @@ export function GroomingModal({
   onClose,
   price = 100,
   paymentId: paymentIdProp,
+  ownerFree = false,
   onToast,
   onOpenLightbox,
 }: {
@@ -609,6 +675,7 @@ export function GroomingModal({
   onClose: () => void;
   price?: number;
   paymentId?: string;
+  ownerFree?: boolean;
   onToast?: (msg: string, type: "success" | "error") => void;
   onOpenLightbox?: (payload: { images: { src: string; alt: string }[]; index: number }) => void;
 }) {
@@ -650,6 +717,7 @@ export function GroomingModal({
         onToast?.(bl.imageError || "Фото не создалось — нажмите бесплатно ещё раз", "error");
       }
     } else {
+      if ((data as any).jobId) localStorage.setItem(LAST_JOB_KEY, String((data as any).jobId));
       localStorage.removeItem(PAID_KEY);
       setPaidId("");
       setPromoCode("");
@@ -738,14 +806,14 @@ export function GroomingModal({
       localStorage.setItem(PAID_KEY, paymentIdProp);
       setPaidId(paymentIdProp);
       setScreen("upload");
-    } else if (stored) {
+    } else if (stored || ownerFree) {
       setScreen("upload");
     } else {
       setScreen("offer");
     }
     // Если генерация шла и окно/вкладка сбросились — продолжаем ждать результат, не показываем пустую форму
     const pendingJob = localStorage.getItem(JOB_KEY);
-    if (!pendingJob || result || loading) return;
+    if (pendingJob && !result && !loading) {
     const gen = ++openGenRef.current;
     setLoading(true);
     setLoadingState({
@@ -786,6 +854,21 @@ export function GroomingModal({
       setLoadingState(null);
       onToast?.("Результат ещё не готов. Нажмите генерацию ещё раз — если фото уже есть, они подтянутся.", "error");
     })();
+      return;
+    }
+    const lastJob = localStorage.getItem(LAST_JOB_KEY);
+    if (!lastJob || result) return;
+    const genLast = ++openGenRef.current;
+    (async () => {
+      try {
+        const r = await fetch(`/api/grooming-result/${encodeURIComponent(lastJob)}`);
+        if (!r.ok) return;
+        const json = await r.json();
+        if (json?.status === "ready" && json.result && genLast === openGenRef.current && !userDismissedRef.current) {
+          applyGroomingResult(json.result as Result, json.result.mode === "paid" ? "paid" : "free");
+        }
+      } catch {}
+    })();
   }, [isOpen, paymentIdProp]);
 
   useEffect(() => {
@@ -825,6 +908,36 @@ export function GroomingModal({
     return () => clearInterval(timer);
   }, [!!loadingState]);
 
+  const retryLookAfter = async (lookIndex: number) => {
+    const jobId = (result as any)?.jobId || localStorage.getItem(LAST_JOB_KEY) || localStorage.getItem(JOB_KEY);
+    if (!jobId) {
+      onToast?.("Нет сохранённого заказа — запустите подбор ещё раз", "error");
+      return;
+    }
+    onToast?.("Рисуем фото «после» ещё раз…", "success");
+    const r = await fetch("/api/grooming-retry-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId, lookIndex }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.imageAfter) {
+      onToast?.(d.error || "Не удалось создать фото", "error");
+      return;
+    }
+    setResult((prev) => {
+      if (!prev) return prev;
+      if (prev.mode === "free") {
+        return { ...prev, bestLook: { ...prev.bestLook, imageAfter: d.imageAfter, imageError: null } };
+      }
+      const looks = (prev.looks || []).map((look, i) =>
+        i === lookIndex ? { ...look, imageAfter: d.imageAfter, imageError: null } : look
+      );
+      return { ...prev, looks };
+    });
+    onToast?.("Фото «после» готово", "success");
+  };
+
   if (!isOpen) return null;
 
   const onPick = (e: ChangeEvent<HTMLInputElement>) => {
@@ -850,15 +963,15 @@ export function GroomingModal({
       onToast?.("Бесплатная генерация уже использована. Откройте полный пакет за 100 ₽ или введите промокод.", "error");
       return;
     }
-    if (mode === "paid" && !payId && !promo) {
+    if (mode === "paid" && !payId && !promo && !ownerFree) {
       onToast?.("Нужна оплата или промокод «Причёска и уход»", "error");
       return;
     }
     setLoading(true);
     setLoadingState({
       step: 0.5,
-      text: mode === "paid"
-        ? "Обычно 2–5 минут: 3 причёски рисуем параллельно."
+        text: mode === "paid"
+          ? "Обычно 3–8 минут: три причёски по очереди, текст сохраняем сразу."
         : "Обычно 1–2 минуты: рисуем преображение «после».",
     });
     setDisplayPercent(2);
@@ -1021,6 +1134,12 @@ export function GroomingModal({
       }
     }
   };  const startPayment = async () => {
+    if (ownerFree) {
+      setResult(null);
+      setScreen("upload");
+      onToast?.("С этого компьютера полный пакет без оплаты", "success");
+      return;
+    }
     setPaying(true);
     try {
       const res = await fetch("/api/create-payment", {
@@ -1196,7 +1315,7 @@ export function GroomingModal({
                 onClick={startPayment}
                 className="w-full py-3.5 rounded-full bg-gold text-charcoal font-semibold disabled:opacity-60"
               >
-                {paying ? "Переход к оплате…" : `Хочу выглядеть моложе — ${price} ₽`}
+                {paying ? "Переход к оплате…" : ownerFree ? "Полный пакет с этого ПК — бесплатно" : `Хочу выглядеть моложе — ${price} ₽`}
               </button>
             </div>
 
@@ -1253,7 +1372,7 @@ export function GroomingModal({
                 </button>
                 <p className="text-gold text-xs tracking-[0.2em] uppercase mb-1">Загрузка</p>
                 <h2 className="font-serif text-3xl text-charcoal mb-2">
-                  {promoApplied ? "Промокод принят" : paidId ? "Оплата прошла" : "Загрузите фото"}
+                {promoApplied ? "Промокод принят" : paidId ? "Оплата прошла" : ownerFree ? "С этого компьютера — без оплаты" : "Загрузите фото"}
                 </h2>
                 {promoApplied && (
                   <p className="text-green-700 text-sm font-medium mb-2">✓ {promoCode} — загрузите фото, укажите рост и вес</p>
@@ -1314,11 +1433,12 @@ export function GroomingModal({
                     onClick={() => {
                       if (paidId) runGrooming("paid", { payId: paidId });
                       else if (promoApplied) startWithPromo();
+                      else if (ownerFree) runGrooming("paid");
                       else runGrooming("free");
                     }}
                     className="w-full py-3.5 rounded-full bg-gold text-charcoal font-semibold flex items-center justify-center gap-2 shadow-md"
                   >
-                    {paidId || promoApplied
+                    {paidId || promoApplied || ownerFree
                       ? "Получить 3 причёски + уход"
                       : "Бесплатно: сравнение «до / после»"}
                     <ArrowRight className="w-4 h-4" />
@@ -1341,7 +1461,13 @@ export function GroomingModal({
                     {result.hairStatus && <>Волосы: <span className="text-charcoal font-medium">{result.hairStatus}</span>.</>}
                   </p>
                 )}
-                <LookCard look={result.bestLook} fallbackBefore={preview} onOpen={(src) => openImg(src, result.bestLook.name)} onToast={onToast} />
+                <LookCard
+                  look={result.bestLook}
+                  fallbackBefore={preview}
+                  onOpen={(src) => openImg(src, result.bestLook.name)}
+                  onToast={onToast}
+                  onRetryAfter={!result.bestLook?.imageAfter ? () => retryLookAfter(0) : undefined}
+                />
                 {!(result.bestLook?.imageClose || result.bestLook?.imageAfter) && (
                   <button
                     type="button"
@@ -1436,9 +1562,28 @@ export function GroomingModal({
                 )}
 
                 <div className="space-y-4">
-                  <h3 className="font-serif text-xl text-charcoal">3 причёски — сравнение кадров</h3>
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <h3 className="font-serif text-xl text-charcoal">3 причёски — сравнение кадров</h3>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        downloadGroomingAdvice(result);
+                        onToast?.("Рекомендации скачаны — даже без фото «после»", "success");
+                      }}
+                      className="text-xs font-medium px-3 py-1.5 rounded-full border border-charcoal/15 text-charcoal inline-flex items-center gap-1.5 hover:bg-charcoal/5"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Сохранить рекомендации
+                    </button>
+                  </div>
                   {result.looks?.map((look, i) => (
-                    <LookCard key={i} look={look} fallbackBefore={preview} onOpen={(src) => openImg(src, look.name)} onToast={onToast} />
+                    <LookCard
+                      key={i}
+                      look={look}
+                      fallbackBefore={preview}
+                      onOpen={(src) => openImg(src, look.name)}
+                      onToast={onToast}
+                      onRetryAfter={!look.imageAfter ? () => retryLookAfter(i) : undefined}
+                    />
                   ))}
                 </div>
 
