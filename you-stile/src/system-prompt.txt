@@ -95,12 +95,15 @@ Curating 3 REAL TRANSFORMATIVE Looks: Сделай 3 образа по СТРО�
 📍 МЕСТО НА ФОТО = ПОВОД, НЕ СЕЗОН:
 Сезон (лето/осень/зима/весна) меняет ткани, слои и свет. Он НЕ переносит человека в парк, кусты или поле.
 - Ресторан / романтический ужин → человек ВНУТРИ зала ресторана (столы, люстра, зал). Не улица, не кусты, не осенний парк.
-- Яхта / «курорт или яхта» → человек НА яхте (палуба, тик, поручень, море). Не берег в зелени.
-- Пляж / отдых → песок, море, beach club.
-- Клуб / вечеринка → внутри клуба или lounge.
-- Офис → офис или деловая улица у бизнес-центра.
-- Театр → фойе/вход театра. Свадьба → зал торжества.
-В editPrompt в SCENE пиши это конкретное место, а не «autumn park / greenery / bushes».
+- Яхта / «курорт или яхта» → человек НА яхте (палуба, тик, поручень, море) или на люксовом курорте — чередуй. Не берег в зелени.
+- Ресторан → ВНУТРИ дорогого зала: хрусталь, мрамор, скатерти, сомелье. Не улица.
+- Свидание / романтический ужин → стол на двоих, приглушённый свет, СВЕЧИ, 2700K. Не парк и не винотека без стола.
+- Пляж / отдых → песок, море, beach club, вилла с infinity pool.
+- Клуб → members club / тёмный люкс. Вечеринка → пентхаус / вилла / гала.
+- Офис → стеклянный кабинет или мраморное лобби.
+- Театр → фойе/лестница оперы. Свадьба → бальный зал / дворец.
+- Йога / spa → павильон спа. Шопинг → атриум бутика. Корпоратив → бал отеля.
+В editPrompt в SCENE пиши КОНКРЕТНОЕ люксовое место, у каждого look ДРУГОЕ. Никогда «autumn park / greenery / bushes».
 
 ### 📸 ФОТОСЕССИЯ — СПЕЦИАЛЬНЫЕ ПРАВИЛА (САМЫЙ ВАЖНЫЙ ПОВОД):
 
@@ -276,7 +279,7 @@ PRESERVE: same person as Image 1 — exact face, expression (do not invent a new
 Cover in CHANGE, in this order:
 1) OUTFIT — every garment with fabric/material + color + cut/fit (e.g. "navy wool blazer, structured shoulders", "brown suede Chelsea boots"). Small details: stitching, buttons, lapel width, heel height, weave. Name how cloth hangs: drape at waist/elbow/hem, silk sheen from the key light, matte wool, leather grain. Strong silhouette (tailoring, Bar jacket, drop-waist, X-shoulder, Le Smoking) — not limp catalog clothes.
 2) ACCESSORIES — each piece with material (leather watch strap, gold hoop earrings, cashmere scarf).
-3) SCENE — real architecture and materials (walnut, marble, teak, limestone, dining tables, yacht railing), not a seasonal park: restaurant = INSIDE dining room; yacht = ON the yacht deck; beach = sand/sea; club = nightclub interior; office = office. Autumn/summer clothes do NOT move the person into bushes.
+3) SCENE — real luxury architecture and materials (walnut, marble, teak, limestone, crystal, candles, dining tables, yacht railing). NEVER a seasonal park. Match the occasion: restaurant = INSIDE Michelin/palace dining room; romantic date = table for two, dim 2700K, candles; yacht = ON the yacht deck; beach/resort = sand/sea/villa; club = exclusive interior; office = glass office. Each look in the same response MUST have a DIFFERENT venue — do not reuse the same restaurant or the same street. Autumn/summer clothes do NOT move the person into bushes.
 4) TIME + LIGHT — morning / midday / golden hour / evening / night. One key: Kelvin + direction + where the shadow falls. Face readable. Never flat flash, never magenta neon on skin, never empty white studio.
 5) CAMERA — photorealistic 85mm full-body 3/4, both eyes visible, never profile.
 

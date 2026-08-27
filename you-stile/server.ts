@@ -9,6 +9,7 @@ import { createRequire } from "module";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import { createNailsSubscription, NAILS_MONTH_PRICE } from "./nails-subscription";
+import { pickLuxuryScenes, occasionVenueHint } from "./luxury-scenes";
 
 const require = createRequire(import.meta.url);
 const YooCheckout = require("yookassa");
@@ -245,6 +246,8 @@ type UserProfile = {
   updatedAt: string;
   orderIds: string[];
   sessions: UserSession[];
+  /** Последние id люксовых фонов — чтобы при повторной генерации антураж не повторялся. */
+  recentSceneIds?: string[];
 };
 
 function sanitizeVisitorId(value: unknown): string {
@@ -1081,112 +1084,10 @@ function seasonClimate(season?: string): string {
   return " SEASON: match the outfit layers already listed. Time of day comes from LIGHT.";
 }
 
-/** SCENE + LIGHT + TIME для GPT Image 2: место, время суток, ключ, тень. */
-function getOccasionAtmosphere(wishes: string, idx: number = 0): string {
-  const w = wishes.toLowerCase();
-  const i = idx % 3;
-  const pick = (a: string[]) => a[i];
-  if (w.includes("яхта"))
-    return pick([
-      " TIME: golden hour, late day. SCENE: ON a luxury yacht teak deck at sea, railing, superstructure, water — aboard, not on shore, not in bushes. LIGHT: warm 3000K sun from upper right 45°, long soft shadow left, sea bounce fill, catchlights.",
-      " TIME: midday. SCENE: yacht flybridge / sun deck, helm and horizon, ON the yacht. LIGHT: bright 5200K sun from above, even fill, crisp shadows on teak, face not blown out.",
-      " TIME: sunset. SCENE: yacht aft-deck lounge, white seating, ON the yacht. LIGHT: warm amber key camera-left 45°, golden water, gentle rim on hair, readable face.",
-    ]);
-  if (w.includes("горнолыжн"))
-    return pick([
-      " TIME: winter day. SCENE: alpine ski resort, snow peaks. LIGHT: crisp cold 5600K daylight, bright snow bounce under chin, sharp cool shadows.",
-      " TIME: midday on snow. SCENE: ski slope, powder. LIGHT: clear high sun, hard snow sparkle, cool blue in shade, face filled by bounce.",
-      " TIME: evening indoor. SCENE: mountain chalet, fireplace. LIGHT: 2700K fire glow camera-left, soft room fill, warm cloth sheen.",
-    ]);
-  if (w.includes("загородн") || w.includes("природ") || w.includes("пикник"))
-    return pick([
-      " TIME: daytime. SCENE: countryside meadow estate, house and lawn. LIGHT: soft 5400K daylight, open-sky fill, long soft ground shadows.",
-      " TIME: day, dappled. SCENE: estate garden path with trees, not a bush wall. LIGHT: sun through leaves, cool green ambient, soft facial shadow from the key.",
-      " TIME: golden hour. SCENE: lakeside dock. LIGHT: warm sun from right, water bounce, rim on hair, contact shadow on wood.",
-    ]);
-  if (w.includes("пляж") || w.includes("отдых на пляже") || (w.includes("курорт") && !w.includes("горнолыж")))
-    return pick([
-      " TIME: golden hour. SCENE: sandy beach by the sea, shoreline, not a city park. LIGHT: warm 3000K sun upper right, long shadow left, sand bounce under chin.",
-      " TIME: midday. SCENE: beach club, turquoise water behind. LIGHT: soft 5200K sun from above, even fill, short crisp shadows, face not harsh.",
-      " TIME: late day. SCENE: seaside pool terrace facing water, not bushes. LIGHT: warm sun from the right, water reflections, soft cloth highlights.",
-    ]);
-  if (w.includes("ресторан") || w.includes("ужин"))
-    return pick([
-      " TIME: evening indoor. SCENE: INSIDE an upscale restaurant dining room, set tables, chandelier — not outdoors, not park. LIGHT: 2800K tungsten overhead + weaker side fill, realistic indoor contrast, shadows on table linen.",
-      " TIME: night indoor. SCENE: INSIDE fine-dining room, marble table, waiter aisle. LIGHT: focused warm spotlight above-front, deep soft background, face loop-lit.",
-      " TIME: evening indoor. SCENE: INSIDE restaurant booth, lamps, guests softly out of focus. LIGHT: 2700K sconces from sides, cozy falloff, catchlights.",
-    ]);
-  if (w.includes("свидание") || w.includes("романтич"))
-    return pick([
-      " TIME: night indoor. SCENE: intimate restaurant INSIDE, candlelit, not a garden. LIGHT: 2700K candles below-front as key, soft falloff, warm cloth sheen.",
-      " TIME: evening indoor. SCENE: wine bar, brick walls. LIGHT: amber sconces from sides, soft shadow under chin, readable eyes.",
-      " TIME: night. SCENE: table for two INSIDE, city lights only through a window. LIGHT: warm interior key from the left, window as cool rim, not neon on skin.",
-    ]);
-  if (w.includes("вечеринк") || w.includes("клуб") || w.includes("ночная"))
-    return pick([
-      " TIME: night indoor. SCENE: upscale nightclub interior. LIGHT: one warm practical key above-left 45°, dim ambient, face clearly lit — no magenta/cyan wash on skin.",
-      " TIME: night. SCENE: rooftop party, skyline. LIGHT: warm string lights + soft frontal fill, city glow behind, contact shadows on floor.",
-      " TIME: night indoor. SCENE: exclusive dark lounge. LIGHT: single 2800K key above-left 45°, moody but readable face, no cyber neon.",
-    ]);
-  if (w.includes("свадьб") || w.includes("торжеств") || w.includes("выпускн"))
-    return pick([
-      " TIME: evening indoor. SCENE: grand ballroom, crystal chandeliers. LIGHT: soft 3000K overhead diffusion + 45° side accent on cloth, gold catch on fabric.",
-      " TIME: daytime ceremony. SCENE: garden venue with trees, architecture visible. LIGHT: soft daylight through leaves, cool-green ambient, soft facial shadows.",
-      " TIME: golden hour. SCENE: historic venue exterior, columns. LIGHT: warm key camera-right, long soft shadow left, stone bounce fill.",
-    ]);
-  if (w.includes("офис") || w.includes("деловая") || w.includes("бизнес"))
-    return pick([
-      " TIME: daytime indoor. SCENE: modern glass office, city through windows. LIGHT: 5500K window key camera-left 45°, weak desk-lamp fill, cool daylight on wool.",
-      " TIME: overcast day. SCENE: business district street, glass buildings. LIGHT: bright open-sky 6000K, even soft shadows on pavement and cloth.",
-      " TIME: daytime indoor. SCENE: minimalist conference room. LIGHT: soft overhead panels, clean neutral, low contrast, fabric still textured.",
-    ]);
-  if (w.includes("спорт") || w.includes("фитнес"))
-    return pick([
-      " TIME: daytime indoor. SCENE: modern premium gym. LIGHT: cool bright LEDs overhead, slight side contrast, sharp knit texture, face filled.",
-      " TIME: sunrise. SCENE: city park path. LIGHT: warm low sun from left, long soft shadows, fresh cool air look.",
-      " TIME: midday. SCENE: rooftop workout, skyline. LIGHT: clear sun from above, crisp shadows, high clarity, face not squinting-blown.",
-    ]);
-  if (w.includes("прогулк") || w.includes("кафе") || w.includes("шопинг") || w.includes("casual"))
-    return pick([
-      " TIME: morning. SCENE: European cobblestone street, stone facades. LIGHT: soft 5000K daylight upper left, natural urban color, longish morning shadows.",
-      " TIME: afternoon. SCENE: café terrace on a street, architecture behind, not a forest of bushes. LIGHT: dappled sun, warm highlights, cloth folds in shade.",
-      " TIME: golden afternoon. SCENE: city street path, buildings. LIGHT: sun from the right, soft leaf/stone shadows on ground, not a bush wall.",
-    ]);
-  if (w.includes("театр") || w.includes("выставк"))
-    return pick([
-      " TIME: evening indoor. SCENE: grand theatre lobby. LIGHT: warm chandelier overhead, gold reflections on fabric, face filled.",
-      " TIME: daytime indoor. SCENE: white-wall art gallery. LIGHT: clean museum spots from above, 5000K, sharp cloth detail.",
-      " TIME: night. SCENE: theatre entrance, marquee. LIGHT: cool marquee glow + warm frontal fill on face.",
-    ]);
-  if (w.includes("путешеств") || w.includes("самолёт"))
-    return pick([
-      " TIME: daytime indoor. SCENE: airport terminal, large windows. LIGHT: bright cool daylight from glass, soft ambient fill, cloth edges sharp.",
-      " TIME: daytime. SCENE: iconic city landmark outdoors, architecture. LIGHT: clear natural daylight, vivid but realistic color, ground shadow.",
-      " TIME: evening indoor. SCENE: boutique hotel lobby. LIGHT: warm side lamps, polished marble, gentle falloff on face.",
-    ]);
-  if (w.includes("фотосессия"))
-    return pick([
-      " TIME: late day indoor. SCENE: luxury penthouse, skyline windows. LIGHT: strong window key left 45°, soft fill right, editorial 1:3 contrast, fabric sheen from the key.",
-      " TIME: daytime. SCENE: urban street, architecture behind. LIGHT: natural daylight, slight backlight rim, realistic street color, face filled.",
-      " TIME: golden hour. SCENE: rooftop terrace, city panorama. LIGHT: warm key from right, long soft shadows, catchlights.",
-    ]);
-  if (w.includes("фестиваль") || w.includes("концерт"))
-    return pick([
-      " TIME: sunset. SCENE: outdoor festival field. LIGHT: warm low sun backlight, soft frontal fill, vivid natural color, long shadows.",
-      " TIME: night indoor. SCENE: concert venue. LIGHT: warm stage practicals + soft front fill on face — no laser grid, no cyan/magenta skin.",
-      " TIME: late day. SCENE: festival art installation outdoors. LIGHT: warm natural late-day light, saturated but realistic palette.",
-    ]);
-  if (w.includes("корпоратив"))
-    return pick([
-      " TIME: evening indoor. SCENE: corporate event venue. LIGHT: warm event wash from above, soft frontal fill, realistic cloth texture.",
-      " TIME: evening indoor. SCENE: hotel ballroom celebration. LIGHT: chandelier ambient + gentle side accent on fabric.",
-      " TIME: night. SCENE: rooftop corporate party, city view. LIGHT: evening city glow + soft warm key on face.",
-    ]);
-  return [
-    " TIME: afternoon. SCENE: European city street, stone buildings. LIGHT: warm sun from upper left, soft urban shadows, realistic color, contact shadow under feet.",
-    " TIME: daytime indoor. SCENE: modern interior, floor-to-ceiling windows. LIGHT: soft daylight from windows left, gentle indoor fill, cloth folds in shade.",
-    " TIME: golden afternoon. SCENE: city café terrace on a street, architecture behind, not a forest of bushes. LIGHT: sun from the right, soft urban shadows.",
-  ][idx % 3];
+/** SCENE + LIGHT + TIME: люксовый антураж под повод, без повторов в одной выдаче. */
+function getOccasionAtmosphere(wishes: string, idx: number = 0, salt: number = 0): string {
+  const picked = pickLuxuryScenes({ occasions: [wishes || ""], salt: salt + idx * 17 });
+  return picked.prompts[0] || "";
 }
 
 /** Промпт для GPT Image 2: CHANGE/PRESERVE, лицо с фото, лучший ракурс без профиля. */
@@ -1197,9 +1098,10 @@ function buildOutfitImagePrompt(opts: {
   lookIdx: number;
   bodyBuildInstruction?: string;
   season?: string;
+  atmosphere?: string;
 }): string {
   const gender = opts.detectedGender || "person";
-  const atmosphere = getOccasionAtmosphere(opts.wishes || "", opts.lookIdx);
+  const atmosphere = opts.atmosphere || getOccasionAtmosphere(opts.wishes || "", opts.lookIdx, Date.now());
   const seasonBlock = seasonClimate(opts.season);
   const bodyExtra = (opts.bodyBuildInstruction || "").trim();
   const isPhotoshoot = (opts.wishes || "").toLowerCase().includes("фотосессия");
@@ -1211,7 +1113,7 @@ function buildOutfitImagePrompt(opts: {
 
 CHANGE only:
 - Replace EVERY garment, shoe, bag, glasses, jewelry, scarf, and hat from Image 1 with the outfit below. Seasonal clothes fully replace old ones (a winter coat must not keep a summer cap from the photo).
-- Place the person IN the SCENE with this TIME of day/night and LIGHT. Architecture and materials (stone, walnut, teak, marble, glass) — not a park of bushes, not an empty white cyclorama.
+- Place the person IN the SCENE with this TIME of day/night and LIGHT. Architecture and materials (stone, walnut, teak, marble, glass, crystal, candles) — luxury, not a park of bushes, not an empty white cyclorama.
 - Best flattering fashion camera for THIS face: 3/4 full body, torso turned 15–25°, both eyes visible, face toward camera. Do NOT copy the selfie crop, arm pose, or awkward stance from Image 1.
 - Body may ${bodyMove}. Head stay mostly frontal — never profile, never more than ~25° head turn, never hide an eye.
 
@@ -1230,7 +1132,7 @@ CAMERA:
 
 LIGHT, SHADOW, CLOTH (must read as a real photograph):
 ${atmosphere}${seasonBlock}
-LOCATION LOCK: season and time change clothes and light only — they do not move the person into park/bushes/forest unless the occasion is countryside/picnic. Restaurant/dinner = INSIDE. Yacht = ON the yacht. Beach = sand/sea. Club = inside. Office = office.
+LOCATION LOCK: follow the SCENE above exactly. Restaurant/dinner/date = INSIDE a luxury dining room (candles if romantic). Yacht = ON the yacht. Beach/resort = sand/sea/villa. Club = exclusive interior. Office = office. Do not move the person into park/bushes/forest unless the occasion is countryside/picnic.
 - One motivated key + weaker fill. Shadows fall from that key onto face, cloth, and ground (soft contact shadow under feet).
 - Fabric physics: gravity drape at waist, elbow, hem; wool absorbs light; silk/satin sheen ONLY from the KEY; leather grain; knit loops; stitching, buttons, zippers, hems sharp. Not ironed cardboard, not cheap e-commerce, not plastic CGI.
 - Face always sharp and readable in this light. Natural pores. No on-camera flash, no beauty-filter poreless skin, no mannequin, no cyberpunk neon on skin.
@@ -4224,11 +4126,19 @@ updatePromoHint();
       }
 
       // Prepare messages with image for Gemini analysis
-      const mixedOccasions = /[,;]/.test(occasionRaw) && occasionRaw.length > 24;
+      const occasionSlotsForGuide = expandOccasionList(occasionRaw);
+      const mixedOccasions = occasionSlotsForGuide.length > 1;
+      const perLookVenues = (occasionSlotsForGuide.length > 0 ? occasionSlotsForGuide : Array.from({ length: looksCount }, () => occasionRaw || wishes || "город"))
+        .slice(0, looksCount)
+        .map((name, i) => `Look ${i + 1} (${name || "повод"}): SCENE = ${occasionVenueHint(name || wishes)} — люкс, ДРУГОЕ место, чем у соседних looks.`)
+        .join("\n");
       const occasionGuide = mixedOccasions
         ? `\n\n🎯 ПОВОДЫ ПО ОБРАЗАМ (обязательно, тот же порядок, что и сезоны):\n${occasionRaw}\nКаждый look — СВОЙ повод. Не своди все образы к одному типу, если поводы разные.\n`
         : getOccasionStyleGuide(`${occasionRaw} ${wishes}`);
-      const locationLock = `\n\n📍 МЕСТО НА ФОТО важнее сезона: ресторан/ужин — внутри зала, не кусты. Яхта — на палубе. Пляж — море/песок. Клуб — внутри клуба. Осень и лето меняют одежду и свет, но не переносят человека в парк.\n`;
+      const locationLock = `\n\n📍 МЕСТО НА ФОТО важнее сезона. Всё — luxury, не парк и не кусты. У КАЖДОГО look свой антураж, не повторять фон.
+${perLookVenues}
+Ресторан = зал fine dining. Свидание / романтический ужин = стол на двоих, приглушённый свет, свечи. Яхта = НА палубе. Курорт = вилла / beach club. Осень и лето меняют одежду и свет, но не переносят человека в парк.
+В editPrompt в SCENE напиши конкретное люксовое место (мрамор, тик, хрусталь, свечи) — не «autumn park».\n`;
       const wishesBlock = wishes
         ? `\n\n🌟 ОСОБЫЕ ПОЖЕЛАНИЯ ПОЛЬЗОВАТЕЛЯ (PREMIUM — ВЫСШИЙ ПРИОРИТЕТ): "${wishes}"\n\n⚠️ КРИТИЧЕСКОЕ ПРАВИЛО ПРИ НАЛИЧИИ ПОЖЕЛАНИЙ:\nЕсли пользователь сформулировал конкретный запрос — ПОЛНОСТЬЮ ИГНОРИРУЙ структуру "офис/вечер/color-block" и стандартный список из 6 направлений. Создавай РОВНО то, что человек попросил.\n\nКонкретные сценарии:\n- "хочу образ рокера и 2 для свидания" → ровно 1 рокер + 2 свидания (НЕ офис/вечер/color-block!)\n- "три ярких на курорт" → все 3 курортных, можно оставить летние правила\n- "посоветуй макияж/причёску для X" → расширь раздел груминга в каждом образе с конкретикой под X (продукты, бренды, шаги)\n- "дай совет на первое свидание" → добавь блок "💬 Совет для свидания" в каждом образе: парфюм-нота, как зайти, что говорить, чего избегать\n- Любой другой запрос — БУКВАЛЬНО следуй пожеланию\n\nОБЯЗАТЕЛЬНЫЙ ПУНКТ ПАРФЮМ:\nЕсли пожелание касается свидания/вечера/мероприятия/стиля жизни — в каждом образе ОБЯЗАТЕЛЬНО рекомендуй парфюм (одну конкретную нишевую/премиум модель). ВАЖНО: каждый раз выбирай РАЗНЫЕ ароматы, не повторяй одни и те же. Для вдохновения — большой пул на выбор:\n\nМУЖСКИЕ/УНИСЕКС нишевые: Le Labo Santal 33, Le Labo Bergamote 22, Le Labo Rose 31, Maison Margiela Replica Jazz Club, Maison Margiela Replica By the Fireplace, Maison Margiela Replica Sailing Day, Tom Ford Tobacco Vanille, Tom Ford Oud Wood, Tom Ford Grey Vetiver, Tom Ford Neroli Portofino, Byredo Mojave Ghost, Byredo Bal d\'Afrique, Byredo Gypsy Water, Creed Aventus, Creed Silver Mountain Water, Acqua di Parma Colonia, Acqua di Parma Blu Mediterraneo, Diptyque Tam Dao, Diptyque Eau des Sens, Memo Paris Irish Leather, Parfums de Marly Layton, Parfums de Marly Percival, Initio Oud for Greatness, Initio Rehab, Nasomatto Black Afgano, Juliette Has a Gun Not a Perfume, Comme des Garçons Series 3 Incense Kyoto, Serge Lutens Ambre Sultan, Serge Lutens Chergui, Xerjoff Naxos, Xerjoff Alexandria II, Roja Dove Oligarch\n\nЖЕНСКИЕ/УНИСЕКС нишевые: Maison Francis Kurkdjian Baccarat Rouge 540, Maison Francis Kurkdjian Aqua Celestia, Maison Francis Kurkdjian À la Rose, Diptyque Philosykos, Diptyque Do Son, Diptyque Eau Rose, Chloé Atelier des Fleurs Rose Naturelle, Byredo Blanche, Byredo La Tulipe, Frederic Malle Portrait of a Lady, Frederic Malle Musc Ravageur, Frederic Malle Une Fleur de Cassie, Guerlain Spiritueuse Double Vanille, Guerlain Mon Guerlain Bloom of Rose, Penhaligon\'s Empressa, Penhaligon\'s Juniper Sling, Jo Malone Peony & Blush Suede, Jo Malone Wood Sage & Sea Salt, Jo Malone Lime Basil & Mandarin, Annick Goutal Petite Chérie, Memo Paris Inlé, Amouage Reflection Woman, Amouage Honour Woman, Serge Lutens Sa Majesté la Rose, Etat Libre d\'Orange Putain des Palaces, Comme des Garçons Wonderwood, Viktor&Rolf Flowerbomb Nectar, Narciso Rodriguez for Her Musc Noir\n\nВсегда объясняй ПОЧЕМУ этот конкретный аромат подходит к образу/ситуации/характеру человека.\n\nЕсли пожелания нет или они общие (типа "красиво") — следуй стандартной структуре офис/вечер/color-block.`
         : "";
@@ -4368,6 +4278,25 @@ updatePromoHint();
         text: `Рисуем ${looks.length} образов сразу — обычно около минуты…`,
       }) + "\n");
 
+      const occasionSlots = expandOccasionList(occasionRaw);
+      const occasionTexts = looks.map((_: any, idx: number) => occasionSlots[idx] || occasionRaw || wishes || "");
+      const luxuryPick = pickLuxuryScenes({
+        occasions: occasionTexts,
+        recentIds: userProfile?.recentSceneIds,
+        salt: Date.now() ^ Math.floor(Math.random() * 1e9),
+      });
+      if (visitorId && luxuryPick.ids.length) {
+        try {
+          const p = ensureUserProfile(visitorId);
+          if (p) {
+            p.recentSceneIds = [...luxuryPick.ids, ...(p.recentSceneIds || [])].slice(0, 48);
+            saveUserProfile(p);
+          }
+        } catch (e) {
+          console.error("[Scenes] remember failed:", (e as Error).message);
+        }
+      }
+
       // Track completed images for progress updates
       let completedImages = 0;
       const totalImages = looks.length;
@@ -4417,7 +4346,6 @@ updatePromoHint();
                   bodyBuildInstruction = `BODY: ${heightNum} cm / ${weightNum} kg, ${buildDesc}. Keep real proportions — do not slim down. Clothing fit flatters this ${buildShort} build.`;
                 }
               }
-              const occasionSlots = expandOccasionList(occasionRaw);
               const lookOccasion = occasionSlots[idx] || occasionRaw;
               const fluxPrompt = buildOutfitImagePrompt({
                 editPrompt: look.editPrompt,
@@ -4426,6 +4354,7 @@ updatePromoHint();
                 lookIdx: idx,
                 bodyBuildInstruction,
                 season: (parsedLookSeasons[idx] || detectedSeason || "").toString(),
+                atmosphere: luxuryPick.prompts[idx],
               });
               imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
               if (imageDataUrl) break;
@@ -4721,12 +4650,29 @@ updatePromoHint();
             const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
             if (Array.isArray(arr) && arr[lookIdx]) retrySeason = String(arr[lookIdx]).toLowerCase();
           } catch {}
+          const retryVisitor = sanitizeVisitorId(input.visitorId);
+          const retryProfile = retryVisitor ? readUserProfile(retryVisitor) : null;
+          const retryScene = pickLuxuryScenes({
+            occasions: [lookOccasion || wishes],
+            recentIds: retryProfile?.recentSceneIds,
+            salt: Date.now() ^ (attempt + 1) * 9973,
+          });
+          if (retryVisitor && retryScene.ids[0]) {
+            try {
+              const p = ensureUserProfile(retryVisitor);
+              if (p) {
+                p.recentSceneIds = [...retryScene.ids, ...(p.recentSceneIds || [])].slice(0, 48);
+                saveUserProfile(p);
+              }
+            } catch {}
+          }
           const fluxPrompt = buildOutfitImagePrompt({
             editPrompt,
             detectedGender: (input.detectedGender || "person").toString(),
             wishes: `${lookOccasion} ${wishes}`.trim(),
             lookIdx,
             season: retrySeason,
+            atmosphere: retryScene.prompts[0],
           });
           imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
           if (imageDataUrl) break;
