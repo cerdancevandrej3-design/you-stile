@@ -643,7 +643,7 @@ const PaymentModal = ({ isOpen, tier, onPaid, onClose }: {
 };
 
 
-const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, initialTier, prices }: {
+const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, initialTier, prices, ownerFree = false }: {
   isOpen: boolean;
   onClose: () => void;
   onPaid: (tier: Tier) => void;
@@ -651,6 +651,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
   userName?: string;
   initialTier?: Tier;
   prices?: { standard: number; premium: number; nailsMonth?: number };
+  ownerFree?: boolean;
 }) => {
   const localPrices = {
     standard: prices?.standard ?? 100,
@@ -819,6 +820,11 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
             <h2 className="text-2xl md:text-3xl font-serif text-charcoal text-center mb-6">
               Начните преображение
             </h2>
+            {ownerFree && (
+              <p className="text-center text-sm text-charcoal/70 bg-gold/15 border border-gold/30 rounded-2xl px-4 py-3 mb-6">
+                На этом компьютере оплата не нужна — выберите Стандарт или Премиум и нажмите «Начать».
+              </p>
+            )}
 
             <div className="grid sm:grid-cols-2 gap-4 mb-6">
               <button onClick={() => setSelectedTier("standard")}
@@ -861,6 +867,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
               Потребуется фото: JPG или PNG, до 20 МБ
             </p>
 
+            {!ownerFree && (
             <div className="mb-4 max-w-md mx-auto rounded-2xl border border-charcoal/10 bg-white/70 px-4 py-3">
               <p className="text-sm font-medium text-charcoal text-center mb-1">Номер не берём — и в базу не кладём</p>
               <p className="text-charcoal/55 text-xs text-center leading-relaxed">
@@ -868,12 +875,18 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
                 По нему откроете образы, если страница закроется. Без рассылок, звонков и чужих баз.
               </p>
             </div>
+            )}
 
             <button onClick={handlePay} disabled={isProcessing}
               className="w-full py-4 rounded-2xl bg-gold text-charcoal font-semibold text-lg hover:bg-gold/90 transition-colors mb-4 disabled:opacity-60">
-              {isProcessing ? "Подготовка оплаты..." : `Оплатить ${price} ₽`}
+              {isProcessing
+                ? (ownerFree ? "Открываем..." : "Подготовка оплаты...")
+                : ownerFree
+                  ? (selectedTier === "premium" ? "Начать · Премиум" : "Начать · Стандарт")
+                  : `Оплатить ${price} ₽`}
             </button>
 
+            {!ownerFree && (
             <div className="border-t border-charcoal/10 pt-4">
               <button onClick={() => setShowPromo(!showPromo)}
                 className="text-sm text-gold hover:text-gold/70 mb-2 flex items-center gap-1 mx-auto font-medium">
@@ -903,6 +916,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
               {promoStatus === "invalid" && <p className="text-red-500 text-xs text-center mt-2">Промокод не найден</p>}
               {promoStatus === "used" && <p className="text-red-500 text-xs text-center mt-2">Промокод уже использован</p>}
             </div>
+            )}
           </div>
         </motion.div>
       </motion.div>
@@ -4343,6 +4357,9 @@ export default function App() {
 
         setActiveOrderId(pendingId);
         if (order.status === "awaiting_input" && order.paid && !opened) {
+          // Старый бесплатный заказ владельца не должен сразу открывать Стандарт —
+          // пусть сначала выберут тариф.
+          if (String(pendingId).startsWith("owner_")) return;
           opened = true;
           setCurrentTier(order.tier || tier);
           setModalKey(k => k + 1);
@@ -4420,35 +4437,13 @@ export default function App() {
       setIsGroomingOpen(true);
       return;
     }
-    const t: Tier = tier === "premium" ? "premium" : "standard";
-    if (ownerFree) {
-      (async () => {
-        try {
-          const res = await fetch("/api/create-payment", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              tier: t,
-              visitorId: getOrCreateVisitorId(),
-              userName: getSavedName() || "",
-            }),
-          });
-          const data = await res.json();
-          if (data.ownerFree && data.paymentId) {
-            if (data.pickupCode) savePickupCode(data.pickupCode);
-            localStorage.setItem("pending_payment_id", data.paymentId);
-            localStorage.setItem("pending_payment_tier", t);
-            saveMyOrder({ paymentId: data.paymentId, tier: t, createdAt: Date.now() });
-            setActiveOrderId(data.paymentId);
-            handlePaid(t);
-            return;
-          }
-        } catch {}
-        setSelectedPricingTier(t);
-        setIsPricingOpen(true);
-      })();
-      return;
-    }
+    const t: Tier = tier === "premium"
+      ? "premium"
+      : tier === "standard"
+        ? "standard"
+        : ownerFree
+          ? "premium"
+          : "standard";
     setSelectedPricingTier(t);
     setIsPricingOpen(true);
   };
@@ -4632,7 +4627,7 @@ export default function App() {
         </div>
       )}
       <PricingModal
-        key={selectedPricingTier}
+        key={`${selectedPricingTier}-${ownerFree ? "owner" : "pay"}`}
         isOpen={isPricingOpen}
         onClose={() => setIsPricingOpen(false)}
         onPaid={handlePaid}
@@ -4640,6 +4635,7 @@ export default function App() {
         userName={userName}
         initialTier={selectedPricingTier}
         prices={prices}
+        ownerFree={ownerFree}
       />
       <StylizeModal key={modalKey} isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} userName={userName} tier={currentTier} orderPaymentId={activeOrderId || undefined} onToast={(msg, type) => setToast({message: msg, type})} onNewLooks={() => { setIsModalOpen(false); setTimeout(() => openModal(), 100); }} recoveredResult={recoveredResult} onRecoveredResultShown={() => setRecoveredResult(null)} onOpenLightbox={setLightbox} />
       <MyLooksModal
