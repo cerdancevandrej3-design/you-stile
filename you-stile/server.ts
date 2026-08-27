@@ -3911,6 +3911,7 @@ updatePromoHint();
     let lockedOrderId: string | null = null;
     let lockedPromoCode: string | null = null;
     let paymentId = "";
+    let stylizeTier: "standard" | "premium" = "standard";
 
     try {
       safeWrite(JSON.stringify({ type: "progress", step: 0.8, text: "Фотографии получены сервером..." }) + "\n");
@@ -3930,9 +3931,10 @@ updatePromoHint();
         const nowIso = new Date().toISOString();
         const pickupBody = createUniquePickupCode();
         linkOrderToPickupCode(pickupBody, paymentId);
+        stylizeTier = String(req.body.tier || "") === "premium" || Number(req.body.looksCount) > 3 ? "premium" : "standard";
         saveOrder({
           paymentId,
-          tier: req.body.looksCount && Number(req.body.looksCount) > 3 ? "premium" : "standard",
+          tier: stylizeTier,
           status: "processing",
           createdAt: nowIso,
           updatedAt: nowIso,
@@ -3974,6 +3976,7 @@ updatePromoHint();
         if (paidOrder.status === "processing") {
           updateOrder(paymentId, { status: "failed", error: null });
         }
+        stylizeTier = paidOrder.tier === "premium" ? "premium" : "standard";
         activeOrderIds.add(paymentId);
         lockedOrderId = paymentId;
       } else {
@@ -4003,6 +4006,7 @@ updatePromoHint();
         if (promoPhone) linkOrderToPhone(promoPhone, paymentId);
         const pickupBody = createUniquePickupCode();
         linkOrderToPickupCode(pickupBody, paymentId);
+        stylizeTier = promo.tier === "premium" ? "premium" : "standard";
         saveOrder({
           paymentId,
           tier: promo.tier,
@@ -4147,7 +4151,10 @@ updatePromoHint();
       const budgetInstruction = budgetRaw > 0
         ? `\n\n💰 БЮДЖЕТ ПОЛЬЗОВАТЕЛЯ: ${budgetRaw.toLocaleString("ru-RU")} ₽ на один образ. КРИТИЧЕСКИ ВАЖНО: сумма всех items[] в каждом образе НЕ должна превышать ${budgetRaw.toLocaleString("ru-RU")} ₽. Подбирай реальные вещи в этом ценовом диапазоне. Расставляй приоритеты: сначала ключевые вещи образа, потом аксессуары. Указывай честные цены — не занижай и не завышай.`
         : "";
-      const looksCount = Math.min(5, Math.max(1, parseInt(req.body.looksCount) || 3));
+      const requestedLooks = parseInt(String(req.body.looksCount || ""), 10);
+      const looksCount = stylizeTier === "premium"
+        ? Math.min(5, Math.max(1, Number.isFinite(requestedLooks) && requestedLooks > 0 ? requestedLooks : 5))
+        : 3;
       if (parsedLookSeasons.length > 1) {
         const forLooks = parsedLookSeasons.slice(0, looksCount);
         while (forLooks.length < looksCount) forLooks.push(forLooks[forLooks.length - 1] || "лето");
@@ -4319,6 +4326,7 @@ updatePromoHint();
       ({ greetingAndAnalysis, bodyTypeSummary, looks } = analysisData as any);
       astroReading = analysisData?.astroReading;
       looks = sanitizeLooksForGender(looks, detectedGender);
+      if (Array.isArray(looks) && looks.length > looksCount) looks = looks.slice(0, looksCount);
 
       // Fallback: искать astroReading в raw-тексте между маркерами
       if (!astroReading && analysisText) {
@@ -4353,8 +4361,12 @@ updatePromoHint();
 
       safeWrite(JSON.stringify({ type: "progress", step: 1.5, text: "Анализ и подбор гардероба завершен. Переходим к визуализации..." }) + "\n");
 
-      // Step 2: Generate images — IN PARALLEL
-      safeWrite(JSON.stringify({ type: "progress", step: 2.0, text: `Визуализация ${looks.length} образов параллельно...` }) + "\n");
+      // Step 2: все кадры сразу — Стандарт 3, Премиум до 5. Цена та же, ждать меньше.
+      safeWrite(JSON.stringify({
+        type: "progress",
+        step: 2.0,
+        text: `Рисуем ${looks.length} образов сразу — обычно около минуты…`,
+      }) + "\n");
 
       // Track completed images for progress updates
       let completedImages = 0;
@@ -4367,7 +4379,7 @@ updatePromoHint();
         if (look.editPrompt) {
           let imageDataUrl: string | null = null;
           let lastError = "";
-          for (let attempt = 0; attempt < 3; attempt++) {
+          for (let attempt = 0; attempt < 2; attempt++) {
             try {
               const heightNum = parseFloat(String(height).replace(",", "."));
               const weightNum = parseFloat(String(weight).replace(",", "."));
@@ -4420,7 +4432,7 @@ updatePromoHint();
               lastError = "No image data returned from Flux model.";
             } catch (e: any) {
               lastError = e.message;
-              if (attempt < 2) await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+              if (attempt < 1) await new Promise(r => setTimeout(r, 800));
             }
           }
           if (imageDataUrl) {
@@ -4443,7 +4455,9 @@ updatePromoHint();
         safeWrite(JSON.stringify({
           type: "progress",
           step: progressStep,
-          text: `Сгенерировано ${completedImages}/${totalImages} образов...`
+          text: completedImages >= totalImages
+            ? `Готовы все ${totalImages} образа`
+            : `Готово ${completedImages} из ${totalImages} — остальные ещё рисуются…`,
         }) + "\n");
 
         const completedLook = { ...look, image: generatedImageBase64, imageError: imageGenerationError };

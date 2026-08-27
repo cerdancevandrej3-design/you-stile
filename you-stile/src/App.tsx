@@ -2625,7 +2625,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
   ];
   const [season, setSeason] = useState<"" | SeasonValue>("");
   const [lookSeasons, setLookSeasons] = useState<("" | SeasonValue)[]>(["", "", "", "", ""]);
-  const [looksCount, setLooksCount] = useState(3);
+  const [looksCount, setLooksCount] = useState(tier === "premium" ? 5 : 3);
   const [budget, setBudget] = useState("");
   const [loadingState, setLoadingState] = useState<{ step: number; text: string } | null>(null);
   const [displayPercent, setDisplayPercent] = useState(0);
@@ -2648,9 +2648,13 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
   useEffect(() => { localStorage.setItem("you-stile-birth-year", birthYear); }, [birthYear]);
 
   useEffect(() => {
+    setLooksCount(tier === "premium" ? 5 : 3);
+  }, [tier]);
+
+  useEffect(() => {
     if (tier !== "premium") return;
     const n = Object.values(occasionCounts).reduce((a, b) => a + b, 0);
-    const slotCount = n > 0 ? Math.min(5, n) : 3;
+    const slotCount = n > 0 ? Math.min(5, n) : 5;
     setLookSeasons((prev) => {
       const fill = (season || prev.find(Boolean) || "") as "" | SeasonValue;
       if (!fill) return prev;
@@ -2849,7 +2853,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
       for (let i = 0; i < n && slots.length < 5; i++) slots.push({ label: o });
     }
     if (slots.length === 0) {
-      for (let i = 0; i < 3; i++) slots.push({ label: `Образ ${i + 1}` });
+      for (let i = 0; i < 5; i++) slots.push({ label: `Образ ${i + 1}` });
     }
     return slots;
   })();
@@ -2904,12 +2908,15 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
       formData.append("height", height);
       formData.append("weight", weight);
       const totalOccasionLooks = Object.values(occasionCounts).reduce((a, b) => a + b, 0);
-      const effectiveLooksCount = totalOccasionLooks > 0 ? totalOccasionLooks : looksCount;
+      const effectiveLooksCount = tier === "premium"
+        ? Math.min(5, Math.max(1, totalOccasionLooks || 5))
+        : 3;
       const occasionText = selectedOccasions.length > 0
         ? `Создай образы по поводам: ${selectedOccasions.map(o => `${o} — ${occasionCounts[o] || 1} образ(а)`).join(", ")}`
         : "";
       formData.append("wishes", wishes);
       formData.append("looksCount", String(effectiveLooksCount));
+      formData.append("tier", tier);
       formData.append("seasons", JSON.stringify(seasonsForLooks));
       formData.append("season", seasonsForLooks.join(","));
       if (occasionText) formData.append("occasions", occasionText);
@@ -3149,8 +3156,8 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
 
                   <p className="text-sm text-white/50 mb-6 text-center px-6 max-w-[320px] leading-relaxed">
                     {tier === "premium"
-                      ? "Генерация займёт 4–7 минут — наш стилист внимательно оценит вашу фактуру и лицо, подберёт лучшие образы под ваш повод и бюджет. Можно налить кофе или почитать новости — не закрывайте вкладку: результат появится здесь."
-                      : "Генерация займёт 2–4 минуты — стилист анализирует ваше фото и создаёт образы. Можно немного отдохнуть — не закрывайте вкладку: результат появится здесь."}
+                      ? `Рисуем ${Math.min(5, Math.max(1, Object.values(occasionCounts).reduce((a, b) => a + b, 0) || 5))} образов сразу. Обычно около минуты на фото — вкладку не закрывайте.`
+                      : "Рисуем 3 образа сразу. Обычно около минуты на фото — вкладку не закрывайте."}
                   </p>
 
                   <div className="w-full max-w-[288px] bg-white/10 rounded-full h-2.5 mb-4 overflow-hidden relative">
