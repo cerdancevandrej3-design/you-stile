@@ -1624,7 +1624,7 @@ export function GroomingModal({
         data = await pollRecover(60);
       }
       if (userDismissedRef.current || gen !== openGenRef.current) return;
-      if (!data) throw new Error("Сервер ещё не вернул результат. Не закрывайте окно и нажмите генерацию ещё раз через минуту.");
+      if (!data) throw new Error("Результат ещё не готов. Откройте «Мои образы» и нажмите «Продолжить» — оплата уже есть.");
       applyGroomingResult(data, mode);
     } catch (e: any) {
       if (userDismissedRef.current || gen !== openGenRef.current) return;
@@ -1642,7 +1642,7 @@ export function GroomingModal({
           applyGroomingResult(recovered, mode);
           return;
         }
-        onToast?.("Генерация ещё идёт. Откройте «Причёска и уход» снова через пару минут — результат подтянется.", "error");
+        onToast?.("Генерация ещё идёт. Откройте «Мои образы» — заказ там, нажмите «Продолжить». Платить снова не нужно.", "error");
       } else {
         const recoverable = /aborted|Failed to fetch|сеть|прерв|timeout|ожидания|нестабильн/i.test(errMsg);
         if (recoverable) {
@@ -1755,7 +1755,7 @@ export function GroomingModal({
               <h3 className="text-3xl font-serif mb-3 text-center tracking-wide">Создаём магию...</h3>
               <p className="text-sm text-white/50 mb-6 text-center max-w-[320px] leading-relaxed">
                 {paidId || promoCode
-                  ? "Подбираем причёски и цвет под ваше лицо. Можно немного отдохнуть — результат появится здесь."
+                  ? "Подбираем причёски. Если окно закроется — «Мои образы», код СТИЛЬ-…, «Продолжить»."
                   : "Ищем лучшую причёску и рисуем крупный план. Не закрывайте окно."}
               </p>
 
@@ -1849,6 +1849,7 @@ export function GroomingModal({
             <p className="text-charcoal/55 text-xs mb-4">
               Бесплатно — одно сравнение: слева ваше фото сейчас, справа — причёска, лучшая одежда и свежее лицо.
               Попробуете — и захотите ещё два в полном пакете.
+              Оплаченный пакет, если окно закрылось: «Мои образы», код СТИЛЬ-…, «Продолжить».
             </p>
 
             <div className="rounded-2xl bg-charcoal/5 border border-charcoal/10 p-4 mb-6 text-sm text-charcoal/80 space-y-1">
@@ -2259,7 +2260,7 @@ export function GroomingModal({
                 Выйти
               </button>
               <p className="text-[11px] text-charcoal/40 text-center mt-2 leading-relaxed">
-                «Выйти» закрывает окно и сбрасывает экран. Если связь оборвалась во время генерации — при следующем открытии результат подтянется сам.
+                Если связь оборвалась или генерации нет — не платите снова. Откройте «Мои образы», введите код СТИЛЬ-… и нажмите «Продолжить».
               </p>
             </div>
           </div>
