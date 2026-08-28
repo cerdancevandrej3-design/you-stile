@@ -4444,7 +4444,7 @@ ${perLookVenues}
         }
       }
 
-      // Step 1: Analyze with Gemini 3.5 Flash Lite
+      // Step 1: Analyze with Gemini 3.7 Flash (same model on Standard and Premium)
       safeWrite(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ фото и подбор образов с помощью AI..." }) + "\n");
 
       // Высокая температура для разнообразия образов при каждой генерации
