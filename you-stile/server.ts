@@ -1693,7 +1693,7 @@ async function callPolzaChat(options: {
 }
 
 const ANALYSIS_FALLBACK_MODELS = [
-  "google/gemini-3.5-flash",
+  "google/gemini-3.5-flash-lite",
   "google/gemini-2.5-flash",
   "z-ai/glm-5.3-flash",
 ];
