@@ -53,40 +53,7 @@ function resultMissingAfter(data: Result | null) {
   return looks.some((look) => !lookHasAfterPhoto(look));
 }
 
-function downloadGroomingAdvice(result: any, filename = "pricheska-i-uhod.txt") {
-  const lines: string[] = ["Причёска и уход — рекомендации", ""];
-  const pushLook = (look: GroomingLook, i: number) => {
-    lines.push(`— ${i}. ${look.name || "Причёска"}`);
-    if (look.hairColor) lines.push(`Цвет: ${look.hairColor}`);
-    if (look.lipColor) lines.push(`Помада: ${look.lipColor}`);
-    if (look.description) lines.push(look.description);
-    if (look.why) lines.push(`Почему вам: ${look.why}`);
-    if (look.outfitNote) lines.push(`Образ: ${look.outfitNote}`);
-    if (look.masterHowTo) lines.push("", "Для мастера:", look.masterHowTo);
-    lines.push("");
-  };
-  if (result.mode === "free") {
-    pushLook(result.bestLook, 1);
-  } else {
-    result.looks?.forEach((l, i) => pushLook(l, i + 1));
-    if (result.skincare) {
-      lines.push("Уход за лицом");
-      if (result.skincare.summary) lines.push(result.skincare.summary);
-      if (result.skincare.amRoutine) lines.push(`Утро: ${result.skincare.amRoutine}`);
-      if (result.skincare.pmRoutine) lines.push(`Вечер: ${result.skincare.pmRoutine}`);
-      result.skincare.products?.forEach((p) => {
-        lines.push(`• ${[p.brand, p.name].filter(Boolean).join(" ")}`);
-      });
-      lines.push("");
-    }
-    if (result.makeup) {
-      lines.push("Макияж / свежий вид");
-      if (result.makeup.summary) lines.push(result.makeup.summary);
-      if (result.makeup.dayLook) lines.push(`День: ${result.makeup.dayLook}`);
-      if (result.makeup.eveningLook) lines.push(`Вечер: ${result.makeup.eveningLook}`);
-    }
-  }
-  const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -95,6 +62,346 @@ function downloadGroomingAdvice(result: any, filename = "pricheska-i-uhod.txt") 
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const lines: string[] = [];
+  for (const paragraph of String(text || "").split("\n")) {
+    if (!paragraph.trim()) {
+      lines.push("");
+      continue;
+    }
+    let line = "";
+    for (const word of paragraph.split(/\s+/)) {
+      if (ctx.measureText(word).width > maxWidth) {
+        if (line) {
+          lines.push(line);
+          line = "";
+        }
+        let chunk = "";
+        for (const ch of word) {
+          const test = chunk + ch;
+          if (ctx.measureText(test).width > maxWidth && chunk) {
+            lines.push(chunk);
+            chunk = ch;
+          } else {
+            chunk = test;
+          }
+        }
+        line = chunk;
+        continue;
+      }
+      const test = line ? `${line} ${word}` : word;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
+function drawCoverPhoto(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
+  const targetRatio = w / h;
+  const srcRatio = img.width / img.height;
+  let sx = 0;
+  let sy = 0;
+  let sw = img.width;
+  let sh = img.height;
+  if (srcRatio > targetRatio) {
+    sw = img.height * targetRatio;
+    sx = (img.width - sw) / 2;
+  } else {
+    sh = img.width / targetRatio;
+    sy = (img.height - sh) / 2;
+  }
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+}
+
+async function safeLoadGroomingImg(src?: string | null): Promise<HTMLImageElement | null> {
+  if (!src) return null;
+  try {
+    return await loadGroomingImg(src);
+  } catch {
+    return null;
+  }
+}
+
+type SheetBlock = { kicker?: string; title?: string; body: string };
+
+function lookToSheetBlocks(look: GroomingLook): SheetBlock[] {
+  const blocks: SheetBlock[] = [];
+  const meta = [
+    look.hairColor ? `Цвет: ${look.hairColor}` : "",
+    look.lipColor ? `Помада: ${look.lipColor}` : "",
+  ].filter(Boolean).join("  ·  ");
+  if (meta) blocks.push({ body: meta });
+  if (look.description) blocks.push({ body: look.description });
+  if (look.why) blocks.push({ kicker: "Почему вам", body: look.why });
+  if (look.outfitNote) blocks.push({ kicker: "Образ", body: look.outfitNote });
+  if (look.masterHowTo) blocks.push({ kicker: "Для мастера в салоне", body: look.masterHowTo });
+  if (look.afterNote) blocks.push({ body: look.afterNote });
+  return blocks;
+}
+
+function careToSheetBlocks(result: any): SheetBlock[] {
+  if (!result || result.mode === "free") return [];
+  const blocks: SheetBlock[] = [];
+  if (result.coachNote) blocks.push({ title: "Заметка стилиста", body: result.coachNote });
+  const fa = result.faceAnalysis;
+  if (fa) {
+    const bits = [fa.faceShape, fa.colorType, fa.skinType, fa.eyeShape, fa.hairStatus].filter(Boolean).join(" · ");
+    const body = [fa.strengths && `Сильные стороны: ${fa.strengths}`, fa.weaknesses && `Зоны внимания: ${fa.weaknesses}`, bits]
+      .filter(Boolean)
+      .join("\n");
+    if (body) blocks.push({ title: "Разбор лица", body });
+  }
+  const sc = result.skincare;
+  if (sc) {
+    const products = (sc.products || [])
+      .map((p: any) => [p.brand, p.name].filter(Boolean).join(" "))
+      .filter(Boolean)
+      .map((n: string) => `• ${n}`)
+      .join("\n");
+    const body = [
+      sc.summary,
+      sc.amRoutine && `Утро: ${sc.amRoutine}`,
+      sc.pmRoutine && `Вечер: ${sc.pmRoutine}`,
+      sc.homeHowTo && `Дома: ${sc.homeHowTo}`,
+      products,
+    ].filter(Boolean).join("\n\n");
+    if (body) blocks.push({ title: "Уход за лицом", body });
+  }
+  const mk = result.makeup;
+  if (mk) {
+    const body = [
+      mk.summary,
+      mk.dayLook && `День: ${mk.dayLook}`,
+      mk.eveningLook && `Вечер: ${mk.eveningLook}`,
+    ].filter(Boolean).join("\n\n");
+    if (body) blocks.push({ title: "Макияж под вас", body });
+  }
+  return blocks;
+}
+
+/** JPEG «до | после» + описание — как «Сохранить образ с описанием» у образов. */
+async function renderGroomingLookSheet(opts: {
+  look: GroomingLook;
+  beforeSrc?: string | null;
+  heading?: string;
+  blocks?: SheetBlock[];
+  photos?: boolean;
+}): Promise<HTMLCanvasElement> {
+  const look = opts.look;
+  const W = 1080;
+  const PAD = 48;
+  const GAP = 12;
+  const PHOTO_W = Math.floor((W - PAD * 2 - GAP) / 2);
+  const PHOTO_H = Math.round((PHOTO_W * 4) / 3);
+  const textW = W - PAD * 2;
+  const showPhotos = opts.photos !== false;
+  const [beforeImg, afterImg] = showPhotos
+    ? await Promise.all([
+        safeLoadGroomingImg(opts.beforeSrc || look.imageClose),
+        safeLoadGroomingImg(look.imageAfter),
+      ])
+    : [null, null];
+
+  const measure = document.createElement("canvas").getContext("2d");
+  if (!measure) throw new Error("canvas");
+  const titleSize = 42;
+  const kickerSize = 20;
+  const bodySize = 26;
+  const lineGap = 1.35;
+  const heading = opts.heading || look.name || "Причёска";
+  const blocks = opts.blocks || lookToSheetBlocks(look);
+
+  measure.font = `700 ${titleSize}px serif`;
+  const titleLines = wrapCanvasText(measure, heading, textW);
+
+  type Drawn = { kind: "kicker" | "title" | "body" | "gap"; lines: string[]; size: number };
+  const drawn: Drawn[] = [];
+  for (const b of blocks) {
+    if (b.title) {
+      measure.font = `700 32px serif`;
+      drawn.push({ kind: "title", lines: wrapCanvasText(measure, b.title, textW), size: 32 });
+    }
+    if (b.kicker) {
+      measure.font = `600 ${kickerSize}px sans-serif`;
+      drawn.push({ kind: "kicker", lines: wrapCanvasText(measure, b.kicker.toUpperCase(), textW), size: kickerSize });
+    }
+    measure.font = `400 ${bodySize}px sans-serif`;
+    drawn.push({ kind: "body", lines: wrapCanvasText(measure, b.body, textW), size: bodySize });
+    drawn.push({ kind: "gap", lines: [""], size: 18 });
+  }
+
+  let textH = titleLines.length * titleSize * lineGap + 28;
+  for (const d of drawn) {
+    if (d.kind === "gap") textH += d.size;
+    else textH += d.lines.length * d.size * lineGap + 6;
+  }
+
+  const photosH = showPhotos ? PHOTO_H + 36 : 0;
+  const H = Math.ceil(PAD + photosH + textH + 56);
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas ctx");
+
+  ctx.fillStyle = "#FAF7F2";
+  ctx.fillRect(0, 0, W, H);
+
+  let y = PAD;
+  if (showPhotos) {
+    const drawSlot = (img: HTMLImageElement | null, x: number, label: string, empty: string) => {
+      ctx.fillStyle = "#1a1a1a";
+      ctx.fillRect(x, y, PHOTO_W, PHOTO_H);
+      if (img) drawCoverPhoto(ctx, img, x, y, PHOTO_W, PHOTO_H);
+      else {
+        ctx.fillStyle = "#9a958c";
+        ctx.font = "400 22px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(empty, x + PHOTO_W / 2, y + PHOTO_H / 2);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+      }
+      ctx.fillStyle = "rgba(26,26,26,0.72)";
+      ctx.font = "600 18px sans-serif";
+      const tw = ctx.measureText(label).width;
+      ctx.fillRect(x + 14, y + PHOTO_H - 42, tw + 24, 28);
+      ctx.fillStyle = "#FAF7F2";
+      ctx.textBaseline = "top";
+      ctx.fillText(label, x + 26, y + PHOTO_H - 36);
+      ctx.textBaseline = "alphabetic";
+    };
+    drawSlot(beforeImg, PAD, "ДО", "Нет фото «до»");
+    drawSlot(afterImg, PAD + PHOTO_W + GAP, "ПОСЛЕ", "Нет фото «после»");
+    y += PHOTO_H + 36;
+  }
+
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#1a1a1a";
+  ctx.font = `700 ${titleSize}px serif`;
+  for (const line of titleLines) {
+    ctx.fillText(line, PAD, y);
+    y += titleSize * lineGap;
+  }
+  y += 16;
+
+  for (const d of drawn) {
+    if (d.kind === "gap") {
+      y += d.size;
+      continue;
+    }
+    if (d.kind === "kicker") {
+      ctx.fillStyle = "#c9a84c";
+      ctx.font = `600 ${d.size}px sans-serif`;
+    } else if (d.kind === "title") {
+      ctx.fillStyle = "#1a1a1a";
+      ctx.font = `700 ${d.size}px serif`;
+    } else {
+      ctx.fillStyle = "#3a3a3a";
+      ctx.font = `400 ${d.size}px sans-serif`;
+    }
+    for (const line of d.lines) {
+      ctx.fillText(line, PAD, y);
+      y += d.size * lineGap;
+    }
+    y += 6;
+  }
+
+  ctx.fillStyle = "#c9a84c";
+  ctx.font = "600 20px sans-serif";
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "right";
+  ctx.fillText("stilist-ai.ru · Причёска и уход", W - PAD, H - 22);
+  ctx.textAlign = "left";
+  return canvas;
+}
+
+async function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Blob> {
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+  if (!blob) throw new Error("Не удалось сохранить картинку");
+  return blob;
+}
+
+async function stitchCanvases(canvases: HTMLCanvasElement[]): Promise<HTMLCanvasElement> {
+  const gap = 28;
+  const w = Math.max(...canvases.map((c) => c.width));
+  const h = canvases.reduce((sum, c) => sum + c.height, 0) + gap * Math.max(0, canvases.length - 1);
+  const out = document.createElement("canvas");
+  out.width = w;
+  out.height = Math.min(h, 16000);
+  const ctx = out.getContext("2d");
+  if (!ctx) throw new Error("canvas");
+  ctx.fillStyle = "#FAF7F2";
+  ctx.fillRect(0, 0, out.width, out.height);
+  let y = 0;
+  for (const c of canvases) {
+    if (y >= out.height) break;
+    ctx.drawImage(c, 0, y);
+    y += c.height + gap;
+    if (y < out.height && y > c.height) {
+      ctx.fillStyle = "#e8e2d6";
+      ctx.fillRect(0, y - gap, w, gap);
+    }
+  }
+  return out;
+}
+
+async function downloadGroomingLookSheet(look: GroomingLook, beforeSrc?: string | null) {
+  const canvas = await renderGroomingLookSheet({ look, beforeSrc });
+  const blob = await canvasToJpeg(canvas);
+  const safeName = (look.name || "pricheska").replace(/[^\wа-яё\-]+/gi, "_").slice(0, 40);
+  downloadBlob(blob, `${safeName}_do-posle.jpg`);
+}
+
+async function downloadGroomingAlbum(result: any, fallbackBefore?: string | null) {
+  const looks: GroomingLook[] = result.mode === "free"
+    ? [result.bestLook].filter(Boolean)
+    : (result.looks || []).filter(Boolean);
+  const sheets: HTMLCanvasElement[] = [];
+  for (const look of looks) {
+    sheets.push(await renderGroomingLookSheet({
+      look,
+      beforeSrc: look.imageClose || fallbackBefore,
+    }));
+  }
+  const care = careToSheetBlocks(result);
+  if (care.length) {
+    sheets.push(await renderGroomingLookSheet({
+      look: looks[0] || { name: "Уход", description: "", why: "", hairColor: "" },
+      heading: "Уход и макияж",
+      blocks: care,
+      photos: false,
+    }));
+  }
+  if (!sheets.length) throw new Error("Нечего сохранять");
+  const totalH = sheets.reduce((sum, c) => sum + c.height, 0);
+  if (sheets.length > 1 && totalH > 14000) {
+    for (let i = 0; i < sheets.length; i++) {
+      const name = i < looks.length
+        ? `${(looks[i].name || "pricheska").replace(/[^\wа-яё\-]+/gi, "_").slice(0, 40)}_do-posle.jpg`
+        : "uhod-i-makiyazh.jpg";
+      downloadBlob(await canvasToJpeg(sheets[i]), name);
+      if (i < sheets.length - 1) await new Promise((r) => setTimeout(r, 450));
+    }
+    return;
+  }
+  const album = sheets.length === 1 ? sheets[0] : await stitchCanvases(sheets);
+  downloadBlob(await canvasToJpeg(album), "pricheska-do-posle.jpg");
 }
 
 async function downloadGroomingImage(src: string, filename: string) {
@@ -113,7 +420,9 @@ async function downloadGroomingImage(src: string, filename: string) {
 function loadGroomingImg(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = "anonymous";
+    if (!src.startsWith("blob:") && !src.startsWith("data:")) {
+      img.crossOrigin = "anonymous";
+    }
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error("Не удалось загрузить фото"));
     img.src = src;
@@ -535,6 +844,7 @@ function LookCard({
 }) {
   const [broken, setBroken] = useState<Record<string, boolean>>({});
   const [retrying, setRetrying] = useState(false);
+  const [saving, setSaving] = useState(false);
   const beforeSrc = look.imageClose || fallbackBefore || "";
   const shareSrc = look.imageAfter || beforeSrc || "";
   const safeName = (look.name || "pricheska").replace(/[^\wа-яё\-]+/gi, "_").slice(0, 40);
@@ -638,8 +948,27 @@ function LookCard({
         <p className="text-[11px] text-charcoal/40 leading-relaxed">
           «После» — ориентир: новая причёска, помада под этот образ, взгляд и улыбка как на вашем фото, кожа как после визажиста. Не гарантия и не медзаключение. Решение — за вами и специалистом.
         </p>
-        {hasAny && (
+        {(hasAny || look.description) && (
           <div className="pt-2 space-y-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={async () => {
+                setSaving(true);
+                try {
+                  await downloadGroomingLookSheet(look, beforeSrc);
+                  onToast?.("Сохранено: фото до и после с описанием", "success");
+                } catch {
+                  onToast?.("Не удалось собрать картинку. Попробуйте ещё раз.", "error");
+                } finally {
+                  setSaving(false);
+                }
+              }}
+              className="w-full py-3 rounded-full bg-charcoal text-ivory text-sm font-medium flex items-center justify-center gap-2 hover:bg-gold hover:text-charcoal transition-colors disabled:opacity-60"
+            >
+              <Download className="w-4 h-4" />
+              {saving ? "Собираем фото…" : "Сохранить фото и описание"}
+            </button>
             <div className="grid grid-cols-2 gap-2">
               {beforeSrc && !broken.close && (
                 <button
@@ -654,7 +983,7 @@ function LookCard({
                   }}
                   className="py-2.5 rounded-full border border-charcoal/15 text-charcoal text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-charcoal/5"
                 >
-                  <Download className="w-3.5 h-3.5" /> До
+                  <Download className="w-3.5 h-3.5" /> Только «до»
                 </button>
               )}
               {look.imageAfter && !broken.after && (
@@ -670,7 +999,7 @@ function LookCard({
                   }}
                   className="py-2.5 rounded-full border border-charcoal/15 text-charcoal text-xs font-medium flex items-center justify-center gap-1.5 hover:bg-charcoal/5"
                 >
-                  <Download className="w-3.5 h-3.5" /> После
+                  <Download className="w-3.5 h-3.5" /> Только «после»
                 </button>
               )}
             </div>
@@ -717,6 +1046,7 @@ export function GroomingModal({
   const [result, setResult] = useState<Result | null>(null);
   const [freeUsed, setFreeUsed] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
   const [paidId, setPaidId] = useState("");
   const [promoCode, setPromoCode] = useState("");
   const [promoStatus, setPromoStatus] = useState<"idle" | "checking" | "valid" | "invalid" | "used" | "wrong">("idle");
@@ -1669,13 +1999,22 @@ export function GroomingModal({
                     <h3 className="font-serif text-xl text-charcoal">3 причёски — сравнение кадров</h3>
                     <button
                       type="button"
-                      onClick={() => {
-                        downloadGroomingAdvice(result);
-                        onToast?.("Рекомендации скачаны — даже без фото «после»", "success");
+                      disabled={savingAll}
+                      onClick={async () => {
+                        setSavingAll(true);
+                        try {
+                          await downloadGroomingAlbum(result, preview);
+                          onToast?.("Сохранено: все фото до и после с описанием", "success");
+                        } catch {
+                          onToast?.("Не удалось собрать картинку. Попробуйте ещё раз.", "error");
+                        } finally {
+                          setSavingAll(false);
+                        }
                       }}
-                      className="text-xs font-medium px-3 py-1.5 rounded-full border border-charcoal/15 text-charcoal inline-flex items-center gap-1.5 hover:bg-charcoal/5"
+                      className="text-xs font-medium px-3 py-1.5 rounded-full bg-charcoal text-ivory inline-flex items-center gap-1.5 hover:bg-gold hover:text-charcoal disabled:opacity-60"
                     >
-                      <Download className="w-3.5 h-3.5" /> Сохранить рекомендации
+                      <Download className="w-3.5 h-3.5" />
+                      {savingAll ? "Собираем…" : "Сохранить всё с фото"}
                     </button>
                   </div>
                   {result.looks?.map((look, i) => (
