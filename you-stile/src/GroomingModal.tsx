@@ -61,7 +61,8 @@ function paidPackageIncomplete(data: Result | null) {
   const sc = data.skincare;
   const products = sc?.products || [];
   if (!String(sc?.summary || "").trim() || products.length < 4) return true;
-  return false;
+  const withHow = products.filter((p) => String(p.howTo || p.dosage || "").trim().length > 8).length;
+  return withHow < 4;
 }
 
 function groomingLooksSettled(data: Result | null) {
@@ -188,9 +189,13 @@ function careToSheetBlocks(result: any): SheetBlock[] {
   const sc = result.skincare;
   if (sc) {
     const products = (sc.products || [])
-      .map((p: any) => [p.brand, p.name].filter(Boolean).join(" "))
+      .map((p: any) => {
+        const name = [p.brand, p.name].filter(Boolean).join(" ");
+        const how = String(p.howTo || p.dosage || "").trim();
+        if (!name) return "";
+        return how ? `• ${name} — ${how}` : `• ${name}`;
+      })
       .filter(Boolean)
-      .map((n: string) => `• ${n}`)
       .join("\n");
     const body = [
       sc.summary,
@@ -1129,7 +1134,6 @@ export function GroomingModal({
     setPromoStatus("idle");
     setPromoApplied(false);
     setScreen("offer");
-    localStorage.removeItem(JOB_KEY);
     onClose();
   };
 
@@ -1250,14 +1254,33 @@ export function GroomingModal({
     })();
       return;
     }
-    const lastJob = ((ownerFree || stored) && lastPaidJob) ? lastPaidJob : localStorage.getItem(LAST_JOB_KEY);
-    if (!lastJob || result) return;
+    const lastJob = lastPaidJob || localStorage.getItem(LAST_JOB_KEY);
+    if (result) return;
     const genLast = ++openGenRef.current;
     (async () => {
+      let recoverId = lastJob;
+      if ((ownerFree || stored) && !lastPaidJob) {
+        try {
+          const lr = await fetch("/api/grooming-latest");
+          if (lr.ok) {
+            const lj = await lr.json();
+            if (lj?.jobId) {
+              recoverId = lj.jobId;
+              localStorage.setItem(LAST_PAID_JOB_KEY, String(lj.jobId));
+              if (lj.result && !paidPackageIncomplete(lj.result) && groomingLooksSettled(lj.result)) {
+                if (userDismissedRef.current || genLast !== openGenRef.current) return;
+                applyGroomingResult(lj.result as Result, "paid");
+                return;
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
+      if (!recoverId) return;
       for (let i = 0; i < 90; i++) {
         if (userDismissedRef.current || genLast !== openGenRef.current) return;
         try {
-          const r = await fetch(`/api/grooming-result/${encodeURIComponent(lastJob)}`);
+          const r = await fetch(`/api/grooming-result/${encodeURIComponent(recoverId)}`);
           if (r.status === 202) {
             const j = await r.json().catch(() => ({}));
             setLoading(true);
@@ -1529,7 +1552,17 @@ export function GroomingModal({
                   || (doneLooks && total ? `Готово ${doneLooks} из ${total} фото…` : "Ещё рисуем фото «после»…"),
               });
             } else if (chunk.type === "result") {
-              data = chunk as Result;
+              const rec = chunk as Result;
+              if (!groomingLooksSettled(rec) || paidPackageIncomplete(rec)) {
+                setLoadingState({
+                  step: 4.5,
+                  text: rec.mode === "paid"
+                    ? "Дособираем уход и недостающие фото…"
+                    : "Фото «после» ещё рисуется…",
+                });
+                continue;
+              }
+              data = rec;
               setLoadingState({ step: 5, text: "Готово!" });
               setDisplayPercent(100);
             } else if (chunk.type === "error") {
@@ -1546,7 +1579,7 @@ export function GroomingModal({
 
       if (userDismissedRef.current || gen !== openGenRef.current) return;
 
-      if (!data) {
+      if (!data || !groomingLooksSettled(data) || paidPackageIncomplete(data)) {
         setLoadingState({ step: 4.5, text: "Связь прервалась — ищем готовый результат…" });
         data = await pollRecover(60);
       }

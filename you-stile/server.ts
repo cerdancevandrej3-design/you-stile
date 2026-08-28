@@ -676,19 +676,95 @@ function groomingLookFromParsed(look: any, agePolicy: GroomingAgePolicy) {
 function mapGroomingShopProducts(list: any[], howKey: "dosage" | "howTo") {
   return (Array.isArray(list) ? list : []).map((p: any) => {
     const query = encodeURIComponent((p.searchQuery || `${p.brand || ""} ${p.name || ""}`).toString().trim());
+    const howTo = String(p.howTo || p.dosage || "").trim();
+    const dosage = String(p.dosage || (howKey === "dosage" ? p.howTo : "") || "").trim();
     return {
       name: p.name || "",
       brand: p.brand || "",
-      dosage: p.dosage || (howKey === "dosage" ? p.howTo : "") || "",
-      howTo: p.howTo || p.dosage || "",
+      dosage,
+      howTo: howTo || dosage,
       why: p.why || "",
       searchQuery: p.searchQuery || "",
       price: p.price || "",
-      wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${query}`,
-      ozonUrl: `https://www.ozon.ru/search/?text=${query}`,
-      ymUrl: `https://market.yandex.ru/search?text=${query}`,
+      wbUrl: p.wbUrl || `https://www.wildberries.ru/catalog/0/search.aspx?search=${query}`,
+      ozonUrl: p.ozonUrl || `https://www.ozon.ru/search/?text=${query}`,
+      ymUrl: p.ymUrl || `https://market.yandex.ru/search?text=${query}`,
+      imageUrl: p.imageUrl || null,
     };
   });
+}
+
+function groomingProductHasHowTo(p: any): boolean {
+  return String(p?.howTo || p?.dosage || "").trim().length > 8;
+}
+
+function mergeGroomingShopProducts(resultList: any[], analysisList: any[], howKey: "dosage" | "howTo") {
+  const fromAnalysis = mapGroomingShopProducts(analysisList, howKey);
+  const fromResult = Array.isArray(resultList) ? resultList.filter(Boolean) : [];
+  const byName = new Map<string, any>();
+  for (const p of fromAnalysis) {
+    const k = String(p.name || "").trim().toLowerCase();
+    if (k) byName.set(k, p);
+  }
+  const base = fromResult.length ? fromResult : fromAnalysis;
+  const merged = base.map((p: any) => {
+    const k = String(p?.name || "").trim().toLowerCase();
+    const extra = (k && byName.get(k)) || null;
+    const howTo = String(p?.howTo || extra?.howTo || p?.dosage || extra?.dosage || "").trim();
+    const dosage = String(p?.dosage || extra?.dosage || "").trim();
+    return {
+      ...extra,
+      ...p,
+      dosage,
+      howTo: howTo || dosage,
+      imageUrl: p?.imageUrl || extra?.imageUrl || null,
+      wbUrl: p?.wbUrl || extra?.wbUrl,
+      ozonUrl: p?.ozonUrl || extra?.ozonUrl,
+      ymUrl: p?.ymUrl || extra?.ymUrl,
+    };
+  });
+  if (merged.filter(groomingProductHasHowTo).length < 4 && fromAnalysis.filter(groomingProductHasHowTo).length > merged.filter(groomingProductHasHowTo).length) {
+    return fromAnalysis;
+  }
+  return merged;
+}
+
+function hydrateGroomingCare(result: any, analysis: any) {
+  if (!result || typeof result !== "object" || result.mode === "free") return result;
+  const a = analysis || {};
+  const scA = a.skincare || {};
+  const scR = result.skincare || {};
+  const mkA = a.makeup || {};
+  const mkR = result.makeup || {};
+  const next = { ...result };
+  next.skincare = {
+    summary: scR.summary || scA.summary || "",
+    amRoutine: scR.amRoutine || scA.amRoutine || "",
+    pmRoutine: scR.pmRoutine || scA.pmRoutine || "",
+    homeHowTo: scR.homeHowTo || scA.homeHowTo || "",
+    products: mergeGroomingShopProducts(scR.products, scA.products, "dosage"),
+  };
+  const mkProducts = mergeGroomingShopProducts(mkR.products, mkA.products, "howTo");
+  if (mkR.summary || mkA.summary || mkProducts.length) {
+    next.makeup = {
+      summary: mkR.summary || mkA.summary || "",
+      dayLook: mkR.dayLook || mkA.dayLook || "",
+      eveningLook: mkR.eveningLook || mkA.eveningLook || "",
+      placement: mkR.placement || mkA.placement || "",
+      products: mkProducts,
+    };
+  }
+  return next;
+}
+
+function paidClientCareIncomplete(result: any): boolean {
+  if (!result || result.mode === "free") return false;
+  const looks = Array.isArray(result.looks) ? result.looks : [];
+  if (looks.length < 3) return true;
+  const sc = result.skincare || {};
+  const products = Array.isArray(sc.products) ? sc.products : [];
+  if (!String(sc.summary || "").trim() || products.length < 4) return true;
+  return products.filter(groomingProductHasHowTo).length < 4;
 }
 
 function hydrateGroomingResultPhotos(result: any, drafts: any[], jobId: string) {
@@ -722,7 +798,7 @@ function buildGroomingClientResult(saved: any, jobId: string) {
       jobId,
     }, drafts, jobId);
   }
-  return hydrateGroomingResultPhotos({
+  return hydrateGroomingCare(hydrateGroomingResultPhotos({
     type: "result",
     mode: "paid",
     coachNote: prev?.coachNote || a.coachNote || "",
@@ -744,7 +820,7 @@ function buildGroomingClientResult(saved: any, jobId: string) {
     } : undefined),
     groomingPrice: GROOMING_PRICE,
     jobId,
-  }, drafts, jobId);
+  }, drafts, jobId), a);
 }
 function groomingLooksFromSaved(saved: any): any[] {
   if (saved?.mode === "free") {
@@ -1532,14 +1608,14 @@ function paidGroomingGaps(parsed: any): string[] {
   if (looks.length < 3) gaps.push(`ещё ${3 - looks.length} причёски (короткая / до ключиц / длинная)`);
   const sc = parsed?.skincare;
   const scProducts = Array.isArray(sc?.products) ? sc.products : [];
-  if (!String(sc?.summary || "").trim() || scProducts.length < 4) {
+  if (!String(sc?.summary || "").trim() || scProducts.length < 4 || scProducts.filter(groomingProductHasHowTo).length < 4) {
     gaps.push("уход: summary + 4–6 средств с howTo");
   }
   if (!isGroomingMale(parsed)) {
     const mk = parsed?.makeup;
     const mkProducts = Array.isArray(mk?.products) ? mk.products : [];
-    if (!String(mk?.summary || "").trim() || mkProducts.length < 3) {
-      gaps.push("макияж: день/вечер + 3–5 средств");
+    if (!String(mk?.summary || "").trim() || mkProducts.length < 3 || mkProducts.filter(groomingProductHasHowTo).length < 3) {
+      gaps.push("макияж: день/вечер + 3–5 средств с howTo");
     }
   }
   if (!parsed?.faceAnalysis?.faceShape && !parsed?.faceAnalysis?.strengths) {
@@ -2023,9 +2099,19 @@ async function persistGroomingImage(folderId: string, slot: string, image: strin
       ext = dataMatch[1].includes("png") ? "png" : dataMatch[1].includes("webp") ? "webp" : "jpg";
       buf = Buffer.from(dataMatch[2], "base64");
     } else if (/^https?:\/\//i.test(image)) {
-      const response = await fetchWithTimeout(image, { method: "GET" }, 120000);
-      if (!response.ok) {
-        console.error("[Grooming] download image failed", response.status, image.slice(0, 80));
+      let response: Awaited<ReturnType<typeof fetch>> | null = null;
+      for (let attempt = 0; attempt < 3 && !response?.ok; attempt++) {
+        try {
+          response = await fetchWithTimeout(image, { method: "GET" }, 120000);
+          if (response.ok) break;
+          console.error("[Grooming] download image failed", response.status, "attempt", attempt + 1, image.slice(0, 80));
+        } catch (e) {
+          console.error("[Grooming] download image attempt", attempt + 1, (e as Error).message);
+        }
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+      }
+      if (!response?.ok) {
+        console.error("[Grooming] download image failed permanently", image.slice(0, 80));
         return null;
       }
       const contentType = response.headers.get("content-type") || "image/jpeg";
@@ -3985,10 +4071,13 @@ updatePromoHint();
     const looksTotal = Number(saved.looksTotal) || (saved.mode === "free" ? 1 : 3);
     const afterCount = groomingAfterPhotoCount(looks);
     const updatedMs = saved.updatedAt ? new Date(saved.updatedAt).getTime() : 0;
-    const recentlyUpdated = !!updatedMs && (Date.now() - updatedMs < 10 * 60 * 1000);
+    const recentlyUpdated = !!updatedMs && (Date.now() - updatedMs < 20 * 60 * 1000);
     const allFailed = looks.length > 0 && looks.every((look: any) => !groomingHasAfterPhoto(look) && look?.imageError);
-    const photosIncomplete = afterCount < looksTotal && !allFailed;
-    const stillDrawing = photosIncomplete && saved.status !== "failed" && recentlyUpdated;
+    const waitingPhotos = afterCount < looksTotal && !allFailed
+      && looks.some((look: any) => !groomingHasAfterPhoto(look) && !look?.imageError);
+    const careIncomplete = saved.mode === "paid" && saved.status === "processing" && paidClientCareIncomplete(recovered);
+    const stillDrawing = (waitingPhotos || careIncomplete) && saved.status !== "failed"
+      && (saved.status === "processing" || recentlyUpdated);
     if (stillDrawing) {
       return res.status(202).json({
         status: "processing",
@@ -3998,8 +4087,8 @@ updatePromoHint();
         looksTotal,
       });
     }
-    const complete = afterCount >= looksTotal || allFailed || saved.status === "failed";
-    if (complete && saved.status !== "ready") {
+    const complete = !waitingPhotos && !careIncomplete;
+    if (complete && saved.status !== "ready" && saved.status !== "failed") {
       saveGroomingResult(id, {
         status: "ready",
         mode: saved.mode,
@@ -4009,6 +4098,32 @@ updatePromoHint();
       });
     }
     return res.json({ status: "ready", jobId: id, result: recovered });
+  });
+
+  app.get("/api/grooming-latest", (req: Request, res: Response) => {
+    if (!isOwnerRequest(req)) return res.status(404).json({ error: "not found" });
+    try {
+      if (!fs.existsSync(GROOMING_RESULTS_DIR)) return res.status(404).json({ error: "none" });
+      let best: { jobId: string; result: any; ms: number } | null = null;
+      for (const entry of fs.readdirSync(GROOMING_RESULTS_DIR)) {
+        if (!entry.endsWith(".json")) continue;
+        const file = path.join(GROOMING_RESULTS_DIR, entry);
+        let saved: any;
+        try { saved = JSON.parse(fs.readFileSync(file, "utf-8")); } catch { continue; }
+        if (saved?.mode !== "paid") continue;
+        const jobId = saved.jobId || entry.replace(/\.json$/, "");
+        const recovered = buildGroomingClientResult(saved, jobId);
+        if (paidClientCareIncomplete(recovered)) continue;
+        const looks = Array.isArray(recovered?.looks) ? recovered.looks : [];
+        if (groomingAfterPhotoCount(looks) < 3) continue;
+        const ms = saved.updatedAt ? new Date(saved.updatedAt).getTime() : fs.statSync(file).mtimeMs;
+        if (!best || ms > best.ms) best = { jobId, result: recovered, ms };
+      }
+      if (!best) return res.status(404).json({ error: "none" });
+      return res.json({ status: "ready", jobId: best.jobId, result: best.result });
+    } catch {
+      return res.status(500).json({ error: "read failed" });
+    }
   });
 
   app.post("/api/grooming-retry-image", async (req: Request, res: Response) => {
@@ -4064,7 +4179,8 @@ updatePromoHint();
         }
       }
       const folderId = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-      const imageAfter = await persistGroomingImage(folderId, "after", image);
+      const imageAfter = await persistGroomingImage(folderId, "after", image)
+        || ((image && (/^https?:\/\//i.test(image) || image.startsWith("data:"))) ? image : null);
       if (!imageAfter) return res.status(503).json({ error: "Не удалось создать фото «после». Попробуйте ещё раз." });
       look.imageAfter = imageAfter;
       look.imageError = null;
@@ -5243,8 +5359,8 @@ Paid — три кадра, которые нельзя перепутать в 
           content: [{ type: "text", text: userText }, ...imageContent],
         }],
         temperature: 0.55,
-        maxTokens: mode === "paid" ? 9000 : 3500,
-        timeoutMs: mode === "paid" ? 120000 : 90000,
+        maxTokens: mode === "paid" ? 12288 : 3500,
+        timeoutMs: mode === "paid" ? 150000 : 90000,
         onRetry: () => {
           safeWrite(JSON.stringify({
             type: "progress",
@@ -5293,8 +5409,8 @@ Paid — три кадра, которые нельзя перепутать в 
                 ],
               }],
               temperature: 0.35,
-              maxTokens: 9000,
-              timeoutMs: 120000,
+              maxTokens: 12288,
+              timeoutMs: 150000,
             });
             const repaired = safeJsonParse(typeof repairRaw === "string" ? repairRaw : JSON.stringify(repairRaw));
             parsed = applyGroomingGenderWipe(mergePaidGroomingJson(parsed, repaired));
@@ -5387,7 +5503,7 @@ Paid — три кадра, которые нельзя перепутать в 
             safeWrite(JSON.stringify({ type: "progress", jobId, step: opts.stepAfter, text: opts.textAfter }) + "\n");
           }
           let a: string | null = null;
-          for (let attempt = 0; attempt < 2 && !a; attempt++) {
+          for (let attempt = 0; attempt < 3 && !a; attempt++) {
             try {
               const prompt = buildGroomingAfterPrompt({
                 lookName,
@@ -5402,10 +5518,11 @@ Paid — три кадра, которые нельзя перепутать в 
               a = await generateImageWithFlux(prompt, referenceImageBase64, mimeType, { quality: "medium" });
             } catch (genErr: any) {
               console.error("[Grooming] after image attempt", attempt + 1, genErr?.message);
-              if (attempt < 1) await new Promise((r) => setTimeout(r, 800));
+              if (attempt < 2) await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
             }
           }
           imageAfter = await persistGroomingImage(folderId, "after", a);
+          if (!imageAfter && a && (/^https?:\/\//i.test(a) || a.startsWith("data:"))) imageAfter = a;
           if (!imageAfter) imageError = "Не удалось создать фото «после»";
         } catch (e: any) {
           imageError = e.message || "Ошибка генерации";
@@ -5552,7 +5669,7 @@ Paid — три кадра, которые нельзя перепутать в 
       safeWrite(JSON.stringify({ type: "progress", jobId, step: 4.8, text: "Подбираем фото товаров для ухода…" }) + "\n");
       const [products, makeupProducts] = await thumbsPromise;
 
-      const paidResult = {
+      const paidResult = hydrateGroomingCare({
         type: "result" as const,
         mode: "paid" as const,
         coachNote: parsed.coachNote || "",
@@ -5574,14 +5691,16 @@ Paid — три кадра, которые нельзя перепутать в 
         } : undefined,
         groomingPrice: GROOMING_PRICE,
         jobId,
-      };
+      }, parsed);
 
+      const afterCount = groomingAfterPhotoCount(looks);
+      const allFailed = looks.length > 0 && looks.every((look: any) => !groomingHasAfterPhoto(look) && look?.imageError);
       saveGroomingResult(jobId, {
-        status: "ready",
+        status: afterCount >= looksIn.length || allFailed ? "ready" : "processing",
         mode,
         result: paidResult,
         draftLooks: looks,
-        looksDone: groomingAfterPhotoCount(looks),
+        looksDone: afterCount,
         looksTotal: looksIn.length,
       });
 
