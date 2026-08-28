@@ -217,12 +217,17 @@ function markFreeGroomingUsed(visitorId: string): void {
 }
 
 const RESULTS_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours — только черновики без оплаты
-const RESULTS_TTL_PAID_MS = 24 * 60 * 60 * 1000; // сутки — после оплаты / промо / с профилем
-const UNFINISHED_ORDER_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-/** После оплаты хранение сутки; имя/visitor — тоже. */
+const RESULTS_TTL_PAID_MS = 24 * 60 * 60 * 1000; // сутки — оплаченные образы и причёски
+const UNFINISHED_ORDER_TTL_MS = 24 * 60 * 60 * 1000; // сутки на незавершённый оплаченный заказ
+
+/** Оплаченное хранится сутки. Неоплаченный черновик — 5 часов. */
 function resultsTtlForUser(userName?: string | null, opts?: { paid?: boolean; visitorId?: string }): number {
   if (opts?.paid || (opts?.visitorId || "").trim() || (userName || "").trim()) return RESULTS_TTL_PAID_MS;
   return RESULTS_TTL_MS;
+}
+
+function paidResultExpiresAtIso(ttlMs?: number | null): string {
+  return new Date(Date.now() + (ttlMs || RESULTS_TTL_PAID_MS)).toISOString();
 }
 
 type UserStyleLook = {
@@ -367,8 +372,8 @@ function recordUserStyleSession(opts: {
   if (profile.sessions.length > 25) profile.sessions = profile.sessions.slice(-25);
   saveUserProfile(profile);
 }
-const GROOMING_IMG_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-const GROOMING_RESULTS_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const GROOMING_IMG_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — только бесплатные черновики
+const GROOMING_RESULTS_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — бесплатная 1 причёска; paid = RESULTS_TTL_PAID_MS (сутки)
 
 type OrderStatus = "awaiting_payment" | "awaiting_input" | "processing" | "partial" | "ready" | "failed" | "expired";
 interface OrderRecord {
@@ -630,7 +635,6 @@ function saveGroomingResult(jobId: string, payload: Record<string, unknown>) {
     const prev = readGroomingResult(id) || {};
     const mode = String(payload.mode || prev.mode || "");
     const paid = mode === "paid";
-    const ttl = paid ? RESULTS_TTL_PAID_MS : GROOMING_RESULTS_TTL_MS;
     const merged: Record<string, unknown> = { ...prev, ...payload, mode, jobId: id };
     if (prev.analysis && payload.analysis && typeof payload.analysis === "object") {
       merged.analysis = { ...prev.analysis, ...(payload.analysis as Record<string, unknown>) };
@@ -648,7 +652,7 @@ function saveGroomingResult(jobId: string, payload: Record<string, unknown>) {
     if (prev.sourceImage && !payload.sourceImage) merged.sourceImage = prev.sourceImage;
     if (prev.referenceMime && !payload.referenceMime) merged.referenceMime = prev.referenceMime;
     merged.updatedAt = new Date().toISOString();
-    merged.expiresAt = new Date(Date.now() + ttl).toISOString();
+    merged.expiresAt = new Date(Date.now() + (paid ? RESULTS_TTL_PAID_MS : GROOMING_RESULTS_TTL_MS)).toISOString();
     writeJsonAtomic(groomingResultPath(id), merged);
   } catch (e) {
     console.error("[Grooming] save result failed:", (e as Error).message);
@@ -843,7 +847,8 @@ function cleanupOldGroomingResults(): number {
       const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
       const exp = raw.expiresAt ? new Date(raw.expiresAt).getTime() : 0;
       const mtime = fs.statSync(file).mtimeMs;
-      if ((exp && exp < now) || (!exp && now - mtime > GROOMING_RESULTS_TTL_MS)) {
+      const ttl = String(raw.mode || "") === "paid" ? RESULTS_TTL_PAID_MS : GROOMING_RESULTS_TTL_MS;
+      if ((exp && exp < now) || (!exp && now - mtime > ttl)) {
         fs.unlinkSync(file);
         removed++;
       }
@@ -911,7 +916,7 @@ for (const entry of fs.readdirSync(ORDERS_DIR)) {
       ...order,
       status: complete ? "ready" : order.completedLooks ? "partial" : "failed",
       completedAt: complete ? new Date().toISOString() : order.completedAt,
-      resultExpiresAt: complete ? new Date(Date.now() + RESULTS_TTL_PAID_MS).toISOString() : order.resultExpiresAt,
+      resultExpiresAt: complete ? paidResultExpiresAtIso() : order.resultExpiresAt,
       error: complete ? null : "Генерация была прервана перезапуском сервера. Отсутствующие фото можно повторить.",
     });
   }
@@ -3643,7 +3648,7 @@ updatePromoHint();
               completedAt: isComplete ? new Date(completedMs).toISOString() : undefined,
               expectedLooks: legacyLooks.length,
               completedLooks,
-              resultExpiresAt: isComplete ? new Date(completedMs + RESULTS_TTL_PAID_MS).toISOString() : undefined,
+              resultExpiresAt: isComplete ? paidResultExpiresAtIso() : undefined,
               unfinishedExpiresAt: isComplete ? undefined : new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
             };
           } catch {}
@@ -4981,7 +4986,7 @@ ${perLookVenues}
           completedAt,
           visitorId: visitorId || undefined,
           userName: userName || undefined,
-          resultExpiresAt: isComplete ? new Date(Date.now() + ttlMs).toISOString() : undefined,
+          resultExpiresAt: isComplete ? paidResultExpiresAtIso(ttlMs) : undefined,
           unfinishedExpiresAt: isComplete ? undefined : new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
           error: isComplete ? null : "Не все изображения удалось создать. Повторите только отсутствующие фото.",
         });
@@ -5206,7 +5211,7 @@ ${perLookVenues}
         completedLooks,
         completedAt: isComplete ? new Date().toISOString() : order.completedAt,
         resultExpiresAt: isComplete
-          ? new Date(Date.now() + resultsTtlForUser(ttlUser, { paid: true, visitorId: order.visitorId })).toISOString()
+          ? paidResultExpiresAtIso(resultsTtlForUser(ttlUser, { paid: true, visitorId: order.visitorId }))
           : order.resultExpiresAt,
         unfinishedExpiresAt: isComplete ? undefined : new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
         error: isComplete ? null : "Остались изображения, которые нужно повторить.",

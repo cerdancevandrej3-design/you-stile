@@ -417,12 +417,12 @@ function getMyOrders(): MyOrder[] {
 function saveMyOrder(order: MyOrder) {
   const all = getMyOrders().filter(o => o.paymentId !== order.paymentId);
   all.push(order);
-  localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-20)));
+  localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-50)));
   notifyMyOrdersChanged();
 }
 function updateMyOrderThumbnail(paymentId: string, thumbnail: string) {
   const all = getMyOrders().map(o => o.paymentId === paymentId ? { ...o, thumbnail } : o);
-  localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-20)));
+  localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-50)));
   notifyMyOrdersChanged();
 }
 function removeMyOrder(paymentId: string) {
@@ -4348,11 +4348,8 @@ export default function App() {
         if (cancelled) return;
 
         if (order.status === "expired") {
-          removeMyOrder(pendingId);
-          localStorage.removeItem("pending_payment_id");
-          localStorage.removeItem("pending_payment_tier");
           setShowProcessing(false);
-          setToast({ message: "Срок хранения этого заказа истёк.", type: "info" });
+          setToast({ message: "Если вы оплатили этот заказ, откройте «Мои образы» — генерация должна сохраниться.", type: "info" });
           return;
         }
 
@@ -4473,7 +4470,7 @@ export default function App() {
           localStorage.removeItem("pending_payment_id");
           localStorage.removeItem("pending_payment_tier");
         }
-        setToast({ message: "Срок хранения этих образов истёк.", type: "info" });
+        setToast({ message: "Срок хранения этих образов истёк (сутки после оплаты).", type: "info" });
       } else {
         if (data.status === "awaiting_input" || data.status === "failed") {
           setCurrentTier(tier);

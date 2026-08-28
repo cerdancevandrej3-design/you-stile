@@ -9,6 +9,7 @@ const PAID_KEY = "grooming_payment_id";
 const JOB_KEY = "grooming_job_id";
 const LAST_JOB_KEY = "grooming_last_job_id";
 const LAST_PAID_JOB_KEY = "grooming_last_paid_job_id";
+const PAID_JOBS_KEY = "grooming_paid_jobs";
 const GROOMING_MAX_MS = 30 * 60 * 1000; // 30 минут — запас на 6 кадров gpt-image
 
 const GROOMING_STAGES = [
@@ -41,6 +42,18 @@ type GroomingLook = {
   imageFull?: string | null;
   imageError?: string | null;
 };
+
+function rememberPaidGroomingJob(jobId: string) {
+  const id = String(jobId || "").trim();
+  if (!id) return;
+  try {
+    localStorage.setItem(LAST_PAID_JOB_KEY, id);
+    const raw = localStorage.getItem(PAID_JOBS_KEY);
+    const list: string[] = raw ? JSON.parse(raw) : [];
+    const next = [id, ...list.filter((x) => x !== id)].slice(0, 50);
+    localStorage.setItem(PAID_JOBS_KEY, JSON.stringify(next));
+  } catch { /* ignore */ }
+}
 
 function lookHasAfterPhoto(look?: GroomingLook | null) {
   return !!(look?.imageAfter && String(look.imageAfter).trim());
@@ -1088,7 +1101,7 @@ export function GroomingModal({
     setResult(data);
     const jobId = (data as any)?.jobId;
     if (jobId) localStorage.setItem(LAST_JOB_KEY, String(jobId));
-    if (jobId && mode === "paid") localStorage.setItem(LAST_PAID_JOB_KEY, String(jobId));
+    if (jobId && mode === "paid") rememberPaidGroomingJob(String(jobId));
     if (jobId && (resultMissingAfter(data) || paidPackageIncomplete(data))) localStorage.setItem(JOB_KEY, String(jobId));
     else localStorage.removeItem(JOB_KEY);
     setLoading(false);
@@ -1266,7 +1279,7 @@ export function GroomingModal({
             const lj = await lr.json();
             if (lj?.jobId) {
               recoverId = lj.jobId;
-              localStorage.setItem(LAST_PAID_JOB_KEY, String(lj.jobId));
+              rememberPaidGroomingJob(String(lj.jobId));
               if (lj.result && !paidPackageIncomplete(lj.result) && groomingLooksSettled(lj.result)) {
                 if (userDismissedRef.current || genLast !== openGenRef.current) return;
                 applyGroomingResult(lj.result as Result, "paid");
