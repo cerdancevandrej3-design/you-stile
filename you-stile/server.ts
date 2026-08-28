@@ -1007,8 +1007,8 @@ if (!POLZA_API_KEY) {
 }
 const POLZA_BASE_URL = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
 
-const ANALYSIS_MODEL = "z-ai/glm-5.3-flash";
-const GENDER_MODEL = "z-ai/glm-5.3-flash";
+const ANALYSIS_MODEL = "google/gemini-3.7-flash";
+const GENDER_MODEL = "google/gemini-3.7-flash";
 // OpenAI GPT-5.4 Image 2 — сильное сохранение лица при редактировании по референсу (Polza /media)
 const IMAGE_MODEL = "openai/gpt-5.4-image-2";
 const IMAGE_PROMPT_MAX = 4900; // лимит модели ~5000 символов
@@ -1693,8 +1693,9 @@ async function callPolzaChat(options: {
 }
 
 const ANALYSIS_FALLBACK_MODELS = [
-  "google/gemini-3.7-flash",
+  "google/gemini-3.5-flash",
   "google/gemini-2.5-flash",
+  "z-ai/glm-5.3-flash",
 ];
 
 function isRetryableAnalysisError(err: unknown): boolean {
