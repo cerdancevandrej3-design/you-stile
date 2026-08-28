@@ -8,6 +8,7 @@ const FREE_KEY = "grooming_free_used";
 const PAID_KEY = "grooming_payment_id";
 const JOB_KEY = "grooming_job_id";
 const LAST_JOB_KEY = "grooming_last_job_id";
+const LAST_PAID_JOB_KEY = "grooming_last_paid_job_id";
 const GROOMING_MAX_MS = 30 * 60 * 1000; // 30 минут — запас на 6 кадров gpt-image
 
 const GROOMING_STAGES = [
@@ -49,8 +50,26 @@ function resultMissingAfter(data: Result | null) {
   if (!data) return true;
   if (data.mode === "free") return !lookHasAfterPhoto(data.bestLook);
   const looks = data.looks || [];
-  if (!looks.length) return true;
+  if (looks.length < 3) return true;
   return looks.some((look) => !lookHasAfterPhoto(look));
+}
+
+function paidPackageIncomplete(data: Result | null) {
+  if (!data || data.mode !== "paid") return false;
+  const looks = data.looks || [];
+  if (looks.length < 3) return true;
+  const sc = data.skincare;
+  const products = sc?.products || [];
+  if (!String(sc?.summary || "").trim() || products.length < 4) return true;
+  return false;
+}
+
+function groomingLooksSettled(data: Result | null) {
+  if (!data) return false;
+  if (data.mode === "free") return lookHasAfterPhoto(data.bestLook) || !!data.bestLook?.imageError;
+  const looks = data.looks || [];
+  if (looks.length < 3) return false;
+  return looks.every((look) => lookHasAfterPhoto(look) || !!look.imageError);
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -1064,7 +1083,8 @@ export function GroomingModal({
     setResult(data);
     const jobId = (data as any)?.jobId;
     if (jobId) localStorage.setItem(LAST_JOB_KEY, String(jobId));
-    if (jobId && resultMissingAfter(data)) localStorage.setItem(JOB_KEY, String(jobId));
+    if (jobId && mode === "paid") localStorage.setItem(LAST_PAID_JOB_KEY, String(jobId));
+    if (jobId && (resultMissingAfter(data) || paidPackageIncomplete(data))) localStorage.setItem(JOB_KEY, String(jobId));
     else localStorage.removeItem(JOB_KEY);
     setLoading(false);
     setLoadingState(null);
@@ -1181,6 +1201,7 @@ export function GroomingModal({
     }
     // Если генерация шла и окно/вкладка сбросились — продолжаем ждать результат, не показываем пустую форму
     const pendingJob = localStorage.getItem(JOB_KEY);
+    const lastPaidJob = localStorage.getItem(LAST_PAID_JOB_KEY);
     if (pendingJob && !result && !loading) {
     const gen = ++openGenRef.current;
     setLoading(true);
@@ -1210,8 +1231,13 @@ export function GroomingModal({
           const json = await r.json();
           if (json?.status === "ready" && json.result) {
             if (userDismissedRef.current || gen !== openGenRef.current) return;
-            const mode = (json.result.mode === "paid" ? "paid" : "free") as "free" | "paid";
-            applyGroomingResult(json.result as Result, mode);
+            const rec = json.result as Result;
+            if (!groomingLooksSettled(rec) || paidPackageIncomplete(rec)) {
+              await new Promise((res) => setTimeout(res, 4000));
+              continue;
+            }
+            const mode = (rec.mode === "paid" ? "paid" : "free") as "free" | "paid";
+            applyGroomingResult(rec, mode);
             return;
           }
         } catch {}
@@ -1224,7 +1250,7 @@ export function GroomingModal({
     })();
       return;
     }
-    const lastJob = localStorage.getItem(LAST_JOB_KEY);
+    const lastJob = ((ownerFree || stored) && lastPaidJob) ? lastPaidJob : localStorage.getItem(LAST_JOB_KEY);
     if (!lastJob || result) return;
     const genLast = ++openGenRef.current;
     (async () => {
@@ -1245,7 +1271,12 @@ export function GroomingModal({
           if (!r.ok) return;
           const json = await r.json();
           if (json?.status === "ready" && json.result && genLast === openGenRef.current && !userDismissedRef.current) {
-            applyGroomingResult(json.result as Result, json.result.mode === "paid" ? "paid" : "free");
+            const rec = json.result as Result;
+            if (!groomingLooksSettled(rec) || paidPackageIncomplete(rec)) {
+              await new Promise((res) => setTimeout(res, 4000));
+              continue;
+            }
+            applyGroomingResult(rec, rec.mode === "paid" ? "paid" : "free");
           }
           return;
         } catch {
@@ -1256,7 +1287,7 @@ export function GroomingModal({
   }, [isOpen, paymentIdProp]);
 
   useEffect(() => {
-    if (!isOpen || !result || !resultMissingAfter(result)) return;
+    if (!isOpen || !result || (!resultMissingAfter(result) && !paidPackageIncomplete(result))) return;
     const jobId = (result as any)?.jobId || localStorage.getItem(LAST_JOB_KEY) || localStorage.getItem(JOB_KEY);
     if (!jobId) return;
     localStorage.setItem(JOB_KEY, String(jobId));
@@ -1273,7 +1304,7 @@ export function GroomingModal({
           const json = await r.json();
           if (json?.result) {
             setResult(json.result as Result);
-            if (!resultMissingAfter(json.result as Result)) {
+            if (!resultMissingAfter(json.result as Result) && !paidPackageIncomplete(json.result as Result)) {
               localStorage.removeItem(JOB_KEY);
               return;
             }
@@ -1409,7 +1440,11 @@ export function GroomingModal({
         if (r.status === 202) return null;
         if (!r.ok) return null;
         const json = await r.json();
-        if (json?.status === "ready" && json.result) return json.result as Result;
+        if (json?.status === "ready" && json.result) {
+          const rec = json.result as Result;
+          if (!groomingLooksSettled(rec) || paidPackageIncomplete(rec)) return null;
+          return rec;
+        }
       } catch {}
       return null;
     };

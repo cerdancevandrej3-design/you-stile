@@ -679,8 +679,8 @@ function mapGroomingShopProducts(list: any[], howKey: "dosage" | "howTo") {
     return {
       name: p.name || "",
       brand: p.brand || "",
-      dosage: howKey === "dosage" ? (p.dosage || "") : undefined,
-      howTo: howKey === "howTo" ? (p.howTo || p.dosage || "") : undefined,
+      dosage: p.dosage || (howKey === "dosage" ? p.howTo : "") || "",
+      howTo: p.howTo || p.dosage || "",
       why: p.why || "",
       searchQuery: p.searchQuery || "",
       price: p.price || "",
@@ -1520,6 +1520,80 @@ function enforceGroomingLookDiversity(looks: any[], agePolicy: GroomingAgePolicy
   return next;
 }
 
+function isGroomingMale(parsed: any): boolean {
+  const blob = String(parsed?.gender || parsed?.faceAnalysis?.gender || "");
+  return /\b(man|male|мужчин|парень)\b/i.test(blob) && !/\b(woman|female|женщин|девуш)\b/i.test(blob);
+}
+
+/** Что не хватает в платном JSON — иначе клиент видит «неполный» пакет. */
+function paidGroomingGaps(parsed: any): string[] {
+  const gaps: string[] = [];
+  const looks = Array.isArray(parsed?.looks) ? parsed.looks.filter((l: any) => l && (l.name || l.editPromptAfter)) : [];
+  if (looks.length < 3) gaps.push(`ещё ${3 - looks.length} причёски (короткая / до ключиц / длинная)`);
+  const sc = parsed?.skincare;
+  const scProducts = Array.isArray(sc?.products) ? sc.products : [];
+  if (!String(sc?.summary || "").trim() || scProducts.length < 4) {
+    gaps.push("уход: summary + 4–6 средств с howTo");
+  }
+  if (!isGroomingMale(parsed)) {
+    const mk = parsed?.makeup;
+    const mkProducts = Array.isArray(mk?.products) ? mk.products : [];
+    if (!String(mk?.summary || "").trim() || mkProducts.length < 3) {
+      gaps.push("макияж: день/вечер + 3–5 средств");
+    }
+  }
+  if (!parsed?.faceAnalysis?.faceShape && !parsed?.faceAnalysis?.strengths) {
+    gaps.push("faceAnalysis");
+  }
+  return gaps;
+}
+
+function mergePaidGroomingJson(base: any, extra: any): any {
+  const a = base && typeof base === "object" ? base : {};
+  const b = extra && typeof extra === "object" ? extra : {};
+  const looks: any[] = [...(Array.isArray(a.looks) ? a.looks : [])];
+  for (const look of Array.isArray(b.looks) ? b.looks : []) {
+    if (!look) continue;
+    if (looks.length >= 3) break;
+    const name = String(look.name || "").toLowerCase();
+    if (name && looks.some((x) => String(x?.name || "").toLowerCase() === name)) continue;
+    looks.push(look);
+  }
+  const scA = a.skincare || {};
+  const scB = b.skincare || {};
+  const mkA = a.makeup || {};
+  const mkB = b.makeup || {};
+  return {
+    ...a,
+    ...b,
+    looks,
+    coachNote: b.coachNote || a.coachNote,
+    faceAnalysis: { ...(a.faceAnalysis || {}), ...(b.faceAnalysis || {}) },
+    skincare: {
+      ...scA,
+      ...scB,
+      products: (Array.isArray(scB.products) && scB.products.length >= (Array.isArray(scA.products) ? scA.products.length : 0))
+        ? scB.products
+        : (scA.products || scB.products || []),
+    },
+    makeup: {
+      ...mkA,
+      ...mkB,
+      products: (Array.isArray(mkB.products) && mkB.products.length)
+        ? mkB.products
+        : (mkA.products || []),
+    },
+  };
+}
+
+function applyGroomingGenderWipe(parsed: any): any {
+  if (!parsed || !isGroomingMale(parsed)) return parsed;
+  const wipe = (l: any) => { if (l) l.lipColor = "без помады"; };
+  wipe(parsed.bestLook);
+  (parsed.looks || []).forEach(wipe);
+  return parsed;
+}
+
 function buildGroomingAfterPrompt(opts: {
   lookName?: string;
   hairColor?: string;
@@ -1731,6 +1805,11 @@ async function callPolzaChat(options: {
   const content = data?.choices?.[0]?.message?.content;
   if (!content || (typeof content === "string" && !content.trim())) {
     throw new Error("Пустой ответ модели анализа");
+  }
+  const finish = String(data?.choices?.[0]?.finish_reason || "stop").toLowerCase();
+  // length/error = обрезанный JSON (неполный пакет причёсок/ухода). Пусть цепочка моделей повторит.
+  if (!["stop", "end_turn", "eos", "completed", "null"].includes(finish)) {
+    throw new Error(`Пустой ответ модели анализа (finish_reason: ${finish})`);
   }
   return content;
 }
@@ -3903,14 +3982,13 @@ updatePromoHint();
     const looks = saved.mode === "free"
       ? [recovered?.bestLook].filter(Boolean)
       : (Array.isArray(recovered?.looks) ? recovered.looks : groomingLooksFromSaved(saved));
-    const looksTotal = saved.looksTotal || looks.length || 1;
+    const looksTotal = Number(saved.looksTotal) || (saved.mode === "free" ? 1 : 3);
     const afterCount = groomingAfterPhotoCount(looks);
     const updatedMs = saved.updatedAt ? new Date(saved.updatedAt).getTime() : 0;
     const recentlyUpdated = !!updatedMs && (Date.now() - updatedMs < 10 * 60 * 1000);
     const allFailed = looks.length > 0 && looks.every((look: any) => !groomingHasAfterPhoto(look) && look?.imageError);
-    const stillDrawing = afterCount === 0 && !allFailed && (
-      saved.status === "processing" || (recentlyUpdated && !saved.error)
-    );
+    const photosIncomplete = afterCount < looksTotal && !allFailed;
+    const stillDrawing = photosIncomplete && saved.status !== "failed" && recentlyUpdated;
     if (stillDrawing) {
       return res.status(202).json({
         status: "processing",
@@ -5166,7 +5244,7 @@ Paid — три кадра, которые нельзя перепутать в 
         }],
         temperature: 0.55,
         maxTokens: mode === "paid" ? 9000 : 3500,
-        timeoutMs: 90000,
+        timeoutMs: mode === "paid" ? 120000 : 90000,
         onRetry: () => {
           safeWrite(JSON.stringify({
             type: "progress",
@@ -5180,23 +5258,59 @@ Paid — три кадра, которые нельзя перепутать в 
       let parsed: any;
       try {
         const raw = typeof analysisRaw === "string" ? analysisRaw : JSON.stringify(analysisRaw);
-        const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
-        parsed = JSON.parse(cleaned);
+        parsed = safeJsonParse(raw);
       } catch {
         return fail("Не удалось разобрать ответ стилиста. Попробуйте ещё раз.", 502);
       }
 
-      if (mode === "paid" && Array.isArray(parsed.looks)) {
+      parsed = applyGroomingGenderWipe(parsed);
+
+      if (mode === "paid") {
+        let gaps = paidGroomingGaps(parsed);
+        if (gaps.length) {
+          console.warn("[Grooming] incomplete paid JSON, repairing:", gaps.join("; "));
+          safeWrite(JSON.stringify({
+            type: "progress",
+            jobId,
+            step: 1.1,
+            text: "Дособираем уход и недостающие причёски…",
+          }) + "\n");
+          try {
+            const repairRaw = await callAnalysisChat({
+              model: ANALYSIS_MODEL,
+              systemPrompt: buildGroomingSystemPrompt("paid"),
+              messages: [{
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: `JSON неполный. Не хватает: ${gaps.join("; ")}.
+Верни ПОЛНЫЙ paid JSON: 3 разных looks (короткое / ключицы / длинные) + skincare (4–6 средств с howTo) + makeup + faceAnalysis.
+Сохрани уже хорошие looks. Только JSON, без markdown.
+ТЕКУЩИЙ JSON:\n${JSON.stringify(parsed).slice(0, 7000)}`,
+                  },
+                  ...imageContent,
+                ],
+              }],
+              temperature: 0.35,
+              maxTokens: 9000,
+              timeoutMs: 120000,
+            });
+            const repaired = safeJsonParse(typeof repairRaw === "string" ? repairRaw : JSON.stringify(repairRaw));
+            parsed = applyGroomingGenderWipe(mergePaidGroomingJson(parsed, repaired));
+          } catch (repairErr) {
+            console.error("[Grooming] repair failed:", (repairErr as Error).message);
+          }
+          gaps = paidGroomingGaps(parsed);
+          if (gaps.length) {
+            console.error("[Grooming] still incomplete after repair:", gaps.join("; "));
+            return fail("Стилист вернул неполный пакет (нет всех причёсок или ухода). Нажмите генерацию ещё раз — фото уже на месте.", 502);
+          }
+        }
         parsed.looks = enforceGroomingLookDiversity(parsed.looks, groomingAgePolicy(parsed));
       }
       if (mode === "free" && parsed.bestLook && !String(parsed.bestLook.lipColor || "").trim()) {
         parsed.bestLook.lipColor = groomingLipFallback(0, parsed.bestLook.hairColor || "", groomingAgePolicy(parsed));
-      }
-      const genderBlob = String(parsed.gender || parsed.faceAnalysis?.gender || "");
-      if (/\b(man|male|мужчин|парень)\b/i.test(genderBlob) && !/\b(woman|female|женщин|девуш)\b/i.test(genderBlob)) {
-        const wipe = (l: any) => { if (l) l.lipColor = "без помады"; };
-        wipe(parsed.bestLook);
-        (parsed.looks || []).forEach(wipe);
       }
 
       saveGroomingResult(jobId, {
@@ -5311,7 +5425,7 @@ Paid — три кадра, которые нельзя перепутать в 
           status: "processing",
           mode,
           progressText: opts.textAfter,
-          looksDone: opts.draftLooks.filter((l) => l).length,
+          looksDone: opts.draftLooks.filter((l) => groomingHasAfterPhoto(l)).length,
           looksTotal: opts.looksTotal,
           draftLooks: opts.draftLooks,
           sourceImage: imageBeforeUrl,
@@ -5363,8 +5477,10 @@ Paid — три кадра, которые нельзя перепутать в 
         return res.end();
       }
 
-      const looksIn = Array.isArray(parsed.looks) ? parsed.looks.slice(0, 3) : [];
-      while (looksIn.length < 3 && looksIn.length > 0) looksIn.push({ ...looksIn[0] });
+      const looksIn = Array.isArray(parsed.looks) ? parsed.looks.filter(Boolean).slice(0, 3) : [];
+      if (looksIn.length < 3) {
+        return fail("Стилист вернул меньше трёх причёсок. Нажмите генерацию ещё раз — фото уже на месте.", 502);
+      }
       const draftLooks = looksIn.map((l: any) => {
         const t = groomingLookFromParsed(l, agePolicy);
         t.imageClose = imageBeforeUrl;
@@ -5465,7 +5581,7 @@ Paid — три кадра, которые нельзя перепутать в 
         mode,
         result: paidResult,
         draftLooks: looks,
-        looksDone: looks.length,
+        looksDone: groomingAfterPhotoCount(looks),
         looksTotal: looksIn.length,
       });
 
@@ -5484,13 +5600,31 @@ Paid — три кадра, которые нельзя перепутать в 
         const hasLooks = (Array.isArray(prev?.draftLooks) && prev.draftLooks.length > 0) || prev?.result;
         if (hasLooks) {
           const recovered = buildGroomingClientResult(prev, jobId);
+          const looksArr = prev?.mode === "free"
+            ? [recovered?.bestLook].filter(Boolean)
+            : (Array.isArray(recovered?.looks) ? recovered.looks : []);
+          const afterCount = groomingAfterPhotoCount(looksArr);
+          const looksTotal = Number(prev?.looksTotal) || (prev?.mode === "free" ? 1 : 3);
+          const photosDone = afterCount >= looksTotal || looksArr.every((look: any) => look?.imageError);
           saveGroomingResult(jobId, {
-            status: "ready",
+            status: photosDone ? "ready" : "processing",
             result: recovered,
             error: (error as Error).message || "Часть фото не создалась",
+            looksDone: afterCount,
+            looksTotal,
           });
-          safeWrite(JSON.stringify({ type: "progress", jobId, step: 5.0, text: "Сохранили причёски и уход, даже если фото не все." }) + "\n");
-          safeWrite(JSON.stringify(recovered) + "\n");
+          if (photosDone) {
+            safeWrite(JSON.stringify({ type: "progress", jobId, step: 5.0, text: "Сохранили причёски и уход, даже если фото не все." }) + "\n");
+            safeWrite(JSON.stringify(recovered) + "\n");
+            clearInterval(heartbeat);
+            return res.end();
+          }
+          safeWrite(JSON.stringify({
+            type: "progress",
+            jobId,
+            step: 4.5,
+            text: `Сохранили текст, фото ещё рисуются (${afterCount} из ${looksTotal})…`,
+          }) + "\n");
           clearInterval(heartbeat);
           return res.end();
         }
