@@ -2835,7 +2835,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
               try {
                 const canvas = document.createElement('canvas');
                 let { width, height } = img;
-                const max = 800; // Shrink to save AI tokens
+                const max = 1400; // keep face detail for identity lock
                 if (width > height) {
                   if (width > max) { height = Math.round((height * max) / width); width = max; }
                 } else {
@@ -2848,7 +2848,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
                 ctx.drawImage(img, 0, 0, width, height);
                 canvas.toBlob((blob) => {
                   if (blob) resolve(blob); else resolve(file);
-                }, 'image/jpeg', 0.8);
+                }, 'image/jpeg', 0.92);
               } catch { resolve(file); }
             };
             img.onerror = () => resolve(file);
@@ -2905,12 +2905,12 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
             const canvas = document.createElement('canvas');
             const img2 = new window.Image();
             await new Promise<void>((res, rej) => { img2.onload = () => res(); img2.onerror = rej; img2.src = URL.createObjectURL(file); });
-            const max2 = 600;
+            const max2 = 1100;
             let w2 = img2.width, h2 = img2.height;
             if (w2 > h2) { if (w2 > max2) { h2 = Math.round(h2 * max2 / w2); w2 = max2; } } else { if (h2 > max2) { w2 = Math.round(w2 * max2 / h2); h2 = max2; } }
             canvas.width = w2; canvas.height = h2;
             canvas.getContext('2d')?.drawImage(img2, 0, 0, w2, h2);
-            const blob2 = await new Promise<Blob>((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('blob failed')), 'image/jpeg', 0.6));
+            const blob2 = await new Promise<Blob>((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('blob failed')), 'image/jpeg', 0.85));
             formData.append("images", blob2, file.name);
           } catch {
             formData.append("images", file);

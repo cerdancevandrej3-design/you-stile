@@ -9,7 +9,7 @@ import { createRequire } from "module";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import { createNailsSubscription, NAILS_MONTH_PRICE } from "./nails-subscription";
-import { pickLuxuryScenes, occasionVenueHint } from "./luxury-scenes";
+import { pickLuxuryScenes, occasionVenueHint, occasionSceneLockEn, occasionKeyForLook } from "./luxury-scenes";
 
 const require = createRequire(import.meta.url);
 const YooCheckout = require("yookassa");
@@ -1007,8 +1007,8 @@ if (!POLZA_API_KEY) {
 }
 const POLZA_BASE_URL = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
 
-const ANALYSIS_MODEL = "z-ai/glm-5.3-flash";
-const GENDER_MODEL = "z-ai/glm-5.3-flash";
+const ANALYSIS_MODEL = "google/gemini-3.7-flash";
+const GENDER_MODEL = "google/gemini-3.7-flash";
 // OpenAI GPT-5.4 Image 2 — сильное сохранение лица при редактировании по референсу (Polza /media)
 const IMAGE_MODEL = "openai/gpt-5.4-image-2";
 const IMAGE_PROMPT_MAX = 4900; // лимит модели ~5000 символов
@@ -1134,7 +1134,43 @@ function getOccasionAtmosphere(wishes: string, idx: number = 0, salt: number = 0
   return picked.prompts[0] || "";
 }
 
-/** Промпт для GPT Image 2: CHANGE/PRESERVE, лицо с фото, лучший ракурс без профиля. */
+function stripConflictingScene(text: string, occasionKey: string): string {
+  let t = stripGroomingFaceMorphLanguage(sanitizeEditPrompt(text || ""));
+  if (occasionKey !== "countryside") {
+    t = t.replace(/\b(autumn |fall |summer |spring |winter )?(park|bushes|shrubs|forest|woods|hedgerow)s?\b[^.]{0,60}\.?/gi, "");
+  }
+  t = t.replace(/\b(SCENE|background|setting|location)\s*[:—-]\s*/gi, "");
+  if (/restaurant|date/.test(occasionKey)) {
+    t = t.replace(/\b(city street|cobblestone street|urban street|park path)[^.]{0,40}\.?/gi, "");
+  }
+  if (occasionKey === "yacht") {
+    t = t.replace(/\b(on the shore|on the beach|city street|in a park)[^.]{0,40}\.?/gi, "");
+  }
+  return t.replace(/\s{2,}/g, " ").trim();
+}
+
+/**
+ * GPT Image 2 outfit prompt (OpenAI cookbook: CHANGE / PRESERVE / CONSTRAINTS).
+ * Image 1 is an identity reference, not a face sticker.
+ * "Copy the exact face" + locked frontal head caused a pasted-head look
+ * (selfie lighting on the face vs scene light on the body). Lock LIKENESS,
+ * relight the whole figure with the SCENE, and allow a natural pose.
+ */
+const OUTFIT_POSES_NATURAL = [
+  "stand at ease, weight on the back leg, front knee soft, shoulders dropped",
+  "slow walk, mid-stride, arms natural, any bag has real weight",
+  "slight 3/4 turn, hips offset from shoulders, head follows the torso",
+  "if the SCENE has a seat, ledge, or table — a natural sit or lean; otherwise a hip shift at rest",
+  "paused step, one hand on a bag or a railing if the SCENE has one, not a T-pose",
+];
+const OUTFIT_POSES_EDITORIAL = [
+  "editorial walk toward camera, mid-stride, fabric moving, weight real",
+  "weight on one hip, one hand at the waist or holding a bag, shoulders dropped",
+  "3/4 body turn with the head following the torso, chin slightly off-center",
+  "sit or lean only if the SCENE has a ledge or chair; otherwise a paused stride",
+  "contrapposto, one foot ahead, gaze with the body — not a locked selfie angle",
+];
+
 function buildOutfitImagePrompt(opts: {
   editPrompt: string;
   detectedGender: string;
@@ -1143,52 +1179,59 @@ function buildOutfitImagePrompt(opts: {
   bodyBuildInstruction?: string;
   season?: string;
   atmosphere?: string;
+  sceneLock?: string;
+  occasionKey?: string;
 }): string {
   const gender = opts.detectedGender || "person";
+  const occasionKey = opts.occasionKey || occasionKeyForLook(opts.wishes || "", opts.editPrompt || "");
   const atmosphere = opts.atmosphere || getOccasionAtmosphere(opts.wishes || "", opts.lookIdx, Date.now());
+  const sceneLock = opts.sceneLock || occasionSceneLockEn(occasionKey as any);
   const seasonBlock = seasonClimate(opts.season);
   const bodyExtra = (opts.bodyBuildInstruction || "").trim();
-  const isPhotoshoot = (opts.wishes || "").toLowerCase().includes("фотосессия");
-  const bodyMove = isPhotoshoot
-    ? "editorial fashion body language that fits the SCENE (walk, weight on one hip, sit on a ledge) — still face-to-camera"
-    : "natural body language that fits the SCENE (stand at ease, walk, slight turn, or sit if the place asks for it)";
+  const outfit = stripConflictingScene(opts.editPrompt, occasionKey);
+  const isPhotoshoot = occasionKey === "photoshoot" || (opts.wishes || "").toLowerCase().includes("фотосессия");
+  const posePool = isPhotoshoot ? OUTFIT_POSES_EDITORIAL : OUTFIT_POSES_NATURAL;
+  const poseLine = posePool[opts.lookIdx % posePool.length];
 
-  return `Edit Image 1. Photorealistic virtual try-on of a REAL person. Image 1 is the identity lock — a close friend must instantly recognize this person.
+  return `Edit Image 1. Photorealistic fashion photograph of ONE real ${gender}. Image 1 is an identity reference — use it for likeness, not as a face cut-out to paste.
 
-CHANGE only:
-- Replace EVERY garment, shoe, bag, glasses, jewelry, scarf, and hat from Image 1 with the outfit below. Seasonal clothes fully replace old ones (a winter coat must not keep a summer cap from the photo).
-- Place the person IN the SCENE with this TIME of day/night and LIGHT. Architecture and materials (stone, walnut, teak, marble, glass, crystal, candles) — luxury, not a park of bushes, not an empty white cyclorama.
-- Best flattering fashion camera for THIS face: 3/4 full body, torso turned 15–25°, both eyes visible, face toward camera. Do NOT copy the selfie crop, arm pose, or awkward stance from Image 1.
-- Body may ${bodyMove}. Head stay mostly frontal — never profile, never more than ~25° head turn, never hide an eye.
+CHANGE:
+- New venue, new outfit, new natural pose, new crop. Relight the ENTIRE person (face, neck, hair, clothes) with the SCENE key: same direction, Kelvin, and shadow hardness as the clothes and ground. Do not keep selfie or studio lighting on the face.
+- Pose: ${poseLine}. Head follows the body. Relaxed shoulders, micro-asymmetry, real weight. Not a passport stance, not a mannequin.
+- Replace EVERY garment, shoe, bag, glasses, jewelry, scarf, and hat from Image 1 with the outfit below.
+- Place the person IN the SCENE below. Do not copy Image 1's selfie crop or awkward arms.
 
-OUTFIT (apply precisely):
-${sanitizeEditPrompt(opts.editPrompt)}
+SCENE (non-negotiable — ignore park/street/forest in the outfit text):
+${sceneLock}
+${atmosphere}${seasonBlock}
+Architecture and materials: stone, walnut, teak, marble, glass, crystal, candles — luxury. Not a park of bushes, not an empty white cyclorama.
 
-PRESERVE (do not drift — restated):
-- Exact same face as Image 1: bone structure, eyes, brows, nose, lips, jaw WIDTH, cheeks, forehead, ears
-- Freckles, moles, scars, asymmetry; same ${gender}; same ethnicity and skin undertone
-- Same hair identity: color, length, hairline, parting, texture (tidy OK). Hair is NOT a cap/hat from Image 1
-- EXPRESSION from Image 1 — copy exactly: same gaze, same eye direction, same mouth. If they smile, keep THAT smile. If they are not smiling, do not add a smile. Do not invent a laugh or a new expression
+OUTFIT (clothes and accessories only — do not take location from this paragraph):
+${outfit}
+
+PRESERVE (likeness, not pixels):
+- Same person as Image 1: bone structure, eye shape and spacing, brows, nose (bridge width and tip), lips, jaw WIDTH, cheeks, forehead, ears, skin undertone, ethnicity, ${gender}, apparent age, freckles, moles, scars, asymmetry. A close friend must recognize them — not a lookalike, not a model, not a celebrity blend.
+- Hair identity: color, length, hairline, texture (tidy or restyle only as the outfit needs).
+- Expression family from Image 1: if they are not smiling, do NOT add a smile; if they smile, keep a natural version of THAT smile that fits the new head angle. Do not freeze the selfie mouth onto a turned body.
 - Body of THIS person${bodyExtra ? ` — ${bodyExtra}` : "; keep real proportions; clothing fit this body"}
-- Do NOT slim the face, do NOT narrow the nose, do NOT change skull shape
+- Do NOT slim the face, do NOT narrow the nose, do NOT change skull shape, do NOT beautify into another person.
 
-SKIN (visagiste retouch only — not a new age):
-- Like after a makeup artist: if under-eye bags or dark circles are on Image 1, soften them slightly; if forehead lines are visible, soften them a little
-- Slightly more even tone and a healthy glow. Keep pores, freckles, moles
-- Do not add a new makeup look (no new lipstick, no smoky eye, no contour that changes the face)
-- Do not make them look a different person or a different generation
+INTEGRATION (failed image if any of these break):
+- One continuous living body: head, neck, collarbones, and shoulders photographed together. No cut-out, halo, neck seam, or different grain on the face vs the body.
+- Face lighting MUST match the scene. Flat even light on a sunlit body is forbidden. Match lighting, shadows, and color temperature so nothing looks pasted on.
+- Contact shadow under the feet. Correct scale in the venue.
+- Fabric physics: gravity drape at waist, elbow, hem; wool matte; silk sheen ONLY from the KEY; leather grain.
+
+SKIN (optional visagiste, not a new face):
+- Slightly even tone and a healthy glow. Keep pores, freckles, moles.
+- Do not add a new makeup look (no new lipstick, no smoky eye, no contour that changes the face).
 
 CAMERA:
-- Photorealistic 3:4, 85mm look, camera 3–5 m back so the face never distorts. Never 24–35mm near the head. Head-to-shoes; hem and shoes readable. Catchlights in both eyes.
+- Photorealistic 3:4, 85mm look, camera 3–5 m back so the face never distorts. Head-to-shoes; hem and shoes readable.
+- Catchlights in the eyes from THIS scene's lights. Both eyes usually visible; a natural 3/4 head turn is OK; no profile.
 
-LIGHT, SHADOW, CLOTH (must read as a real photograph):
-${atmosphere}${seasonBlock}
-LOCATION LOCK: follow the SCENE above exactly. Restaurant/dinner/date = INSIDE a luxury dining room (candles if romantic). Yacht = ON the yacht. Beach/resort = sand/sea/villa. Club = exclusive interior. Office = office. Do not move the person into park/bushes/forest unless the occasion is countryside/picnic.
-- One motivated key + weaker fill. Shadows fall from that key onto face, cloth, and ground (soft contact shadow under feet).
-- Fabric physics: gravity drape at waist, elbow, hem; wool absorbs light; silk/satin sheen ONLY from the KEY; leather grain; knit loops; stitching, buttons, zippers, hems sharp. Not ironed cardboard, not cheap e-commerce, not plastic CGI.
-- Face always sharp and readable in this light. Natural pores. No on-camera flash, no beauty-filter poreless skin, no mannequin, no cyberpunk neon on skin.
-
-CONSTRAINTS: single person; no watermark, text, logo, collage, extra limbs.`;
+CONSTRAINTS: single person; one photograph, not a collage; no watermark, text, logo, extra limbs, extra people.
+FINAL CHECK: a friend recognizes this person AND the picture looks shot in the SCENE in one take — not a face pasted onto a new body. Wrong face, pasted head, or wrong place = failed image.`;
 }
 
 function parseDetectedGender(raw: string): "man" | "woman" | null {
@@ -1511,10 +1554,10 @@ function buildGroomingAfterPrompt(opts: {
     : opts.lengthSlot === "long"
       ? "LENGTH IN FRAME: hair past the shoulders. Ends visible below the collarbone in this close-up."
       : "LENGTH IN FRAME: hair clearly reaches the collarbone — longer than a chin bob, shorter than mid-back.";
-  const core = `Edit Image 1. This is an IMAGE EDIT of the same real person — not a new generation, not a beauty-filter model.
+  const core = `Edit Image 1. This is an IMAGE EDIT of the same real person — not a new generation, not a beauty-filter model, not a lookalike.
 
 TWO GOALS (both required):
-1) EXACT same person as Image 1 — same face, same gaze, same head position, same smile if they are smiling
+1) EXACT same person as Image 1 — same face, same gaze, same head position, same smile if they are smiling. A close friend must recognize them. If hair and identity conflict, keep the face.
 2) Skin like after a visagiste: slightly less under-eye bags if present, slightly softer forehead lines if present — not a different age, not a new skull
 
 CHANGE only:
@@ -1693,8 +1736,9 @@ async function callPolzaChat(options: {
 }
 
 const ANALYSIS_FALLBACK_MODELS = [
-  "google/gemini-3.7-flash",
+  "google/gemini-3.5-flash-lite",
   "google/gemini-2.5-flash",
+  "z-ai/glm-5.3-flash",
 ];
 
 function isRetryableAnalysisError(err: unknown): boolean {
@@ -4443,7 +4487,7 @@ ${perLookVenues}
         }
       }
 
-      // Step 1: Analyze with Gemini 3.5 Flash Lite
+      // Step 1: Analyze with Gemini 3.7 Flash (same model on Standard and Premium)
       safeWrite(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ фото и подбор образов с помощью AI..." }) + "\n");
 
       // Высокая температура для разнообразия образов при каждой генерации
@@ -4534,12 +4578,19 @@ ${perLookVenues}
       }) + "\n");
 
       const occasionSlots = expandOccasionList(occasionRaw);
-      const occasionTexts = looks.map((_: any, idx: number) => occasionSlots[idx] || occasionRaw || wishes || "");
+      const occasionTexts = looks.map((look: any, idx: number) =>
+        occasionSlots[idx] || occasionRaw || wishes || look.lookName || ""
+      );
+      const lookHints = looks.map((look: any) =>
+        [look.lookName, look.description, look.editPrompt].filter(Boolean).join(" ")
+      );
       const luxuryPick = pickLuxuryScenes({
         occasions: occasionTexts,
+        lookHints,
         recentIds: userProfile?.recentSceneIds,
         salt: Date.now() ^ Math.floor(Math.random() * 1e9),
       });
+      console.log("[Scene] keys:", luxuryPick.keys.join(", "), "ids:", luxuryPick.ids.join(", "));
       if (visitorId && luxuryPick.ids.length) {
         try {
           const p = ensureUserProfile(visitorId);
@@ -4610,6 +4661,8 @@ ${perLookVenues}
                 bodyBuildInstruction,
                 season: (parsedLookSeasons[idx] || detectedSeason || "").toString(),
                 atmosphere: luxuryPick.prompts[idx],
+                sceneLock: occasionSceneLockEn(luxuryPick.keys[idx] || occasionKeyForLook(lookOccasion || wishes, look.editPrompt || "")),
+                occasionKey: luxuryPick.keys[idx],
               });
               imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
               if (imageDataUrl) break;
@@ -4909,6 +4962,7 @@ ${perLookVenues}
           const retryProfile = retryVisitor ? readUserProfile(retryVisitor) : null;
           const retryScene = pickLuxuryScenes({
             occasions: [lookOccasion || wishes],
+            lookHints: [editPrompt],
             recentIds: retryProfile?.recentSceneIds,
             salt: Date.now() ^ (attempt + 1) * 9973,
           });
@@ -4928,6 +4982,8 @@ ${perLookVenues}
             lookIdx,
             season: retrySeason,
             atmosphere: retryScene.prompts[0],
+            sceneLock: occasionSceneLockEn(retryScene.keys[0] || occasionKeyForLook(lookOccasion || wishes, editPrompt)),
+            occasionKey: retryScene.keys[0],
           });
           imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
           if (imageDataUrl) break;
