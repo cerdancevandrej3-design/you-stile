@@ -279,8 +279,8 @@ PRESERVE: same person as Image 1 — exact face, same gaze, same smile if they a
 Cover in CHANGE, in this order:
 1) OUTFIT — every garment with fabric/material + color + cut/fit (e.g. "navy wool blazer, structured shoulders", "brown suede Chelsea boots"). Small details: stitching, buttons, lapel width, heel height, weave. Name how cloth hangs: drape at waist/elbow/hem, silk sheen from the key light, matte wool, leather grain. Strong silhouette (tailoring, Bar jacket, drop-waist, X-shoulder, Le Smoking) — not limp catalog clothes.
 2) ACCESSORIES — each piece with material (leather watch strap, gold hoop earrings, cashmere scarf).
-3) SCENE — real luxury architecture and materials (walnut, marble, teak, limestone, crystal, candles, dining tables, yacht railing). NEVER a seasonal park. Match the occasion: restaurant = INSIDE Michelin/palace dining room; romantic date = table for two, dim 2700K, candles; yacht = ON the yacht deck; beach/resort = sand/sea/villa; club = exclusive interior; office = glass office. Each look in the same response MUST have a DIFFERENT venue — do not reuse the same restaurant or the same street. Autumn/summer clothes do NOT move the person into bushes.
-4) TIME + LIGHT — morning / midday / golden hour / evening / night. One key: Kelvin + direction + where the shadow falls. Face readable. Never flat flash, never magenta neon on skin, never empty white studio.
+3) SCENE — leave place almost empty: the server will lock a luxury venue that MATCHES the occasion (restaurant = INSIDE Michelin dining room; yacht = ON the yacht deck; beach/resort = villa/sea; club = exclusive interior). NEVER write park / bushes / forest unless the occasion is countryside. Each look must still describe a DIFFERENT outfit.
+4) TIME + LIGHT — morning / midday / golden hour / evening / night. One key: Kelvin + direction. Face readable. Never flat flash, never magenta neon on skin, never empty white studio.
 5) CAMERA — photorealistic 85mm full-body 3/4, both eyes visible, never profile.
 
 Rules:

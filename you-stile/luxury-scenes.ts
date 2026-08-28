@@ -271,32 +271,79 @@ const CATALOG: Record<string, LuxuryScene[]> = {
   city: CITY,
 };
 
-export function detectOccasionKey(text: string): keyof typeof CATALOG {
+export type OccasionKey = keyof typeof CATALOG;
+
+export function detectOccasionKey(text: string): OccasionKey {
   const t = (text || "").toLowerCase().replace(/ё/g, "е");
-  if (/детск/.test(t)) return "kids";
-  if (/йога|\bspa\b|спа\b|wellness/.test(t)) return "yoga";
-  if (/горнолыж/.test(t)) return "ski";
-  if (/яхт/.test(t) && /курорт/.test(t)) return "yachtResort";
-  if (/яхт/.test(t)) return "yacht";
-  if (/загородн|пикник|природ/.test(t)) return "countryside";
-  if (/пляж|beach/.test(t)) return "resort";
-  if (/курорт/.test(t)) return "resort";
-  if (/свидан|романтич/.test(t)) return "date";
-  if (/ресторан|\bужин\b/.test(t)) return "restaurant";
-  if (/ночн\w*\s*клуб|ночной клуб/.test(t)) return "club";
+  if (/детск|kids party|children'?s celebration/.test(t)) return "kids";
+  if (/йога|\bspa\b|спа\b|wellness|\byoga\b|hammam/.test(t)) return "yoga";
+  if (/горнолыж|ski resort|apr[eè]s-ski|piste|chalet/.test(t) && /горнолыж|ski|snow|снег|шале/.test(t)) return "ski";
+  if ((/яхт|yacht|superyacht/.test(t)) && (/курорт|resort/.test(t))) return "yachtResort";
+  if (/яхт|yacht|superyacht|flybridge|aft[- ]?deck|teak deck/.test(t)) return "yacht";
+  if (/загородн|пикник|природ|manor|vineyard|estate lawn/.test(t)) return "countryside";
+  if (/пляж|beach club|infinity pool|shoreline/.test(t)) return "resort";
+  if (/курорт|\bresort\b/.test(t)) return "resort";
+  if (/свидан|романтич|candlelit|table for two|romantic dinner/.test(t)) return "date";
+  if (/ресторан|restaurant|michelin|fine.?dining|dining room|brasserie|omakase/.test(t)) return "restaurant";
+  if (/ночн\w*\s*клуб|ночной клуб|nightclub|members'? club/.test(t)) return "club";
   if (/\bклуб\b/.test(t) && !/beach/.test(t)) return "club";
-  if (/вечеринк/.test(t)) return "party";
-  if (/свадьб|выпускн|торжеств/.test(t)) return "wedding";
-  if (/корпоратив/.test(t)) return "corporate";
-  if (/офис|бизнес|деловая/.test(t)) return "office";
-  if (/спорт|фитнес/.test(t)) return "sport";
-  if (/театр|выставк|опер/.test(t)) return "theatre";
-  if (/фестиваль|концерт/.test(t)) return "festival";
-  if (/путешеств|самолёт|самолет/.test(t)) return "travel";
-  if (/фотосесси/.test(t)) return "photoshoot";
-  if (/шопинг/.test(t)) return "shopping";
-  if (/прогулк|кафе|casual/.test(t)) return "cafe";
+  if (/вечеринк|\bparty\b|penthouse party/.test(t)) return "party";
+  if (/свадьб|выпускн|торжеств|wedding|ballroom ceremony/.test(t)) return "wedding";
+  if (/корпоратив|corporate gala|awards hall/.test(t)) return "corporate";
+  if (/офис|бизнес|деловая|\boffice\b|boardroom|ceo glass/.test(t)) return "office";
+  if (/спорт|фитнес|\bgym\b|tennis club|workout/.test(t)) return "sport";
+  if (/театр|выставк|опер|theatre|theater|opera house|art gallery/.test(t)) return "theatre";
+  if (/фестиваль|концерт|festival|concert/.test(t)) return "festival";
+  if (/путешеств|самолёт|самолет|first-class|airport lounge|palace hotel lobby/.test(t)) return "travel";
+  if (/фотосесси|photoshoot|editorial studio/.test(t)) return "photoshoot";
+  if (/шопинг|shopping street|boutique|department store/.test(t)) return "shopping";
+  if (/прогулк|кафе|casual|\bcafe\b|café/.test(t)) return "cafe";
   return "city";
+}
+
+/** Слот повода важнее текста образа; «Курорт или яхта» уточняем по луку. */
+export function occasionKeyForLook(slot: string, lookText: string = ""): OccasionKey {
+  const slotTrim = (slot || "").trim();
+  const hint = (lookText || "").toLowerCase();
+  if (slotTrim) {
+    const key = detectOccasionKey(slotTrim);
+    if (key === "yachtResort") {
+      const yachtish = /яхт|yacht|superyacht|teak|flybridge|aft[- ]?deck|палуб/.test(hint);
+      const beachish = /пляж|beach|villa|infinity|pool|курорт|resort|shore/.test(hint);
+      if (yachtish && !beachish) return "yacht";
+      if (beachish && !yachtish) return "resort";
+    }
+    if (key !== "city") return key;
+  }
+  return detectOccasionKey(`${slotTrim} ${lookText || ""}`.trim());
+}
+
+export function occasionSceneLockEn(key: OccasionKey): string {
+  const locks: Record<OccasionKey, string> = {
+    restaurant: "MUST stand INSIDE a luxury restaurant dining room (crystal, marble, set tables, chandelier). Not a street, not a park, not bushes.",
+    date: "MUST sit or stand at a candlelit table for two INSIDE a luxury restaurant. Dim 2700K. Not a garden, not a park.",
+    yacht: "MUST be ON a luxury superyacht (teak deck, railing, sea, superstructure). Not the shore, not a park, not a city street.",
+    resort: "MUST be at a luxury resort — beach club, villa, infinity pool or private shore. Not a city park.",
+    yachtResort: "MUST be either ON a luxury yacht OR at a luxury resort/beach club. Not a park, not bushes.",
+    ski: "MUST be at a luxury alpine resort (piste, chalet, snow terrace). Not a green park.",
+    countryside: "MUST be a country estate / vineyard / manor — architecture in frame. Not a wild forest wall of bushes.",
+    party: "MUST be a luxury party (penthouse, villa, ballroom). Not a cheap disco, not a park.",
+    club: "MUST be an exclusive nightclub / members' club interior. Not neon on skin, not a park.",
+    wedding: "MUST be a luxury wedding (ballroom, palace, ceremony architecture). Not a random field.",
+    office: "MUST be a luxury office / marble lobby / business street. Not a park.",
+    sport: "MUST be a premium gym, rooftop workout, or tennis club. Not a basement, not bushes.",
+    cafe: "MUST be a European café terrace or hotel café — stone facades. Not bushes.",
+    theatre: "MUST be a theatre foyer, opera staircase, or art gallery. Not a park.",
+    travel: "MUST be first-class lounge, palace hotel, or cliff/lake villa terrace. Not a park.",
+    photoshoot: "MUST be editorial luxury (penthouse, marble, studio, rooftop). Not a seasonal park.",
+    festival: "MUST be VIP festival lounge or concert box. Not mud, not a city park.",
+    corporate: "MUST be a hotel gala, penthouse networking, or awards hall. Not a park.",
+    yoga: "MUST be a luxury spa / yoga pavilion / hammam. Not a jungle crush.",
+    kids: "MUST be a tasteful family luxury setting (hotel brunch, villa). Not a plastic playground.",
+    shopping: "MUST be a luxury mall atrium, boutique street, or lit vitrines. Not bushes.",
+    city: "MUST be a five-star hotel entrance, grand square, or penthouse terrace. Not a wall of bushes.",
+  };
+  return locks[key] || locks.city;
 }
 
 function hashStr(s: string): number {
@@ -336,18 +383,22 @@ export function occasionVenueHint(text: string): string {
 
 export function pickLuxuryScenes(opts: {
   occasions: string[];
+  lookHints?: string[];
   recentIds?: string[];
   salt?: number;
-}): { prompts: string[]; ids: string[] } {
+}): { prompts: string[]; ids: string[]; keys: OccasionKey[] } {
   const recent = new Set(opts.recentIds || []);
   const salt = (opts.salt ?? Date.now()) >>> 0;
   const used = new Set<string>();
   const prompts: string[] = [];
   const ids: string[] = [];
+  const keys: OccasionKey[] = [];
 
   opts.occasions.forEach((occ, i) => {
-    const pool = CATALOG[detectOccasionKey(occ)] || CITY;
-    const start = (salt + hashStr(occ || "") + i * 13) % pool.length;
+    const key = occasionKeyForLook(occ, opts.lookHints?.[i] || "");
+    keys.push(key);
+    const pool = CATALOG[key] || CITY;
+    const start = (salt + hashStr(occ || key) + i * 13) % pool.length;
     let chosen = pool[start];
     const tryPick = (allowRecent: boolean) => {
       for (let k = 0; k < pool.length; k++) {
@@ -364,5 +415,5 @@ export function pickLuxuryScenes(opts: {
     prompts.push(chosen.prompt);
   });
 
-  return { prompts, ids };
+  return { prompts, ids, keys };
 }
