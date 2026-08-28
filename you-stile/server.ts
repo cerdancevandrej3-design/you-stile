@@ -1149,7 +1149,28 @@ function stripConflictingScene(text: string, occasionKey: string): string {
   return t.replace(/\s{2,}/g, " ").trim();
 }
 
-/** Промпт для GPT Image 2: сначала лицо, потом обязательный антураж, потом одежда. */
+/**
+ * GPT Image 2 outfit prompt (OpenAI cookbook: CHANGE / PRESERVE / CONSTRAINTS).
+ * Image 1 is an identity reference, not a face sticker.
+ * "Copy the exact face" + locked frontal head caused a pasted-head look
+ * (selfie lighting on the face vs scene light on the body). Lock LIKENESS,
+ * relight the whole figure with the SCENE, and allow a natural pose.
+ */
+const OUTFIT_POSES_NATURAL = [
+  "stand at ease, weight on the back leg, front knee soft, shoulders dropped",
+  "slow walk, mid-stride, arms natural, any bag has real weight",
+  "slight 3/4 turn, hips offset from shoulders, head follows the torso",
+  "if the SCENE has a seat, ledge, or table — a natural sit or lean; otherwise a hip shift at rest",
+  "paused step, one hand on a bag or a railing if the SCENE has one, not a T-pose",
+];
+const OUTFIT_POSES_EDITORIAL = [
+  "editorial walk toward camera, mid-stride, fabric moving, weight real",
+  "weight on one hip, one hand at the waist or holding a bag, shoulders dropped",
+  "3/4 body turn with the head following the torso, chin slightly off-center",
+  "sit or lean only if the SCENE has a ledge or chair; otherwise a paused stride",
+  "contrapposto, one foot ahead, gaze with the body — not a locked selfie angle",
+];
+
 function buildOutfitImagePrompt(opts: {
   editPrompt: string;
   detectedGender: string;
@@ -1169,53 +1190,48 @@ function buildOutfitImagePrompt(opts: {
   const bodyExtra = (opts.bodyBuildInstruction || "").trim();
   const outfit = stripConflictingScene(opts.editPrompt, occasionKey);
   const isPhotoshoot = occasionKey === "photoshoot" || (opts.wishes || "").toLowerCase().includes("фотосессия");
-  const bodyMove = isPhotoshoot
-    ? "editorial fashion body language that fits the SCENE (walk, weight on one hip, sit on a ledge)"
-    : "natural body language that fits the SCENE (stand at ease, walk, slight turn, or sit if the place asks for it)";
+  const posePool = isPhotoshoot ? OUTFIT_POSES_EDITORIAL : OUTFIT_POSES_NATURAL;
+  const poseLine = posePool[opts.lookIdx % posePool.length];
 
-  return `Edit Image 1. This is a virtual try-on of ONE real person. Image 1 is the identity lock.
+  return `Edit Image 1. Photorealistic fashion photograph of ONE real ${gender}. Image 1 is an identity reference — use it for likeness, not as a face cut-out to paste.
 
-FACE (highest priority — do this first):
-- Copy the EXACT face from Image 1. A close friend must instantly recognize this person. Not a lookalike, not a model, not a celebrity blend.
-- Same bone structure, eye shape and spacing, brows, nose (bridge width and tip), lips, jaw WIDTH, cheeks, forehead, ears, skin undertone, ethnicity, ${gender}, apparent age
-- Same freckles, moles, scars, asymmetry
-- Same hair identity: color, length, hairline, parting, texture (tidy OK)
-- EXPRESSION from Image 1 exactly: same gaze, same eye direction, same mouth. If they smile, keep THAT smile. If they are not smiling, do NOT add a smile
-- Do NOT slim the face, do NOT narrow the nose, do NOT change skull shape, do NOT beautify into another person
-- Keep the same face even if you change the camera or clothes. If pose and identity conflict, keep identity.
+CHANGE:
+- New venue, new outfit, new natural pose, new crop. Relight the ENTIRE person (face, neck, hair, clothes) with the SCENE key: same direction, Kelvin, and shadow hardness as the clothes and ground. Do not keep selfie or studio lighting on the face.
+- Pose: ${poseLine}. Head follows the body. Relaxed shoulders, micro-asymmetry, real weight. Not a passport stance, not a mannequin.
+- Replace EVERY garment, shoe, bag, glasses, jewelry, scarf, and hat from Image 1 with the outfit below.
+- Place the person IN the SCENE below. Do not copy Image 1's selfie crop or awkward arms.
 
 SCENE (non-negotiable — ignore park/street/forest in the outfit text):
 ${sceneLock}
 ${atmosphere}${seasonBlock}
 Architecture and materials: stone, walnut, teak, marble, glass, crystal, candles — luxury. Not a park of bushes, not an empty white cyclorama.
 
-CHANGE only:
-- Replace EVERY garment, shoe, bag, glasses, jewelry, scarf, and hat from Image 1 with the outfit below. Seasonal clothes fully replace old ones.
-- Place the person IN the SCENE above, with that TIME and LIGHT.
-- Body may ${bodyMove}. Head stays mostly frontal — both eyes visible, never profile, never more than ~25° head turn.
-- Do NOT copy the selfie crop or awkward arm pose from Image 1 — keep the FACE, change the crop.
-
 OUTFIT (clothes and accessories only — do not take location from this paragraph):
 ${outfit}
 
-PRESERVE (repeat):
-- Exact same face as Image 1 — not a similar person
+PRESERVE (likeness, not pixels):
+- Same person as Image 1: bone structure, eye shape and spacing, brows, nose (bridge width and tip), lips, jaw WIDTH, cheeks, forehead, ears, skin undertone, ethnicity, ${gender}, apparent age, freckles, moles, scars, asymmetry. A close friend must recognize them — not a lookalike, not a model, not a celebrity blend.
+- Hair identity: color, length, hairline, texture (tidy or restyle only as the outfit needs).
+- Expression family from Image 1: if they are not smiling, do NOT add a smile; if they smile, keep a natural version of THAT smile that fits the new head angle. Do not freeze the selfie mouth onto a turned body.
 - Body of THIS person${bodyExtra ? ` — ${bodyExtra}` : "; keep real proportions; clothing fit this body"}
+- Do NOT slim the face, do NOT narrow the nose, do NOT change skull shape, do NOT beautify into another person.
+
+INTEGRATION (failed image if any of these break):
+- One continuous living body: head, neck, collarbones, and shoulders photographed together. No cut-out, halo, neck seam, or different grain on the face vs the body.
+- Face lighting MUST match the scene. Flat even light on a sunlit body is forbidden. Match lighting, shadows, and color temperature so nothing looks pasted on.
+- Contact shadow under the feet. Correct scale in the venue.
+- Fabric physics: gravity drape at waist, elbow, hem; wool matte; silk sheen ONLY from the KEY; leather grain.
 
 SKIN (optional visagiste, not a new face):
-- Slightly even tone and a healthy glow. Keep pores, freckles, moles
-- Do not add a new makeup look (no new lipstick, no smoky eye, no contour that changes the face)
+- Slightly even tone and a healthy glow. Keep pores, freckles, moles.
+- Do not add a new makeup look (no new lipstick, no smoky eye, no contour that changes the face).
 
 CAMERA:
-- Photorealistic 3:4, 85mm look, camera 3–5 m back so the face never distorts. Head-to-shoes; hem and shoes readable. Catchlights in both eyes.
+- Photorealistic 3:4, 85mm look, camera 3–5 m back so the face never distorts. Head-to-shoes; hem and shoes readable.
+- Catchlights in the eyes from THIS scene's lights. Both eyes usually visible; a natural 3/4 head turn is OK; no profile.
 
-LIGHT AND CLOTH:
-- One motivated key + weaker fill. Soft contact shadow under feet.
-- Fabric physics: gravity drape at waist, elbow, hem; wool matte; silk sheen ONLY from the KEY; leather grain; stitching sharp.
-- Face always sharp and readable. No flash, no poreless filter, no mannequin, no neon on skin.
-
-FINAL CHECK: the face must be the person from Image 1, standing in the SCENE above. Wrong face or wrong place = failed image.
-CONSTRAINTS: single person; no watermark, text, logo, collage, extra limbs.`;
+CONSTRAINTS: single person; one photograph, not a collage; no watermark, text, logo, extra limbs, extra people.
+FINAL CHECK: a friend recognizes this person AND the picture looks shot in the SCENE in one take — not a face pasted onto a new body. Wrong face, pasted head, or wrong place = failed image.`;
 }
 
 function parseDetectedGender(raw: string): "man" | "woman" | null {
