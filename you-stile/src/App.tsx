@@ -111,6 +111,12 @@ function getActiveStageIndex(s: number): number {
 // --- localStorage helpers ---
 type Tier = "standard" | "premium";
 type PricingSelection = Tier | "nails_month" | "grooming";
+type SavedOrderTier = Tier | "grooming";
+function asSavedOrderTier(raw: unknown): SavedOrderTier {
+  if (raw === "premium") return "premium";
+  if (raw === "grooming") return "grooming";
+  return "standard";
+}
 
 const NAILS_ACCESS_KEY = "you-stile-nails-access";
 const NAILS_PAYMENT_KEY = "you-stile-nails-payment-id";
@@ -339,7 +345,13 @@ async function syncStyleHistoryFromServer() {
     if (Array.isArray(data.pastLooks) && data.pastLooks.length) {
       savePastLooks(data.pastLooks);
     }
-    if (Array.isArray(data.orderIds) && data.orderIds.length) {
+    if (Array.isArray(data.orders) && data.orders.length) {
+      for (const o of data.orders) {
+        if (!o?.paymentId) continue;
+        const createdAt = o.createdAt ? Date.parse(o.createdAt) || Date.now() : Date.now();
+        saveMyOrder({ paymentId: o.paymentId, tier: asSavedOrderTier(o.tier), createdAt });
+      }
+    } else if (Array.isArray(data.orderIds) && data.orderIds.length) {
       const existing = new Set(getMyOrders().map((o) => o.paymentId));
       for (const paymentId of data.orderIds) {
         if (!paymentId || existing.has(paymentId)) continue;
@@ -364,9 +376,8 @@ async function restoreOrdersByCode(codeRaw: string): Promise<{ ok: boolean; coun
     const list = Array.isArray(data.orders) ? data.orders : [];
     for (const o of list) {
       if (!o?.paymentId) continue;
-      const tier: Tier = o.tier === "premium" ? "premium" : "standard";
       const createdAt = o.createdAt ? Date.parse(o.createdAt) || Date.now() : Date.now();
-      saveMyOrder({ paymentId: o.paymentId, tier, createdAt });
+      saveMyOrder({ paymentId: o.paymentId, tier: asSavedOrderTier(o.tier), createdAt });
     }
     return { ok: true, count: list.length };
   } catch {
@@ -389,9 +400,8 @@ async function restoreOrdersByPhone(phoneRaw: string): Promise<{ ok: boolean; co
     const list = Array.isArray(data.orders) ? data.orders : [];
     for (const o of list) {
       if (!o?.paymentId) continue;
-      const tier: Tier = o.tier === "premium" ? "premium" : "standard";
       const createdAt = o.createdAt ? Date.parse(o.createdAt) || Date.now() : Date.now();
-      saveMyOrder({ paymentId: o.paymentId, tier, createdAt });
+      saveMyOrder({ paymentId: o.paymentId, tier: asSavedOrderTier(o.tier), createdAt });
     }
     return { ok: true, count: list.length };
   } catch {
@@ -407,7 +417,7 @@ function saveName(name: string) {
 }
 
 // --- My paid orders (persistent access to recovered looks) ---
-type MyOrder = { paymentId: string; tier: Tier; createdAt: number; thumbnail?: string };
+type MyOrder = { paymentId: string; tier: SavedOrderTier; createdAt: number; thumbnail?: string };
 function notifyMyOrdersChanged() {
   window.dispatchEvent(new Event("you-stile-orders-changed"));
 }
@@ -415,9 +425,15 @@ function getMyOrders(): MyOrder[] {
   try { return JSON.parse(localStorage.getItem("you-stile-my-orders") || "[]"); } catch { return []; }
 }
 function saveMyOrder(order: MyOrder) {
-  const all = getMyOrders().filter(o => o.paymentId !== order.paymentId);
-  all.push(order);
-  localStorage.setItem("you-stile-my-orders", JSON.stringify(all.slice(-50)));
+  const all = getMyOrders();
+  const prev = all.find((o) => o.paymentId === order.paymentId);
+  const next = all.filter((o) => o.paymentId !== order.paymentId);
+  next.push({
+    ...prev,
+    ...order,
+    thumbnail: order.thumbnail || prev?.thumbnail,
+  });
+  localStorage.setItem("you-stile-my-orders", JSON.stringify(next.slice(-50)));
   notifyMyOrdersChanged();
 }
 function updateMyOrderThumbnail(paymentId: string, thumbnail: string) {
@@ -2346,7 +2362,7 @@ const NailsQuizModal = ({
 const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }: {
   isOpen: boolean;
   onClose: () => void;
-  onOpenOrder: (paymentId: string, tier: Tier) => void;
+  onOpenOrder: (paymentId: string, tier: SavedOrderTier) => void;
   onClearAll: () => void;
   onOrderAgain?: () => void;
 }) => {
@@ -2485,7 +2501,7 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
           <div className="p-6 md:p-8">
             <h2 className="font-serif text-2xl md:text-3xl font-semibold text-charcoal mb-1">Мои образы</h2>
             <p className="text-[13px] md:text-sm text-charcoal/60 mb-4">
-              Если оплатили, а страница закрылась — введите код заказа, например СТИЛЬ-K7M2QX. Образы хранятся сутки. Свой номер не нужен и в базы не попадает.
+              Если оплатили, а страница закрылась — введите код заказа, например СТИЛЬ-K7M2QX. Здесь и преображение, и причёска с уходом. Всё хранится сутки. Свой номер не нужен и в базы не попадает.
             </p>
 
             <div className="rounded-2xl border border-charcoal/10 bg-white/60 p-4 mb-5">
@@ -2556,7 +2572,7 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
             {orders.length === 0 ? (
               <div className="text-center py-8">
                 <p className="text-charcoal/50 text-sm">Пока нет сохранённых образов.</p>
-                <p className="text-charcoal/40 text-xs mt-2">Введите код заказа СТИЛЬ-… или закажите новый образ.</p>
+                <p className="text-charcoal/40 text-xs mt-2">Введите код заказа СТИЛЬ-… — сюда попадут и одежда, и причёска с уходом.</p>
               </div>
             ) : (
               <>
@@ -2567,13 +2583,15 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
                         <div className="w-14 h-14 rounded-xl overflow-hidden bg-charcoal/5 flex items-center justify-center flex-shrink-0">
                           {o.thumbnail ? (
                             <img src={o.thumbnail} alt="" className="w-full h-full object-cover" loading="lazy" />
+                          ) : o.tier === "grooming" ? (
+                            <Scissors className="w-6 h-6 text-charcoal/30" />
                           ) : (
                             <Shirt className="w-6 h-6 text-charcoal/30" />
                           )}
                         </div>
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-charcoal">
-                            {o.tier === "premium" ? "Премиум" : "Стандарт"}
+                            {o.tier === "premium" ? "Премиум" : o.tier === "grooming" ? "Причёска и уход" : "Стандарт"}
                           </p>
                           <p className="text-xs text-charcoal/50 mt-0.5">{formatDate(o.createdAt)}</p>
                           <p className="text-[11px] mt-1 text-charcoal/60">
@@ -2594,7 +2612,7 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
                         {loadingId === o.paymentId ? "Загрузка…" :
                           statuses[o.paymentId] === "processing" ? "Проверить" :
                           statuses[o.paymentId] === "awaiting_input" || statuses[o.paymentId] === "failed" ? "Продолжить" :
-                          "Открыть образы"}
+                          o.tier === "grooming" ? "Открыть" : "Открыть образы"}
                       </button>
                     </div>
                   ))}
@@ -4256,15 +4274,24 @@ export default function App() {
       const startParam = tg.initDataUnsafe?.start_param;
       if (startParam?.startsWith("paid_")) {
         const parts = startParam.split("_");
-        const tier = parts[1] as Tier;
+        const tier = parts[1];
         const paymentId = parts.slice(2).join("_");
         if (tier && paymentId) {
+          if (tier === "grooming") {
+            localStorage.setItem("grooming_payment_id", paymentId);
+            localStorage.setItem("pending_payment_id", paymentId);
+            localStorage.setItem("pending_payment_tier", "grooming");
+            saveMyOrder({ paymentId, tier: "grooming", createdAt: Date.now() });
+            setGroomingPaymentId(paymentId);
+            setTimeout(() => setIsGroomingOpen(true), 500);
+            return;
+          }
           localStorage.setItem(`paid_${tier}_${paymentId}`, "true");
           localStorage.setItem("pending_payment_id", paymentId);
-          localStorage.setItem("pending_payment_tier", tier);
-          saveMyOrder({ paymentId, tier, createdAt: Date.now() });
+          localStorage.setItem("pending_payment_tier", tier === "premium" ? "premium" : "standard");
+          saveMyOrder({ paymentId, tier: asSavedOrderTier(tier), createdAt: Date.now() });
           setActiveOrderId(paymentId);
-          setCurrentTier(tier);
+          setCurrentTier(tier === "premium" ? "premium" : "standard");
           setTimeout(() => setIsModalOpen(true), 500);
         }
       }
@@ -4346,6 +4373,15 @@ export default function App() {
         if (!orderResponse.ok || cancelled) return;
         const order = await orderResponse.json();
         if (cancelled) return;
+
+        if (order.tier === "grooming") {
+          localStorage.setItem("grooming_payment_id", pendingId);
+          localStorage.setItem("pending_payment_tier", "grooming");
+          saveMyOrder({ paymentId: pendingId, tier: "grooming", createdAt: Date.now() });
+          setGroomingPaymentId(pendingId);
+          setIsGroomingOpen(true);
+          return;
+        }
 
         if (order.status === "expired") {
           setShowProcessing(false);
@@ -4451,37 +4487,59 @@ export default function App() {
     setTimeout(() => setIsNailsQuizOpen(true), 200);
   };
 
-  const openMyOrder = async (paymentId: string, tier: Tier) => {
+  const openMyOrder = async (paymentId: string, tier: SavedOrderTier) => {
     try {
       setActiveOrderId(paymentId);
       const res = await fetch(`/api/result/${paymentId}`);
       const data = await res.json();
-      if (data.ready && data.looks && data.status !== "processing") {
-        setCurrentTier(tier);
-        setRecoveredResult({ ...data, paymentId });
-        setModalKey(k => k + 1);
-        setIsMyLooksOpen(false);
-        setIsModalOpen(true);
-        localStorage.setItem("pending_payment_id", paymentId);
-        localStorage.setItem("pending_payment_tier", tier);
-      } else if (data.expired) {
+      const isGrooming = data.kind === "grooming" || tier === "grooming";
+      if (data.expired) {
         removeMyOrder(paymentId);
         if (localStorage.getItem("pending_payment_id") === paymentId) {
           localStorage.removeItem("pending_payment_id");
           localStorage.removeItem("pending_payment_tier");
         }
         setToast({ message: "Срок хранения этих образов истёк (сутки после оплаты).", type: "info" });
-      } else {
-        if (data.status === "awaiting_input" || data.status === "failed") {
-          setCurrentTier(tier);
-          localStorage.setItem("pending_payment_id", paymentId);
-          localStorage.setItem("pending_payment_tier", tier);
-          setModalKey(k => k + 1);
-          setIsMyLooksOpen(false);
-          setIsModalOpen(true);
+        return;
+      }
+      if (isGrooming) {
+        localStorage.setItem("grooming_payment_id", paymentId);
+        localStorage.setItem("grooming_last_paid_job_id", paymentId);
+        localStorage.setItem("pending_payment_id", paymentId);
+        localStorage.setItem("pending_payment_tier", "grooming");
+        saveMyOrder({ paymentId, tier: "grooming", createdAt: Date.now() });
+        if (data.status === "processing" || data.grooming || data.ready) {
+          localStorage.setItem("grooming_job_id", paymentId);
         } else {
-          setToast({ message: "Образы ещё генерируются. Можно закрыть сайт и вернуться позже.", type: "info" });
+          localStorage.removeItem("grooming_job_id");
         }
+        setGroomingPaymentId(paymentId);
+        setIsMyLooksOpen(false);
+        setIsGroomingOpen(true);
+        if (data.status === "awaiting_input") {
+          setToast({ message: "Оплата на месте. Загрузите фото — повторно платить не нужно.", type: "info" });
+        } else if (data.status === "failed" || data.status === "partial") {
+          setToast({ message: "Генерация прервалась. Продолжите без новой оплаты.", type: "info" });
+        }
+        return;
+      }
+      if (data.ready && data.looks && data.status !== "processing") {
+        setCurrentTier(tier === "premium" ? "premium" : "standard");
+        setRecoveredResult({ ...data, paymentId });
+        setModalKey(k => k + 1);
+        setIsMyLooksOpen(false);
+        setIsModalOpen(true);
+        localStorage.setItem("pending_payment_id", paymentId);
+        localStorage.setItem("pending_payment_tier", tier === "premium" ? "premium" : "standard");
+      } else if (data.status === "awaiting_input" || data.status === "failed") {
+        setCurrentTier(tier === "premium" ? "premium" : "standard");
+        localStorage.setItem("pending_payment_id", paymentId);
+        localStorage.setItem("pending_payment_tier", tier === "premium" ? "premium" : "standard");
+        setModalKey(k => k + 1);
+        setIsMyLooksOpen(false);
+        setIsModalOpen(true);
+      } else {
+        setToast({ message: "Образы ещё генерируются. Можно закрыть сайт и вернуться позже.", type: "info" });
       }
     } catch {
       setToast({ message: "Не удалось загрузить образы. Попробуйте позже.", type: "error" });
@@ -4551,9 +4609,14 @@ export default function App() {
         localStorage.setItem("grooming_payment_id", paymentId);
         localStorage.setItem("pending_payment_id", paymentId);
         localStorage.setItem("pending_payment_tier", "grooming");
-        saveMyOrder({ paymentId, tier: "standard", createdAt: Date.now() });
+        saveMyOrder({ paymentId, tier: "grooming", createdAt: Date.now() });
         setGroomingPaymentId(paymentId);
-        setToast({ message: "Оплата прошла! Загрузите фото для 3 причёсок и ухода.", type: "success" });
+        setToast({
+          message: savedPickupLabel
+            ? `Оплата прошла. Сохраните код ${savedPickupLabel} — причёска будет в «Мои образы».`
+            : "Оплата прошла! Загрузите фото для 3 причёсок и ухода. Если окно закроется — откройте «Мои образы».",
+          type: "success",
+        });
         setTimeout(() => setIsGroomingOpen(true), 400);
         return;
       }

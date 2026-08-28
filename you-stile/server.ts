@@ -378,7 +378,7 @@ const GROOMING_RESULTS_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — беспла�
 type OrderStatus = "awaiting_payment" | "awaiting_input" | "processing" | "partial" | "ready" | "failed" | "expired";
 interface OrderRecord {
   paymentId: string;
-  tier: "standard" | "premium";
+  tier: "standard" | "premium" | "grooming";
   status: OrderStatus;
   createdAt: string;
   updatedAt: string;
@@ -867,6 +867,140 @@ function updateOrder(paymentId: string, patch: Partial<OrderRecord>): OrderRecor
   const current = readOrder(paymentId);
   if (!current) return null;
   return saveOrder({ ...current, ...patch, paymentId: current.paymentId });
+}
+
+/** Заказ в «Мои образы»: код СТИЛЬ-… и привязка к посетителю. Оплата без генерации тоже должна быть в списке. */
+function persistCabinetOrder(opts: {
+  paymentId: string;
+  tier: "standard" | "premium" | "grooming";
+  status?: OrderStatus;
+  paidAt?: string | null;
+  visitorId?: string;
+  userName?: string;
+  phone?: string;
+  expectedLooks?: number;
+  completedLooks?: number;
+  error?: string | null;
+  startedAt?: string;
+  completedAt?: string;
+  resultExpiresAt?: string;
+}): OrderRecord | null {
+  const id = sanitizeOrderId(opts.paymentId);
+  if (!id) return null;
+  const now = new Date().toISOString();
+  const existing = readOrder(id);
+  let pickup = existing?.pickupCode;
+  if (!pickup) {
+    const body = createUniquePickupCode();
+    linkOrderToPickupCode(body, id);
+    pickup = displayPickupCode(body);
+  }
+  if (opts.phone) linkOrderToPhone(opts.phone, id);
+  const visitorId = sanitizeVisitorId(opts.visitorId || existing?.visitorId);
+  const userName = (opts.userName || existing?.userName || "").trim().slice(0, 80);
+  if (visitorId) {
+    const profile = ensureUserProfile(visitorId, userName);
+    if (profile && !profile.orderIds.includes(id)) {
+      profile.orderIds.push(id);
+      if (profile.orderIds.length > 40) profile.orderIds = profile.orderIds.slice(-40);
+      saveUserProfile(profile);
+    }
+  }
+  return saveOrder({
+    paymentId: id,
+    tier: opts.tier || existing?.tier || "standard",
+    status: opts.status || existing?.status || "awaiting_input",
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+    paidAt: opts.paidAt === null ? existing?.paidAt : (opts.paidAt || existing?.paidAt),
+    startedAt: opts.startedAt || existing?.startedAt,
+    completedAt: opts.completedAt || existing?.completedAt,
+    unfinishedExpiresAt: existing?.unfinishedExpiresAt || new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+    resultExpiresAt: opts.resultExpiresAt || existing?.resultExpiresAt,
+    expectedLooks: opts.expectedLooks ?? existing?.expectedLooks,
+    completedLooks: opts.completedLooks ?? existing?.completedLooks,
+    error: opts.error === undefined ? (existing?.error ?? null) : opts.error,
+    visitorId: visitorId || existing?.visitorId,
+    userName: userName || existing?.userName,
+    phone: opts.phone || existing?.phone,
+    pickupCode: pickup,
+  });
+}
+
+/** Оплата прошла: не сбрасываем processing/ready, если генерация уже шла. */
+function persistPaidCabinetFromYookassa(
+  paymentId: string,
+  tier: OrderRecord["tier"],
+  visitorId?: string,
+  userName?: string,
+) {
+  const existing = readOrder(paymentId);
+  const keep = existing && existing.status !== "awaiting_payment" && existing.status !== "expired";
+  persistCabinetOrder({
+    paymentId,
+    tier,
+    status: keep ? existing.status : "awaiting_input",
+    paidAt: new Date().toISOString(),
+    visitorId,
+    userName,
+    expectedLooks: tier === "grooming" ? (existing?.expectedLooks || 3) : existing?.expectedLooks,
+  });
+}
+
+function groomingLooksForCabinet(saved: any, jobId: string): any[] {
+  if (!saved) return [];
+  const recovered = buildGroomingClientResult(saved, jobId);
+  if (saved.mode === "free") return [recovered?.bestLook].filter(Boolean);
+  if (Array.isArray(recovered?.looks) && recovered.looks.length) return recovered.looks;
+  return groomingLooksFromSaved(saved);
+}
+
+/** Оплаченная причёска в «Мои образы», даже если фото не дорисовались. */
+function syncGroomingCabinetOrder(opts: {
+  paymentId?: string;
+  jobId: string;
+  visitorId?: string;
+  userName?: string;
+  status?: OrderStatus;
+  error?: string | null;
+  started?: boolean;
+  completed?: boolean;
+}): OrderRecord | null {
+  const id = sanitizeOrderId(opts.paymentId || opts.jobId);
+  if (!id) return null;
+  const saved = readGroomingResult(opts.jobId || id);
+  const looks = groomingLooksForCabinet(saved, opts.jobId || id);
+  const expectedLooks = Number(saved?.looksTotal) || 3;
+  const completedLooks = groomingAfterPhotoCount(looks);
+  const recovered = saved ? buildGroomingClientResult(saved, opts.jobId || id) : null;
+  let status: OrderStatus = opts.status || "processing";
+  if (!opts.status) {
+    if (completedLooks >= expectedLooks && recovered && (saved?.mode !== "paid" || !paidClientCareIncomplete(recovered))) {
+      status = "ready";
+    } else if (completedLooks > 0) {
+      status = "partial";
+    } else if (saved?.status === "failed") {
+      status = "failed";
+    } else if (saved?.status === "processing") {
+      status = "processing";
+    } else {
+      status = "awaiting_input";
+    }
+  }
+  const now = new Date().toISOString();
+  return persistCabinetOrder({
+    paymentId: id,
+    tier: "grooming",
+    status,
+    visitorId: opts.visitorId,
+    userName: opts.userName,
+    expectedLooks,
+    completedLooks,
+    error: opts.error === undefined ? undefined : opts.error,
+    startedAt: opts.started ? now : undefined,
+    completedAt: opts.completed || status === "ready" ? now : undefined,
+    resultExpiresAt: (status === "ready" || status === "partial") ? paidResultExpiresAtIso() : undefined,
+  });
 }
 
 function cleanupOldResults(): number {
@@ -3488,11 +3622,24 @@ updatePromoHint();
     const visitorId = sanitizeVisitorId(req.query.visitorId);
     if (!visitorId) return res.status(400).json({ error: "visitorId required" });
     const profile = readUserProfile(visitorId);
-    if (!profile) return res.json({ ok: true, profile: null, pastLooks: [], orderIds: [] });
+    if (!profile) return res.json({ ok: true, profile: null, pastLooks: [], orderIds: [], orders: [] });
     const pastLooks = profile.sessions
       .flatMap((s) => (s.looks || []).map((l) => l.lookName))
       .filter(Boolean)
       .slice(-18);
+    const orders = (profile.orderIds || [])
+      .map((id) => {
+        const order = readOrder(id);
+        if (!order || order.status === "expired") return null;
+        return {
+          paymentId: order.paymentId,
+          tier: order.tier,
+          status: order.status,
+          createdAt: order.createdAt,
+          paidAt: order.paidAt || null,
+        };
+      })
+      .filter(Boolean);
     res.json({
       ok: true,
       profile: {
@@ -3502,6 +3649,7 @@ updatePromoHint();
       },
       pastLooks,
       orderIds: profile.orderIds || [],
+      orders,
     });
   });
 
@@ -3631,7 +3779,8 @@ updatePromoHint();
       const payment = await yooKassa.getPayment(paymentId);
       if (payment.status !== "succeeded") return existing;
       const now = new Date().toISOString();
-      const tier: "standard" | "premium" = payment.metadata?.tier === "premium" ? "premium" : "standard";
+      const metaTier = String(payment.metadata?.tier || existing?.tier || "standard");
+      const tier: OrderRecord["tier"] = metaTier === "premium" ? "premium" : metaTier === "grooming" ? "grooming" : "standard";
       let legacyPatch: Partial<OrderRecord> = {};
       if (!existing) {
         const legacyResultFile = path.join(RESULTS_DIR, paymentId, "result.json");
@@ -3657,20 +3806,27 @@ updatePromoHint();
       const metaPhone = normalizePhone((payment as any).metadata?.phone);
       const phone = existing?.phone || metaPhone || undefined;
       if (phone) linkOrderToPhone(phone, paymentId);
+      const visitorId = sanitizeVisitorId((payment as any).metadata?.visitorId || existing?.visitorId);
       return saveOrder({
         paymentId,
         tier,
-        status: "awaiting_input",
+        status: existing?.status && existing.status !== "awaiting_payment" ? existing.status : "awaiting_input",
         createdAt: existing?.createdAt || now,
         updatedAt: now,
         paidAt: existing?.paidAt || now,
+        startedAt: existing?.startedAt,
+        completedAt: existing?.completedAt,
         unfinishedExpiresAt: canRecoverLatePayment
           ? new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString()
           : existing?.unfinishedExpiresAt || new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+        resultExpiresAt: existing?.resultExpiresAt,
+        expectedLooks: existing?.expectedLooks,
+        completedLooks: existing?.completedLooks,
         error: null,
-        visitorId: existing?.visitorId,
+        visitorId: visitorId || existing?.visitorId,
         userName: existing?.userName,
         phone,
+        pickupCode: existing?.pickupCode,
         ...legacyPatch,
       });
     } catch (error) {
@@ -3723,31 +3879,23 @@ updatePromoHint();
             days: 30,
           });
         }
-        if (!isGrooming) {
-          const pickupBody = createUniquePickupCode();
-          linkOrderToPickupCode(pickupBody, paymentId);
-          if (phone) linkOrderToPhone(phone, paymentId);
-          if (visitorId) ensureUserProfile(visitorId, userName);
-          saveOrder({
+        if (!isNailsMonth) {
+          persistCabinetOrder({
             paymentId,
-            tier: tier === "premium" ? "premium" : "standard",
+            tier: isGrooming ? "grooming" : (tier === "premium" ? "premium" : "standard"),
             status: "awaiting_input",
-            createdAt: nowIso,
-            updatedAt: nowIso,
             paidAt: nowIso,
-            unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
-            error: null,
-            pickupCode: displayPickupCode(pickupBody),
+            visitorId,
+            userName,
             phone: phone || undefined,
-            visitorId: visitorId || undefined,
-            userName: userName || undefined,
+            expectedLooks: isGrooming ? 3 : undefined,
           });
         }
         return res.json({
           paymentId,
           ownerFree: true,
           confirmationUrl: null,
-          pickupCode: !isNailsMonth && !isGrooming ? readOrder(paymentId)?.pickupCode : undefined,
+          pickupCode: !isNailsMonth ? readOrder(paymentId)?.pickupCode : undefined,
         });
       }
       const amount = isNailsMonth
@@ -3783,31 +3931,23 @@ updatePromoHint();
           idempotenceKey,
           ...(phone ? { phone } : {}),
           ...(visitorId ? { visitorId } : {}),
+          ...(userName ? { userName: userName.slice(0, 40) } : {}),
         },
       }, idempotenceKey);
 
       // Сохраняем маппинг orderId → paymentId для confirm-payment
       pendingPayments.set(idempotenceKey, payment.id);
       savePendingPayment(idempotenceKey, payment.id);
-      if (!isNailsMonth && !isGrooming) {
-        const createdAt = new Date().toISOString();
+      if (!isNailsMonth) {
         try {
-          const pickupBody = createUniquePickupCode();
-          linkOrderToPickupCode(pickupBody, payment.id);
-          if (phone) linkOrderToPhone(phone, payment.id);
-          if (visitorId) ensureUserProfile(visitorId, userName);
-          saveOrder({
+          persistCabinetOrder({
             paymentId: payment.id,
-            tier: tier === "premium" ? "premium" : "standard",
+            tier: isGrooming ? "grooming" : (tier === "premium" ? "premium" : "standard"),
             status: "awaiting_payment",
-            createdAt,
-            updatedAt: createdAt,
-            unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
-            error: null,
-            pickupCode: displayPickupCode(pickupBody),
+            visitorId,
+            userName,
             phone: phone || undefined,
-            visitorId: visitorId || undefined,
-            userName: userName || undefined,
+            expectedLooks: isGrooming ? 3 : undefined,
           });
         } catch (orderError) {
           console.error("[Order] Failed to persist newly created payment:", payment.id, orderError);
@@ -3859,9 +3999,21 @@ updatePromoHint();
           nailsSub.grantFromPayment(paymentId);
           notifyTelegram(`✅ Оплата ${amount}₽ (База ногтей — месяц)`);
         } else if (tier === "grooming") {
+          await ensurePaidOrder(paymentId);
+          persistPaidCabinetFromYookassa(
+            paymentId,
+            "grooming",
+            sanitizeVisitorId((payment as any).metadata?.visitorId),
+            String((payment as any).metadata?.userName || "").trim().slice(0, 80),
+          );
           notifyTelegram(`✅ Оплата ${amount}₽ (Причёска и уход)`);
         } else {
           await ensurePaidOrder(paymentId);
+          persistPaidCabinetFromYookassa(
+            paymentId,
+            tier === "premium" ? "premium" : "standard",
+            sanitizeVisitorId((payment as any).metadata?.visitorId),
+          );
           incPaidSale(tier);
           const tierName = tier === "premium" ? "Премиум" : "Стандарт";
           notifyTelegram(`✅ Оплата ${amount}₽ (${tierName})`);
@@ -3916,11 +4068,26 @@ updatePromoHint();
             `/?payment_success=true&payment_id=${paymentId}&tier=nails_month&nails_token=${encodeURIComponent(granted.token)}`
           );
         } else if (tier === "grooming") {
+          await ensurePaidOrder(paymentId);
+          persistPaidCabinetFromYookassa(
+            paymentId,
+            "grooming",
+            sanitizeVisitorId((p as any).metadata?.visitorId),
+            String((p as any).metadata?.userName || "").trim().slice(0, 80),
+          );
           console.log(`[YooKassa] Grooming confirmed: ${paymentId}`);
           notifyTelegram(`✅ Оплата ${amount}₽ (Причёска и уход) [confirm]`);
-          res.redirect(`/?payment_success=true&payment_id=${paymentId}&tier=grooming`);
+          const pickup = readOrder(paymentId)?.pickupCode || "";
+          res.redirect(
+            `/?payment_success=true&payment_id=${paymentId}&tier=grooming${pickup ? `&pickup_code=${encodeURIComponent(pickup)}` : ""}`,
+          );
         } else {
           await ensurePaidOrder(paymentId);
+          persistPaidCabinetFromYookassa(
+            paymentId,
+            tier === "premium" ? "premium" : "standard",
+            sanitizeVisitorId((p as any).metadata?.visitorId),
+          );
           console.log(`[YooKassa] Payment confirmed: ${paymentId}, tier: ${tier}`);
           // Fallback: increment stats and notify Telegram (webhook may not have fired yet)
           incPaidSale(tier);
@@ -3985,6 +4152,56 @@ updatePromoHint();
       const expired = readOrder(paymentId);
       return res.json({ ...(expired || order), paid: !!order.paidAt, status: "expired" });
     }
+    if (order.tier === "grooming") {
+      const saved = readGroomingResult(paymentId);
+      if (saved) {
+        const recovered = buildGroomingClientResult(saved, paymentId);
+        const looks = groomingLooksForCabinet(saved, paymentId);
+        const expectedLooks = Number(saved.looksTotal) || 3;
+        const completedLooks = groomingAfterPhotoCount(looks);
+        const updatedMs = saved.updatedAt ? new Date(saved.updatedAt).getTime() : 0;
+        const recentlyUpdated = !!updatedMs && (Date.now() - updatedMs < 20 * 60 * 1000);
+        const waiting = saved.status === "processing" && recentlyUpdated
+          && (completedLooks < expectedLooks || (saved.mode === "paid" && paidClientCareIncomplete(recovered)));
+        if (waiting) {
+          return res.json({
+            ...order,
+            paid: !!order.paidAt,
+            status: "processing",
+            expectedLooks,
+            completedLooks,
+          });
+        }
+        const complete = completedLooks >= expectedLooks
+          && (saved.mode !== "paid" || !paidClientCareIncomplete(recovered));
+        const nextStatus: OrderStatus = complete
+          ? "ready"
+          : completedLooks
+            ? "partial"
+            : (saved.status === "failed" || order.status === "processing" ? "failed" : order.status);
+        if (nextStatus !== order.status || completedLooks !== (order.completedLooks || 0)) {
+          updateOrder(paymentId, {
+            status: nextStatus,
+            expectedLooks,
+            completedLooks,
+            error: complete ? null : (order.error || "Генерация прервалась. Можно продолжить без новой оплаты."),
+            resultExpiresAt: (nextStatus === "ready" || nextStatus === "partial")
+              ? (order.resultExpiresAt || paidResultExpiresAtIso())
+              : order.resultExpiresAt,
+          });
+        }
+        const shown = readOrder(paymentId) || order;
+        return res.json({ ...shown, paid: !!order.paidAt, status: nextStatus });
+      }
+      if (order.status === "processing") {
+        const patched = updateOrder(paymentId, {
+          status: "failed",
+          error: "Генерация прервалась. Можно продолжить без новой оплаты.",
+        });
+        return res.json({ ...(patched || order), paid: !!order.paidAt, status: "failed" });
+      }
+      return res.json({ ...order, paid: !!order.paidAt });
+    }
     // «processing» только пока этот процесс реально генерирует. Иначе окно «зайдите через 10 минут» блокирует повтор.
     if (order.status === "processing" && !activeOrderIds.has(paymentId)) {
       const complete = !!order.expectedLooks && (order.completedLooks || 0) >= order.expectedLooks;
@@ -4008,6 +4225,55 @@ updatePromoHint();
     if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) {
       cleanupOldResults();
       return res.json({ ready: false, status: "expired", expired: true });
+    }
+    const groomingSaved = readGroomingResult(id);
+    if (order?.tier === "grooming" || groomingSaved) {
+      if (groomingSaved?.expiresAt && new Date(groomingSaved.expiresAt).getTime() < Date.now()) {
+        try { fs.unlinkSync(groomingResultPath(id)); } catch {}
+        return res.json({ kind: "grooming", ready: false, status: "expired", expired: true, jobId: id });
+      }
+      if (!groomingSaved) {
+        return res.json({
+          kind: "grooming",
+          ready: false,
+          status: order?.status || "awaiting_input",
+          expired: order?.status === "expired",
+          expectedLooks: order?.expectedLooks || 3,
+          completedLooks: order?.completedLooks || 0,
+          error: order?.error || null,
+          jobId: id,
+        });
+      }
+      const recovered = buildGroomingClientResult(groomingSaved, id);
+      const looks = groomingLooksForCabinet(groomingSaved, id);
+      const looksTotal = Number(groomingSaved.looksTotal) || (groomingSaved.mode === "free" ? 1 : 3);
+      const afterCount = groomingAfterPhotoCount(looks);
+      const complete = afterCount >= looksTotal
+        && (groomingSaved.mode !== "paid" || !paidClientCareIncomplete(recovered));
+      const thumbLooks = looks
+        .filter(groomingHasAfterPhoto)
+        .map((look: any) => ({
+          image: look.imageAfter,
+          lookName: look.name || "Причёска",
+        }));
+      const status = complete
+        ? "ready"
+        : afterCount
+          ? "partial"
+          : (groomingSaved.status === "failed" ? "failed" : (order?.status || groomingSaved.status || "processing"));
+      return res.json({
+        kind: "grooming",
+        ready: complete || afterCount > 0,
+        status,
+        expired: false,
+        expiresAt: order?.resultExpiresAt || groomingSaved.expiresAt || null,
+        looks: thumbLooks,
+        grooming: recovered,
+        jobId: id,
+        expectedLooks: looksTotal,
+        completedLooks: afterCount,
+        error: groomingSaved.error || order?.error || null,
+      });
     }
     const file = path.join(RESULTS_DIR, id, "result.json");
     if (!fs.existsSync(file)) {
@@ -5246,23 +5512,58 @@ ${perLookVenues}
     };
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let jobId = "";
+    let groomingMode: "free" | "paid" = "free";
+    let groomingVisitorId = "";
+    let groomingUserName = "";
+    let groomingPaymentId = "";
     try {
       const files = req.files as MulterFile[];
       const mode = ((req.body.mode || "free") as string).toLowerCase() === "paid" ? "paid" : "free";
+      groomingMode = mode;
       const height = (req.body.height || "").toString().trim();
       const weight = (req.body.weight || "").toString().trim();
       const paymentId = sanitizeOrderId(req.body.paymentId);
+      groomingPaymentId = paymentId;
       const promoCode = (req.body.promoCode || "").toString().trim().toUpperCase();
       const groomVisitorId = sanitizeVisitorId(req.body.visitorId);
       const groomUserName = String(req.body.userName || "").trim().slice(0, 80);
+      groomingVisitorId = groomVisitorId;
+      groomingUserName = groomUserName;
       if (groomVisitorId) ensureUserProfile(groomVisitorId, groomUserName);
       jobId = sanitizeOrderId(req.body.jobId)
         || paymentId
         || `groom_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
+      const linkPaidCabinet = (status: OrderStatus, extra?: {
+        error?: string | null;
+        started?: boolean;
+        completed?: boolean;
+        completedLooks?: number;
+      }) => {
+        if (mode !== "paid") return;
+        const id = sanitizeOrderId(paymentId || jobId);
+        if (!id) return;
+        persistCabinetOrder({
+          paymentId: id,
+          tier: "grooming",
+          status,
+          visitorId: groomVisitorId,
+          userName: groomUserName,
+          expectedLooks: 3,
+          completedLooks: extra?.completedLooks,
+          error: extra?.error,
+          startedAt: extra?.started ? new Date().toISOString() : undefined,
+          completedAt: extra?.completed ? new Date().toISOString() : undefined,
+          resultExpiresAt: (status === "ready" || status === "partial") ? paidResultExpiresAtIso() : undefined,
+        });
+      };
+
       const fail = (msg: string, status = 400) => {
         if (jobId) {
           saveGroomingResult(jobId, { status: "failed", error: msg, mode });
+        }
+        if (mode === "paid" && status >= 500) {
+          linkPaidCabinet("failed", { error: msg });
         }
         res.statusCode = status;
         safeWrite(JSON.stringify({ type: "error", error: msg, jobId: jobId || undefined }) + "\n");
@@ -5313,6 +5614,10 @@ ${perLookVenues}
           return fail("Нужна оплата 100 ₽ или промокод «Причёска и уход»", 402);
         }
         }
+      }
+
+      if (mode === "paid") {
+        linkPaidCabinet("processing", { started: true, error: null, completedLooks: 0 });
       }
 
       saveGroomingResult(jobId, {
@@ -5708,6 +6013,18 @@ Paid — три кадра, которые нельзя перепутать в 
         looksDone: afterCount,
         looksTotal: looksIn.length,
       });
+      if (mode === "paid") {
+        const cabinetStatus: OrderStatus = afterCount >= looksIn.length
+          ? "ready"
+          : afterCount
+            ? "partial"
+            : "failed";
+        linkPaidCabinet(cabinetStatus, {
+          completed: cabinetStatus === "ready",
+          completedLooks: afterCount,
+          error: cabinetStatus === "ready" ? null : "Генерация прервалась. Можно продолжить без новой оплаты.",
+        });
+      }
 
       if (accessViaPromo && promoCode && !isOwnerRequest(req)) {
         try { markPromoUsed(promoCode); } catch (e) { console.error("[Promo] markPromoUsed grooming failed:", e); }
@@ -5737,6 +6054,17 @@ Paid — три кадра, которые нельзя перепутать в 
             looksDone: afterCount,
             looksTotal,
           });
+          if (prev?.mode === "paid" || groomingMode === "paid") {
+            syncGroomingCabinetOrder({
+              paymentId: groomingPaymentId || jobId,
+              jobId,
+              visitorId: groomingVisitorId,
+              userName: groomingUserName,
+              status: photosDone && afterCount >= looksTotal ? "ready" : (afterCount ? "partial" : "failed"),
+              completed: photosDone && afterCount >= looksTotal,
+              error: photosDone ? null : "Генерация прервалась. Можно продолжить без новой оплаты.",
+            });
+          }
           if (photosDone) {
             safeWrite(JSON.stringify({ type: "progress", jobId, step: 5.0, text: "Сохранили причёски и уход, даже если фото не все." }) + "\n");
             safeWrite(JSON.stringify(recovered) + "\n");
@@ -5756,6 +6084,16 @@ Paid — три кадра, которые нельзя перепутать в 
           status: "failed",
           error: (error as Error).message || "Ошибка подбора причёски",
         });
+        if (groomingMode === "paid") {
+          syncGroomingCabinetOrder({
+            paymentId: groomingPaymentId || jobId,
+            jobId,
+            visitorId: groomingVisitorId,
+            userName: groomingUserName,
+            status: "failed",
+            error: (error as Error).message || "Ошибка подбора причёски",
+          });
+        }
       }
       clearInterval(heartbeat);
       const rawErr = (error as Error).message || "Ошибка подбора причёски";

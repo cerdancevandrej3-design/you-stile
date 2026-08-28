@@ -55,6 +55,31 @@ function rememberPaidGroomingJob(jobId: string) {
   } catch { /* ignore */ }
 }
 
+function saveCabinetGroomingOrder(paymentId: string) {
+  const id = String(paymentId || "").trim();
+  if (!id) return;
+  rememberPaidGroomingJob(id);
+  try {
+    const raw = localStorage.getItem("you-stile-my-orders");
+    const all: Array<{ paymentId: string; tier: string; createdAt: number; thumbnail?: string }> = raw ? JSON.parse(raw) : [];
+    const prev = all.find((o) => o.paymentId === id);
+    const next = all.filter((o) => o.paymentId !== id);
+    next.push({
+      paymentId: id,
+      tier: "grooming",
+      createdAt: prev?.createdAt || Date.now(),
+      thumbnail: prev?.thumbnail,
+    });
+    localStorage.setItem("you-stile-my-orders", JSON.stringify(next.slice(-50)));
+    window.dispatchEvent(new Event("you-stile-orders-changed"));
+  } catch { /* ignore */ }
+}
+
+function savePickupCodeFromGrooming(code: string) {
+  const body = String(code || "").toUpperCase().replace(/СТИЛЬ/g, "").replace(/[^A-Z0-9]/g, "");
+  if (body.length >= 6) localStorage.setItem("you-stile-pickup-code", body.slice(0, 8));
+}
+
 function lookHasAfterPhoto(look?: GroomingLook | null) {
   return !!(look?.imageAfter && String(look.imageAfter).trim());
 }
@@ -1102,6 +1127,7 @@ export function GroomingModal({
     const jobId = (data as any)?.jobId;
     if (jobId) localStorage.setItem(LAST_JOB_KEY, String(jobId));
     if (jobId && mode === "paid") rememberPaidGroomingJob(String(jobId));
+    if (mode === "paid") saveCabinetGroomingOrder(String(jobId || paidId || paymentIdProp || ""));
     if (jobId && (resultMissingAfter(data) || paidPackageIncomplete(data))) localStorage.setItem(JOB_KEY, String(jobId));
     else localStorage.removeItem(JOB_KEY);
     setLoading(false);
@@ -1463,6 +1489,7 @@ export function GroomingModal({
       (mode === "paid" && payId ? payId : "")
       || `groom_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     localStorage.setItem(JOB_KEY, jobId);
+    if (mode === "paid") saveCabinetGroomingOrder(payId || jobId);
 
     const controller = new AbortController();
     abortRef.current?.abort();
@@ -1649,18 +1676,47 @@ export function GroomingModal({
     }
     setPaying(true);
     try {
+      let visitorId = "";
+      try {
+        visitorId = localStorage.getItem("you-stile-user-id") || "";
+        if (!visitorId) {
+          visitorId = crypto.randomUUID();
+          localStorage.setItem("you-stile-user-id", visitorId);
+        }
+      } catch { /* ignore */ }
       const res = await fetch("/api/create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: "grooming" }),
+        body: JSON.stringify({
+          tier: "grooming",
+          visitorId,
+          userName: localStorage.getItem("you-stile-user-name") || "",
+        }),
       });
       const data = await res.json();
-      if (!res.ok || !data.confirmationUrl) throw new Error(data.error || "Не удалось создать оплату");
+      if (data.pickupCode) {
+        savePickupCodeFromGrooming(data.pickupCode);
+        localStorage.setItem("pending_pickup_code", data.pickupCode);
+      }
       if (data.paymentId) {
         localStorage.setItem(PAID_KEY, data.paymentId);
         localStorage.setItem("pending_payment_id", data.paymentId);
         localStorage.setItem("pending_payment_tier", "grooming");
+        saveCabinetGroomingOrder(data.paymentId);
       }
+      if (data.ownerFree && data.paymentId) {
+        setPaidId(data.paymentId);
+        setScreen("upload");
+        onToast?.(
+          data.pickupCode
+            ? `Пакет открыт. Код ${data.pickupCode} — заказ в «Мои образы».`
+            : "Пакет открыт без оплаты. Если окно закроется — заказ будет в «Мои образы».",
+          "success",
+        );
+        setPaying(false);
+        return;
+      }
+      if (!res.ok || !data.confirmationUrl) throw new Error(data.error || "Не удалось создать оплату");
       window.location.href = data.confirmationUrl;
     } catch (e: any) {
       onToast?.(e.message || "Ошибка оплаты", "error");
