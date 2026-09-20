@@ -121,6 +121,7 @@ function asSavedOrderTier(raw: unknown): SavedOrderTier {
 const NAILS_ACCESS_KEY = "you-stile-nails-access";
 const NAILS_PAYMENT_KEY = "you-stile-nails-payment-id";
 const NAILS_MONTH_PRICE_RUB = 500;
+const STORAGE_HINT = "Сохраните или скачайте результат — на сайте он хранится сутки (24 часа).";
 type NailsAccessState = {
   token: string;
   kind: "once" | "month";
@@ -2501,7 +2502,7 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
           <div className="p-6 md:p-8">
             <h2 className="font-serif text-2xl md:text-3xl font-semibold text-charcoal mb-1">Мои образы</h2>
             <p className="text-[13px] md:text-sm text-charcoal/60 mb-4">
-              Если оплатили, а генерации нет — введите код СТИЛЬ-… и нажмите «Продолжить». Здесь и одежда, и причёска с уходом. Хранится сутки. Номер не нужен.
+              Если оплатили, а генерации нет — введите код СТИЛЬ-… и нажмите «Продолжить». Здесь и одежда, и причёска с уходом. Сохраните или скачайте результат — на сайте хранится сутки (24 часа). Номер не нужен.
             </p>
 
             <div className="rounded-2xl border border-charcoal/10 bg-white/60 p-4 mb-5">
@@ -2572,7 +2573,7 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
             {orders.length === 0 ? (
               <div className="text-center py-8">
                 <p className="text-charcoal/50 text-sm">Пока нет сохранённых образов.</p>
-                <p className="text-charcoal/40 text-xs mt-2">Введите код заказа СТИЛЬ-… — сюда попадут и одежда, и причёска. Если генерации нет, нажмите «Продолжить».</p>
+                <p className="text-charcoal/40 text-xs mt-2">Введите код заказа СТИЛЬ-… — сюда попадут и одежда, и причёска. Если генерации нет, нажмите «Продолжить». Сохраните или скачайте результат — на сайте хранится сутки (24 часа).</p>
               </div>
             ) : (
               <>
@@ -3273,7 +3274,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
             {getSavedPickupCode() && (
               <div className="mb-4 max-w-xl rounded-2xl border border-gold/30 bg-gold/10 px-4 py-3">
                 <p className="text-sm font-medium text-charcoal">Код заказа: {displayPickupCode(getSavedPickupCode())}</p>
-                <p className="text-xs text-charcoal/60 mt-1 leading-relaxed">Запишите его. Если страница закроется или генерации не будет — откройте «Мои образы» по этому коду и нажмите «Продолжить». Телефон не нужен.</p>
+                <p className="text-xs text-charcoal/60 mt-1 leading-relaxed">Запишите его. Если страница закроется или генерации не будет — откройте «Мои образы» по этому коду и нажмите «Продолжить». {STORAGE_HINT} Телефон не нужен.</p>
               </div>
             )}
 
@@ -3645,6 +3646,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
                   <ChevronLeft className="w-4 h-4" />
                   Вернуться к форме
                 </button>
+                <p className="text-sm text-charcoal/60 text-center -mt-2">{STORAGE_HINT}</p>
 
                 {/* Greeting & Analysis */}
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-charcoal/5">
@@ -4613,8 +4615,8 @@ export default function App() {
         setGroomingPaymentId(paymentId);
         setToast({
           message: savedPickupLabel
-            ? `Оплата прошла. Сохраните код ${savedPickupLabel} — причёска будет в «Мои образы».`
-            : "Оплата прошла! Загрузите фото для 3 причёсок и ухода. Если окно закроется — откройте «Мои образы».",
+            ? `Оплата прошла. Сохраните код ${savedPickupLabel}. Готовый результат скачайте — на сайте сутки.`
+            : "Оплата прошла! Загрузите фото. Готовый результат скачайте — на сайте сутки.",
           type: "success",
         });
         setTimeout(() => setIsGroomingOpen(true), 400);
@@ -4632,7 +4634,7 @@ export default function App() {
       window.history.replaceState({}, "", "/");
 
       if (savedPickupLabel) {
-        setToast({ message: `Оплата прошла. Сохраните код ${savedPickupLabel}`, type: "success" });
+        setToast({ message: `Оплата прошла. Сохраните код ${savedPickupLabel}. Готовый результат скачайте — на сайте сутки.`, type: "success" });
       }
 
       // Открываем окно загрузки
@@ -5140,6 +5142,12 @@ export default function App() {
             <p className="text-ivory/60 text-sm md:text-lg max-w-2xl mx-auto font-light">
               Выберите формат преображения, который подходит именно вам.
             </p>
+            <p className="text-ivory text-sm md:text-base max-w-3xl mx-auto mt-5 font-medium leading-relaxed">
+              Стандарт {prices.standard} ₽ · Премиум {prices.premium} ₽ · Причёска и уход {prices.grooming} ₽ · База маникюра {prices.nailsMonth} ₽/мес
+            </p>
+            <p className="text-ivory/70 text-sm max-w-xl mx-auto mt-2 font-light">
+              Бесплатно: чат со стилистом, 1 сравнение причёски, квиз ногтей
+            </p>
             <p className="text-ivory/45 text-sm max-w-xl mx-auto mt-3 font-light">
               Номер не спрашиваем. После оплаты будет код СТИЛЬ-…. Если генерации нет — «Мои образы» и «Продолжить».
             </p>
@@ -5249,8 +5257,8 @@ export default function App() {
             </div>
             <div className="flex flex-col md:flex-row md:items-start gap-8">
               <div className="md:w-56 shrink-0">
-                <h3 className="text-2xl font-serif font-semibold mb-2 text-white">База ногтей</h3>
-                <div className="text-3xl md:text-4xl font-semibold mb-3 text-gold">{prices.nailsMonth} ₽</div>
+                <h3 className="text-2xl font-serif font-semibold mb-2 text-white">База маникюра</h3>
+                <div className="text-3xl md:text-4xl font-semibold mb-3 text-gold">{prices.nailsMonth} ₽/мес</div>
                 <p className="text-ivory/60 text-[13px] md:text-sm">Месяц доступа ко всей базе маникюра и инструкциям для мастера.</p>
               </div>
               <ul className="space-y-3 flex-1">
@@ -5274,6 +5282,18 @@ export default function App() {
                 Выбрать тариф
               </button>
             </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            className="max-w-3xl mx-auto mb-12 rounded-3xl border border-gold/25 bg-gold/10 px-6 py-5 text-center"
+          >
+            <p className="text-gold text-xs tracking-[0.2em] uppercase mb-2">Бесплатно</p>
+            <p className="text-ivory/85 text-sm leading-relaxed">
+              Чат со стилистом · 1 сравнение причёски · квиз ногтей
+            </p>
           </motion.div>
 
           <motion.div 
