@@ -1938,6 +1938,9 @@ export function GroomingModal({
                 <h2 className="font-serif text-3xl text-charcoal mb-2">
                 {promoApplied ? "Промокод принят" : paidId ? "Оплата прошла" : ownerFree ? "С этого компьютера — без оплаты" : "Загрузите фото"}
                 </h2>
+                {paidId && (
+                  <p className="text-sm text-charcoal/60 mb-3">Сохраните или скачайте результат — на сайте он хранится сутки (24 часа).</p>
+                )}
                 {promoApplied && (
                   <p className="text-green-700 text-sm font-medium mb-2">✓ {promoCode} — загрузите фото, укажите рост и вес</p>
                 )}
@@ -2133,6 +2136,7 @@ export function GroomingModal({
                 )}
 
                 <div className="space-y-4">
+                  <p className="text-sm text-charcoal/60">Сохраните или скачайте результат — на сайте он хранится сутки (24 часа).</p>
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <h3 className="font-serif text-xl text-charcoal">3 причёски — сравнение кадров</h3>
                     <button
