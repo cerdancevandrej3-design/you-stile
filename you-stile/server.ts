@@ -43,9 +43,8 @@ if (!POLZA_API_KEY) {
 }
 const POLZA_BASE_URL = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
 
-const ANALYSIS_MODEL = "google/gemini-3.1-flash-lite-preview";
-// Nano Banana 2 — генерация изображений с лицом пользователя
-const IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
+const ANALYSIS_MODEL = "google/gemini-3.8-flash";
+const IMAGE_MODEL = "google/gemini-nano-banana-2.1";
 
 function sanitizeWishes(text: string): string {
   if (!text) return text;
@@ -97,7 +96,80 @@ function sanitizeEditPrompt(text: string): string {
     .replace(/\bnaked\b/gi, "open-shoulder")
     .replace(/\btopless\b/gi, "off-shoulder")
     .replace(/\blingerie\b/gi, "bodysuit")
-    .replace(/\bsuggestive\b/gi, "alluring");
+    .replace(/\bsuggestive\b/gi, "alluring")
+    // Anti-plastic / AI-look crutch words
+    .replace(/\bflawless\b/gi, "natural")
+    .replace(/\bporcelain\b/gi, "natural")
+    .replace(/\bairbrushed\b/gi, "unretouched")
+    .replace(/\bsmooth skin\b/gi, "real skin with pores")
+    .replace(/\bperfect skin\b/gi, "natural skin texture")
+    .replace(/\bglowing skin\b/gi, "natural skin with soft light")
+    .replace(/\bCGI\b/gi, "photograph")
+    .replace(/\b3D render\b/gi, "photograph")
+    .replace(/\boctane\b/gi, "")
+    .replace(/\bunreal engine\b/gi, "")
+    .replace(/\b8k\b/gi, "")
+    .replace(/\b4k\b/gi, "")
+    .replace(/\bultra.?detailed\b/gi, "detailed")
+    .replace(/\bhyperrealistic\b/gi, "photorealistic documentary")
+    .replace(/\bbeauty filter\b/gi, "no filter")
+    .replace(/\bplastic\b/gi, "natural fabric and skin");
+}
+
+function lookMentionsManicure(look: any): boolean {
+  const chunks: string[] = [];
+  if (typeof look?.lookName === "string") chunks.push(look.lookName);
+  if (typeof look?.description === "string") chunks.push(look.description);
+  if (typeof look?.editPrompt === "string") chunks.push(look.editPrompt);
+  if (Array.isArray(look?.items)) {
+    for (const item of look.items) {
+      if (typeof item?.name === "string") chunks.push(item.name);
+      if (typeof item?.description === "string") chunks.push(item.description);
+      if (typeof item?.searchQuery === "string") chunks.push(item.searchQuery);
+    }
+  }
+  const text = chunks.join(" ").toLowerCase();
+  return /маникюр|ногт|гель.?лак|френч|manicure|nail\b|nails\b|gel polish|french tip/.test(text);
+}
+
+function extractManicureDetail(look: any): string {
+  if (!Array.isArray(look?.items)) return "";
+  for (const item of look.items) {
+    const blob = `${item?.name || ""} ${item?.description || ""} ${item?.searchQuery || ""}`;
+    if (/маникюр|ногт|гель.?лак|френч|manicure|nail/i.test(blob)) {
+      return [item.name, item.description].filter(Boolean).join(". ").slice(0, 280);
+    }
+  }
+  return "";
+}
+
+const REALISM_LOCK = [
+  "REAL CAMERA LOOK (anti-plastic): looks like a real phone or DSLR fashion photo, not AI art.",
+  "Natural uneven skin: visible pores, fine peach fuzz, tiny freckles or texture where present — never waxy, never porcelain, never airbrushed.",
+  "Honest lighting: soft directional key, gentle falloff, real contact shadows under chin/nose/fabric folds; no beauty-studio glow, no HDR bloom.",
+  "Fabric is physical: weave, wrinkles, slight wear; matte or true sheen only where the material requires it.",
+  "No CGI, no 3D render, no doll skin, no plastic shine on face or clothes, no beauty filter, no over-smoothed skin.",
+].join(" ");
+
+function buildImagePrompt(look: any): string {
+  const base = sanitizeEditPrompt(look.editPrompt || "");
+  const identity =
+    `Edit Image 1. Create a real unretouched photograph, documentary photorealism. Image 1 is the identity reference. Single person only. ${REALISM_LOCK}`;
+
+  if (!lookMentionsManicure(look)) {
+    return `${identity} ${base}`;
+  }
+
+  const detail = extractManicureDetail(look);
+  const manicureLock = [
+    "MANICURE CLOSE-UP MODE (mandatory): extreme close-up of BOTH HANDS filling the frame so nails are large and sharp.",
+    "Not a full-body shot. Face optional / not required.",
+    "Nails must EXACTLY match the manicure described in the look (shape, length, color, finish, design).",
+    detail ? `Manicure to render 1:1: ${detail}` : "Render the manicure exactly as described in the edit prompt and items.",
+    "Matching skin tone to Image 1, real hand skin texture and pores, clean cuticles, sharp focus on nail tips — not plastic doll hands.",
+  ].join(" ");
+
+  return `${identity} ${manicureLock} ${base}`;
 }
 
 function safeJsonParse(text: string): any {
@@ -165,11 +237,11 @@ async function callPolzaChat(options: {
     max_tokens: options.maxTokens ?? 8192,
   };
 
-  // Only use response_format for Gemini models. YandexGPT и Perplexity Sonar
+  // Only use response_format for Gemini and Claude models. YandexGPT и Perplexity Sonar
   // часто возвращают пустой {} либо ломают разметку при response_format=json_object.
   if (
     options.useJsonFormat !== false &&
-    options.model.includes("gemini")
+    (options.model.includes("gemini") || options.model.includes("claude"))
   ) {
     requestBody.response_format = { type: "json_object" };
   }
@@ -198,6 +270,7 @@ async function generateImageWithFlux(prompt: string, referenceImageBase64?: stri
     input: {
       prompt: prompt,
       aspect_ratio: "3:4",
+      image_resolution: "2K",
     },
   };
 
@@ -522,7 +595,7 @@ loadList();
 
       // Prepare messages with image for Gemini analysis
       const wishesBlock = wishes
-        ? `\n\n🌟 ОСОБЫЕ ПОЖЕЛАНИЯ ПОЛЬЗОВАТЕЛЯ (PREMIUM — ВЫСШИЙ ПРИОРИТЕТ): "${wishes}"\n\n⚠️ КРИТИЧЕСКОЕ ПРАВИЛО ПРИ НАЛИЧИИ ПОЖЕЛАНИЙ:\nЕсли пользователь сформулировал конкретный запрос — ПОЛНОСТЬЮ ИГНОРИРУЙ структуру "офис/вечер/color-block" и стандартный список из 6 направлений. Создавай РОВНО то, что человек попросил.\n\nКонкретные сценарии:\n- "хочу образ рокера и 2 для свидания" → ровно 1 рокер + 2 свидания (НЕ офис/вечер/color-block!)\n- "три ярких на курорт" → все 3 курортных, можно оставить летние правила\n- "посоветуй макияж/причёску для X" → расширь раздел груминга в каждом образе с конкретикой под X (продукты, бренды, шаги)\n- "дай совет на первое свидание" → добавь блок "💬 Совет для свидания" в каждом образе: парфюм-нота, как зайти, что говорить, чего избегать\n- Любой другой запрос — БУКВАЛЬНО следуй пожеланию\n\nОБЯЗАТЕЛЬНЫЙ ПУНКТ ПАРФЮМ:\nЕсли пожелание касается свидания/вечера/мероприятия/стиля жизни — в каждом образе ОБЯЗАТЕЛЬНО рекомендуй парфюм (одну конкретную нишевую/премиум модель). ВАЖНО: каждый раз выбирай РАЗНЫЕ ароматы, не повторяй одни и те же. Для вдохновения — большой пул на выбор:\n\nМУЖСКИЕ/УНИСЕКС нишевые: Le Labo Santal 33, Le Labo Bergamote 22, Le Labo Rose 31, Maison Margiela Replica Jazz Club, Maison Margiela Replica By the Fireplace, Maison Margiela Replica Sailing Day, Tom Ford Tobacco Vanille, Tom Ford Oud Wood, Tom Ford Grey Vetiver, Tom Ford Neroli Portofino, Byredo Mojave Ghost, Byredo Bal d\'Afrique, Byredo Gypsy Water, Creed Aventus, Creed Silver Mountain Water, Acqua di Parma Colonia, Acqua di Parma Blu Mediterraneo, Diptyque Tam Dao, Diptyque Eau des Sens, Memo Paris Irish Leather, Parfums de Marly Layton, Parfums de Marly Percival, Initio Oud for Greatness, Initio Rehab, Nasomatto Black Afgano, Juliette Has a Gun Not a Perfume, Comme des Garçons Series 3 Incense Kyoto, Serge Lutens Ambre Sultan, Serge Lutens Chergui, Xerjoff Naxos, Xerjoff Alexandria II, Roja Dove Oligarch\n\nЖЕНСКИЕ/УНИСЕКС нишевые: Maison Francis Kurkdjian Baccarat Rouge 540, Maison Francis Kurkdjian Aqua Celestia, Maison Francis Kurkdjian À la Rose, Diptyque Philosykos, Diptyque Do Son, Diptyque Eau Rose, Chloé Atelier des Fleurs Rose Naturelle, Byredo Blanche, Byredo La Tulipe, Frederic Malle Portrait of a Lady, Frederic Malle Musc Ravageur, Frederic Malle Une Fleur de Cassie, Guerlain Spiritueuse Double Vanille, Guerlain Mon Guerlain Bloom of Rose, Penhaligon\'s Empressa, Penhaligon\'s Juniper Sling, Jo Malone Peony & Blush Suede, Jo Malone Wood Sage & Sea Salt, Jo Malone Lime Basil & Mandarin, Annick Goutal Petite Chérie, Memo Paris Inlé, Amouage Reflection Woman, Amouage Honour Woman, Serge Lutens Sa Majesté la Rose, Etat Libre d\'Orange Putain des Palaces, Comme des Garçons Wonderwood, Viktor&Rolf Flowerbomb Nectar, Narciso Rodriguez for Her Musc Noir\n\nВсегда объясняй ПОЧЕМУ этот конкретный аромат подходит к образу/ситуации/характеру человека.\n\nЕсли пожелания нет или они общие (типа "красиво") — следуй стандартной структуре офис/вечер/color-block.`
+        ? `\n\n🌟 ОСОБЫЕ ПОЖЕЛАНИЯ ПОЛЬЗОВАТЕЛЯ (PREMIUM — ВЫСШИЙ ПРИОРИТЕТ): "${wishes}"\n\n⚠️ КРИТИЧЕСКОЕ ПРАВИЛО ПРИ НАЛИЧИИ ПОЖЕЛАНИЙ:\nЕсли пользователь сформулировал конкретный запрос — ПОЛНОСТЬЮ ИГНОРИРУЙ структуру "офис/вечер/color-block" и стандартный список из 6 направлений. Создавай РОВНО то, что человек попросил.\n\nКонкретные сценарии:\n- "хочу образ рокера и 2 для свидания" → ровно 1 рокер + 2 свидания (НЕ офис/вечер/color-block!)\n- "три ярких на курорт" → все 3 курортных, можно оставить летние правила\n- "посоветуй макияж/причёску для X" → расширь раздел груминга в каждом образе с конкретикой под X (продукты, бренды, шаги)\n- "маникюр / ногти / подбери маникюр" → каждый look = отдельный вариант маникюра; editPrompt = КРУПНЫЙ ПЛАН РУК; цвет/форма/покрытие 1:1 с items; реалистичная кожа рук без пластика\n- "дай совет на первое свидание" → добавь блок "💬 Совет для свидания" в каждом образе: парфюм-нота, как зайти, что говорить, чего избегать\n- Любой другой запрос — БУКВАЛЬНО следуй пожеланию\n\nОБЯЗАТЕЛЬНЫЙ ПУНКТ ПАРФЮМ:\nЕсли пожелание касается свидания/вечера/мероприятия/стиля жизни — в каждом образе ОБЯЗАТЕЛЬНО рекомендуй парфюм (одну конкретную нишевую/премиум модель). ВАЖНО: каждый раз выбирай РАЗНЫЕ ароматы, не повторяй одни и те же. Для вдохновения — большой пул на выбор:\n\nМУЖСКИЕ/УНИСЕКС нишевые: Le Labo Santal 33, Le Labo Bergamote 22, Le Labo Rose 31, Maison Margiela Replica Jazz Club, Maison Margiela Replica By the Fireplace, Maison Margiela Replica Sailing Day, Tom Ford Tobacco Vanille, Tom Ford Oud Wood, Tom Ford Grey Vetiver, Tom Ford Neroli Portofino, Byredo Mojave Ghost, Byredo Bal d\'Afrique, Byredo Gypsy Water, Creed Aventus, Creed Silver Mountain Water, Acqua di Parma Colonia, Acqua di Parma Blu Mediterraneo, Diptyque Tam Dao, Diptyque Eau des Sens, Memo Paris Irish Leather, Parfums de Marly Layton, Parfums de Marly Percival, Initio Oud for Greatness, Initio Rehab, Nasomatto Black Afgano, Juliette Has a Gun Not a Perfume, Comme des Garçons Series 3 Incense Kyoto, Serge Lutens Ambre Sultan, Serge Lutens Chergui, Xerjoff Naxos, Xerjoff Alexandria II, Roja Dove Oligarch\n\nЖЕНСКИЕ/УНИСЕКС нишевые: Maison Francis Kurkdjian Baccarat Rouge 540, Maison Francis Kurkdjian Aqua Celestia, Maison Francis Kurkdjian À la Rose, Diptyque Philosykos, Diptyque Do Son, Diptyque Eau Rose, Chloé Atelier des Fleurs Rose Naturelle, Byredo Blanche, Byredo La Tulipe, Frederic Malle Portrait of a Lady, Frederic Malle Musc Ravageur, Frederic Malle Une Fleur de Cassie, Guerlain Spiritueuse Double Vanille, Guerlain Mon Guerlain Bloom of Rose, Penhaligon\'s Empressa, Penhaligon\'s Juniper Sling, Jo Malone Peony & Blush Suede, Jo Malone Wood Sage & Sea Salt, Jo Malone Lime Basil & Mandarin, Annick Goutal Petite Chérie, Memo Paris Inlé, Amouage Reflection Woman, Amouage Honour Woman, Serge Lutens Sa Majesté la Rose, Etat Libre d\'Orange Putain des Palaces, Comme des Garçons Wonderwood, Viktor&Rolf Flowerbomb Nectar, Narciso Rodriguez for Her Musc Noir\n\nВсегда объясняй ПОЧЕМУ этот конкретный аромат подходит к образу/ситуации/характеру человека.\n\nЕсли пожелания нет или они общие (типа "красиво") — следуй стандартной структуре офис/вечер/color-block.`
         : "";
       const messages = [
         {
@@ -631,7 +704,7 @@ loadList();
           let lastError = "";
           for (let attempt = 0; attempt < 2; attempt++) {
             try {
-              const fluxPrompt = `High-end fashion editorial photography. Single person only, one subject in frame. ${sanitizeEditPrompt(look.editPrompt)}`;
+              const fluxPrompt = buildImagePrompt(look);
               imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
               if (imageDataUrl) break;
               lastError = "No image data returned from Flux model.";
@@ -666,22 +739,23 @@ loadList();
         looks: looksWithImages,
       }) + "\n");
 
-      // Step 4: Build Google Shopping search URLs — универсальный поиск,
-      // не привязан к одному магазину, выдаёт товары из десятков площадок РФ
-      res.write(JSON.stringify({ type: "progress", step: 4.0, text: "Формируем поисковые ссылки..." }) + "\n");
+      // Step 4: Build search URLs for marketplaces
+      res.write(JSON.stringify({ type: "progress", step: 4.0, text: "Ищем товары на маркетплейсах..." }) + "\n");
 
-      const looksWithImagesAndUrls = looksWithImages.map((look: any) => {
-        const enrichedItems = (look.items || []).map((item: any) => {
-          const query = encodeURIComponent((item.searchQuery || item.name || "").toString());
+      const looksWithImagesAndUrls = await Promise.all(looksWithImages.map(async (look: any) => {
+        const enrichedItems = await Promise.all((look.items || []).map(async (item: any) => {
+          const query = (item.searchQuery || item.name || "").toString();
+          const encodedQuery = encodeURIComponent(query);
+          
           return {
             ...item,
-            wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${query}`,
-            ozonUrl: `https://www.ozon.ru/search/?text=${query}`,
-            ymUrl: `https://market.yandex.ru/search?text=${query}`,
+            wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${encodedQuery}`,
+            ozonUrl: `https://www.ozon.ru/search/?text=${encodedQuery}`,
+            ymUrl: `https://market.yandex.ru/search?text=${encodedQuery}`,
           };
-        });
+        }));
         return { ...look, items: enrichedItems };
-      });
+      }));
 
       res.write(JSON.stringify({
         type: "result",

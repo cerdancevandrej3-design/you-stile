@@ -2,6 +2,44 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Сервер, Hermes и базы
+
+Живой код и базы — на сервере, не в этой локальной копии. Пароли и API-ключи сюда не писать.
+
+- SSH: `root@186.246.31.126`
+- Корень: `/var/www/you-stile/you-stile`
+- Сайт: https://stilist-ai.ru
+- Пароль SSH — локальный, уже используемый для этого сервера. В репозиторий не копировать.
+
+Hermes (посты MAX и Telegram):
+
+- код: `hermes/hermes.ts`
+- секреты: `hermes/.env` (`HERMES_MAX_TOKEN`, `HERMES_MAX_CHAT_ID`)
+- журнал: `hermes/data/hermes-log.json`
+- картинки: `public/hermes/`
+- процесс pm2: `hermes` (`pm2 restart hermes --update-env`)
+- Telegram: `@stilist_ai_ru`
+
+База «Причёска и уход» — справочник модели, не витрина. Процесс pm2 `stilist` при старте склеивает шесть файлов в `src/grooming-system-prompt.txt`. После правки: `pm2 restart stilist --update-env`.
+
+Цель: кадр «после» свежее и моложе, лицо того же человека. До 18 лет — только свежее, тот же возраст. База для того, чтобы знать все варианты. Предлагать всё подряд нельзя: в ответ один кадр или три, только то, что подходит этому человеку и даёт омоложение и освежение. Помеченное «старит» или «не предлагать» не ставить по умолчанию. Бороду не рисовать на гладком лице.
+
+Каталог `part0_trends_2026.md`, 193 пункта: женские стрижки 1–65, чёлки 66–73, женские укладки 74–93, мужские стрижки 94–144, мужские укладки 145–153, бороды и усы 154–193. Дальше `part1_haircuts.md` (форма лица), `part2_color.md` (цвет), `part3_skincare.md` (уход), `part4_makeup.md` (макияж), `part5_lipstick.md` (18 тонов помады). `MasterHowTo.tsx` — только вёрстка.
+
+Пути: сервер `src/grooming/` и локально `you-stile/src/grooming/`. Промпт: `src/grooming-system-prompt.txt`. Окно: `src/GroomingModal.tsx`. Старые файлы: `src/grooming-bak/`. API: `POST /api/grooming`. Каталога, который листают, нет. Фото заказов: `data/grooming/`. Ответы: `data/grooming-results/`. Черновики в корневом `src/grooming/` стилист не читает.
+
+База ногтей (460 дизайнов, `GET /api/nails/lite-catalog`):
+
+- `public/nails-database.json`
+- `public/nails/catalog.json`
+- `public/nails/nails-data.json`
+- те же файлы в `dist/`
+- снимок: `data/prod-catalog.json`
+- картинки: `public/nails/`
+- прочие `data/nails-*.json` — аудиты, не клиентский каталог
+
+Полная карта: `agent.md` и `server-bases.md` в корне репозитория. Локальный `src/App.tsx` старее прода: причёска, ногти и чат собраны из файлов на сервере.
+
 ## Commands
 
 All commands run from `you-stile/`:
@@ -24,8 +62,8 @@ This is a single-repo full-stack app — one Express server serves both the API 
 2. **`server.ts`** (Express) handles `/api/*` routes; all other requests go to Vite middleware (dev) or `dist/` (prod)
 3. `/api/stylize` — main endpoint: receives up to 3 photos (multipart), streams NDJSON responses back via SSE-style `res.write()` + heartbeat
 4. Server calls **Polza.ai API** (`https://polza.ai/api/v1`) — OpenAI-compatible endpoint — using two models:
-   - `ANALYSIS_MODEL` (`google/gemini-3.1-flash-lite-preview`) — analyzes photo, generates JSON look recommendations
-   - `IMAGE_MODEL` (`google/gemini-3.1-flash-image-preview`) — generates outfit images with user's face
+   - `ANALYSIS_MODEL` (`anthropic/claude-haiku-5.5`) — analyzes photo, generates JSON look recommendations
+   - `IMAGE_MODEL` (`google/gemini-nano-banana-2.1`) — generates outfit images with user's face
 5. **`src/App.tsx`** — single React component (~1000 lines), reads the NDJSON stream and renders results progressively
 
 ### Key files

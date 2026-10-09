@@ -1,20 +1,49 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# You-Stile — AI Стилист
 
-# Run and deploy your AI Studio app
+Веб-приложение для персонализированных стилистических рекомендаций с использованием AI.
 
-This contains everything you need to run your app locally.
+Сайт: https://stilist-ai.ru
 
-View your app in AI Studio: https://ai.studio/apps/35cb2e56-cd99-4188-91b6-d07e2901804f
+## Запуск локально
 
-## Run Locally
+**Требования:** Node.js 18+
 
-**Prerequisites:**  Node.js
+1. Установите зависимости:
+   ```bash
+   npm install
+   ```
 
+2. Создайте `.env` файл с ключами:
+   ```
+   POLZA_API_KEY=your_polza_api_key
+   POLZA_BASE_URL=https://polza.ai/api/v1
+   ```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+3. Запустите dev-сервер:
+   ```bash
+   npm run dev
+   ```
+   
+   Приложение откроется на `http://localhost:3001`
+
+## Модели AI
+
+Проект использует [Polza.ai API](https://polza.ai) для доступа к моделям:
+
+- **Анализ фото:** `google/gemini-3.8-flash` (Google Gemini 3.8 Flash - новейшая модель с лучшим визуальным анализом)
+- **Генерация изображений:** `google/gemini-nano-banana-2.1`
+
+## Скрипты
+
+```bash
+npm run dev      # Dev-сервер (Express + Vite) на порту 3001
+npm run build    # Production сборка (Vite → dist/)
+npm run lint     # Проверка типов TypeScript
+```
+
+## Деплой
+
+Production сервер:
+- SSH: `root@186.246.31.126`
+- Путь: `/var/www/you-stile/you-stile`
+- pm2 процесс: `stilist`
