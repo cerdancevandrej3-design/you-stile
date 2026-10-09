@@ -363,6 +363,7 @@ async function startServer() {
   };
 
   const ADMIN_SECRET = process.env.ADMIN_SECRET || "admin";
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "stilist2026";
 
   app.use(helmet({ contentSecurityPolicy: false }));
 
@@ -411,6 +412,16 @@ async function startServer() {
     if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
     const list = Object.entries(promos).map(([code, e]) => ({ code, ...e }));
     res.json({ total: list.length, unused: list.filter(e => !e.used).length, codes: list });
+  });
+
+  // Admin authentication endpoint
+  app.post("/api/admin-auth", (req: Request, res: Response) => {
+    const { password } = req.body;
+    if (password === ADMIN_PASSWORD) {
+      res.json({ success: true, token: Buffer.from(ADMIN_PASSWORD).toString('base64') });
+    } else {
+      res.status(401).json({ success: false, error: "Invalid password" });
+    }
   });
 
   // Admin page

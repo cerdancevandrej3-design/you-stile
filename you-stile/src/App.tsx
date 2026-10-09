@@ -1142,11 +1142,20 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const [selectedPricingTier, setSelectedPricingTier] = useState<Tier>("standard");
+  const [isAdmin, setIsAdmin] = useState(() => {
+    const stored = localStorage.getItem("admin_access");
+    return stored === "true";
+  });
 
   const openModal = (tier?: Tier) => {
     const t = tier || "standard";
     setSelectedPricingTier(t);
-    setTimeout(() => setIsPricingOpen(true), 0);
+    // If admin, bypass payment and go straight to stylize modal
+    if (isAdmin) {
+      handlePaid(t);
+    } else {
+      setTimeout(() => setIsPricingOpen(true), 0);
+    }
   };
 
   const handlePaid = (tier: Tier) => {
@@ -1157,6 +1166,32 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    
+    // Check for admin password in URL
+    const adminParam = params.get("admin");
+    if (adminParam) {
+      fetch("/api/admin-auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: adminParam }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            localStorage.setItem("admin_access", "true");
+            setIsAdmin(true);
+            // Remove admin param from URL
+            params.delete("admin");
+            const newUrl = params.toString() 
+              ? `${window.location.pathname}?${params.toString()}`
+              : window.location.pathname;
+            window.history.replaceState({}, "", newUrl);
+          }
+        })
+        .catch(() => {});
+    }
+
+    // Check for token (existing functionality)
     const token = params.get("token");
     if (!token) return;
     fetch("/api/use-link", {

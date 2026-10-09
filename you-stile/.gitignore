@@ -6,5 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+evg
 used-promo-codes.json
 promo-codes.json
