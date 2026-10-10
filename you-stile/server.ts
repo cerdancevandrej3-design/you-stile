@@ -2330,250 +2330,141 @@ async function persistGroomingImage(folderId: string, slot: string, image: strin
   }
 }
 
-/** Кэш превью товаров WB: query → { imageUrl, productUrl, ts } */
-const productThumbCache = new Map<string, { imageUrl: string | null; productUrl: string | null; ts: number }>();
-const PRODUCT_THUMB_TTL_MS = 12 * 60 * 60 * 1000;
+/** Кэш результатов веб-поиска товаров: query → { imageUrl, wbUrl, ozonUrl, ymUrl, ts } */
+type ProductSearchResult = {
+  imageUrl: string | null;
+  wbUrl: string | null;
+  ozonUrl: string | null;
+  ymUrl: string | null;
+};
+const productSearchCache = new Map<string, ProductSearchResult & { ts: number }>();
+const PRODUCT_SEARCH_TTL_MS = 12 * 60 * 60 * 1000;
 
-/** Упорядоченные номера basket-* для артикула WB (таблица + оценка ~vol/195 для новых). */
-function wbBasketHostOrder(vol: number): number[] {
-  const legacy: Array<[number, number, number]> = [
-    [0, 143, 1], [144, 287, 2], [288, 431, 3], [432, 719, 4], [720, 1007, 5],
-    [1008, 1061, 6], [1062, 1115, 7], [1116, 1169, 8], [1170, 1313, 9], [1314, 1601, 10],
-    [1602, 1655, 11], [1656, 1919, 12], [1920, 2045, 13], [2046, 2189, 14], [2190, 2405, 15],
-    [2406, 2621, 16], [2622, 2837, 17], [2838, 3053, 18], [3054, 3269, 19], [3270, 3485, 20],
-    [3486, 3701, 21], [3702, 3917, 22], [3918, 4133, 23], [4134, 4349, 24], [4350, 4565, 25],
-    [4566, 4781, 26], [4782, 4997, 27], [4998, 5213, 28], [5214, 5429, 29], [5430, 5645, 30],
-    [5646, 5861, 31], [5862, 6077, 32], [6078, 6293, 33], [6294, 6509, 34], [6510, 6725, 35],
-    [6726, 6941, 36], [6942, 7157, 37], [7158, 7373, 38], [7374, 7589, 39], [7590, 7805, 40],
-    [7806, 8021, 41], [8022, 8237, 42], [8238, 9000, 43],
-  ];
-  let primary = 0;
-  for (const [from, to, host] of legacy) {
-    if (vol >= from && vol <= to) { primary = host; break; }
-  }
-  // Новые артикулы: эмпирически ~195 vol на шарду (5460→28, 8471→38)
-  const est = Math.min(45, Math.max(1, Math.round(vol / 195)));
-  if (!primary) primary = est;
-  const ordered: number[] = [];
-  const seen = new Set<number>();
-  const push = (h: number) => {
-    if (h < 1 || h > 45 || seen.has(h)) return;
-    seen.add(h);
-    ordered.push(h);
+/** Модель веб-поиска на Polza.ai: ищет реальные карточки товаров с источниками. */
+const SEARCH_MODEL = "perplexity/sonar";
+const SEARCH_MODEL_FALLBACK = "perplexity/sonar-pro";
+
+const SEARCH_SYSTEM_PROMPT =
+  "Ты поисковый агент по российским маркетплейсам (Wildberries, Ozon, Яндекс.Маркет). " +
+  "Пользователь даёт название товара (бренд + тип вещи + характеристики) на русском. " +
+  "Найди в интернете, существует ли такой товар, и верни ТОЛЬКО валидный JSON без markdown:\n" +
+  '{"found": true, "name": "точное название карточки", "brand": "бренд", "priceRub": 4990, ' +
+  '"imageUrl": "https://...jpg", "wbUrl": "https://www.wildberries.ru/...", ' +
+  '"ozonUrl": "https://www.ozon.ru/...", "ymUrl": "https://market.yandex.ru/..."}\n' +
+  "Правила: ссылки — только реальные, из результатов поиска. Если нашёл товар на конкретном маркетплейсе — " +
+  "дай прямую ссылку на карточку. Если карточки нет — поле оставь null, не выдумывай URL. " +
+  "imageUrl — прямая ссылка на фото товара (jpg/png/webp), если её видно в результатах. " +
+  "Если товар не нашёлся совсем, верни {\"found\": false}.";
+
+/** Ссылки-поисковики маркетплейсов по запросу — гарантированный fallback, если веб-поиск не дал прямых карточек. */
+function marketplaceSearchUrls(query: string): { wbUrl: string; ozonUrl: string; ymUrl: string } {
+  const q = encodeURIComponent(query.trim());
+  return {
+    wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${q}`,
+    ozonUrl: `https://www.ozon.ru/search/?text=${q}`,
+    ymUrl: `https://market.yandex.ru/search?text=${q}`,
   };
-  push(primary);
-  push(est);
-  for (let d = 1; d <= 12; d++) {
-    push(primary - d);
-    push(primary + d);
-    push(est - d);
-    push(est + d);
-  }
-  return ordered;
 }
 
-function wbImageCandidates(nmId: number): string[] {
-  const vol = Math.floor(nmId / 1e5);
-  const part = Math.floor(nmId / 1e3);
-  const urls: string[] = [];
-  for (const h of wbBasketHostOrder(vol)) {
-    const host = String(h).padStart(2, "0");
-    for (const domain of [`basket-${host}.wbbasket.ru`, `basket-${host}.wb.ru`]) {
-      urls.push(`https://${domain}/vol${vol}/part${part}/${nmId}/images/c246x328/1.webp`);
-      urls.push(`https://${domain}/vol${vol}/part${part}/${nmId}/images/big/1.webp`);
-    }
-  }
-  return urls;
-}
-
-async function resolveWbProductImage(nmId: number): Promise<string | null> {
-  const urls = wbImageCandidates(nmId);
-  const chunkSize = 10;
-  for (let i = 0; i < urls.length; i += chunkSize) {
-    const chunk = urls.slice(i, i + chunkSize);
-    const found = await Promise.any(
-      chunk.map(async (url) => {
-        try {
-          const r = await fetchWithTimeout(url, { method: "HEAD" }, 3000);
-          if (r.ok) return url;
-        } catch {}
-        try {
-          const g = await fetchWithTimeout(url, { method: "GET", headers: { Range: "bytes=0-64" } }, 4000);
-          if (g.ok || g.status === 206) return url;
-        } catch {}
-        throw new Error("miss");
-      })
-    ).catch(() => null);
-    if (found) return found;
+function parseSearchJson(raw: string): any | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  const candidates: string[] = [text];
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) candidates.push(fence[1].trim());
+  const brace = text.match(/\{[\s\S]*\}/);
+  if (brace?.[0]) candidates.push(brace[0]);
+  for (const c of candidates) {
+    try {
+      const parsed = JSON.parse(c);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
   }
   return null;
 }
 
-const WB_SEARCH_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  Accept: "application/json",
-  Origin: "https://www.wildberries.ru",
-  Referer: "https://www.wildberries.ru/",
-};
-
-async function wbSearchProducts(q: string): Promise<any[]> {
-  const versions = ["v7", "v5", "v4"] as const;
-  for (const ver of versions) {
-    const searchUrl =
-      `https://search.wb.ru/exactmatch/ru/common/${ver}/search?appType=1&curr=rub&dest=-1257786` +
-      `&query=${encodeURIComponent(q)}&resultset=catalog&sort=popular&spp=30`;
-    let resp = await fetchWithTimeout(searchUrl, { method: "GET", headers: WB_SEARCH_HEADERS }, 12000);
-    if (resp.status === 429) {
-      await new Promise((r) => setTimeout(r, 1200));
-      resp = await fetchWithTimeout(searchUrl, { method: "GET", headers: WB_SEARCH_HEADERS }, 12000);
-    }
-    if (!resp.ok) continue;
-    const data: any = await resp.json().catch(() => null);
-    const products: any[] = data?.products || data?.data?.products || [];
-    if (products.length) return products;
-  }
-  return [];
+function cleanUrl(v: any): string | null {
+  const s = String(v || "").trim();
+  if (!/^https?:\/\//i.test(s)) return null;
+  return s;
 }
 
-const BEAUTY_RE =
-  /сыворотк|крем|гель|тоник|пенк|умыван|spf|retinol|serum|cleanser|moisturizer|маск|шампун|бальзам|помад|тушь|тональн|консилер|хайлайтер|румян|палетк|лак|ногт|уход|косметик|антиэйдж|витамин|ниацинамид|гиалурон|солнцезащит|антиелиос|moisturizer|emulsion|lotion|ампул|эссенц|скраб|пилинг|патч|мицелляр|гидрофил/i;
-const PERFUME_RE =
-  /парфюм|духи|туалетн|аромат|одеколон|edp|edt|perfume|cologne|fragrance/i;
-const CLOTHES_RE =
-  /футболк|плать|джинс|куртк|брюк|рубашк|свитер|кроссов|туфл|юбк|пальто|блуз|шорты|леггинс|худи|майк|пиджак|костюм|кед|сапог|ботин|шарф|шапк|носк|бель|лифчик|бюстгалтер|толстовк|кардиган|жилет|тренч|плащ|пуховик|бомбер|ветровк|парка|дублёнк|шуб|жакет|блейзер|overshirt|лонгслив|водолазк|комбинезон|сарафан|туник|лофер|босонож|балетки|каблук|сумк|рюкзак|пояс|ремень|перчатк/i;
-
-/** Насколько карточка WB похожа на запрос — чтобы не подставлять футболку вместо сыворотки */
-function scoreWbProduct(query: string, brandHint: string, product: any): number {
-  const q = query.toLowerCase();
-  const name = String(product?.name || "").toLowerCase();
-  const brand = String(product?.brand || "").toLowerCase();
-  const brandWanted = brandHint.trim().toLowerCase();
-  let score = 0;
-
-  if (brandWanted) {
-    if (brand === brandWanted || brand.includes(brandWanted) || brandWanted.includes(brand)) score += 60;
-    else {
-      for (const part of brandWanted.split(/[\s.&/-]+/)) {
-        if (part.length > 2 && (brand.includes(part) || name.includes(part))) score += 25;
-      }
-    }
-  }
-
-  const tokens = q
-    .replace(/[^\p{L}\p{N}\s%+.-]/gu, " ")
-    .split(/\s+/)
-    .filter((t) => t.length > 2 && !/^(для|или|and|the|with|ml|мл|шт)$/i.test(t));
-  for (const t of tokens) {
-    if (name.includes(t)) score += 10;
-    if (brand.includes(t)) score += 6;
-  }
-
-  const wantPerfume = PERFUME_RE.test(q) || PERFUME_RE.test(brandWanted);
-  const wantBeauty = BEAUTY_RE.test(q) || BEAUTY_RE.test(brandWanted);
-  if (wantPerfume) {
-    if (PERFUME_RE.test(name)) score += 50;
-    if (CLOTHES_RE.test(name)) score -= 100;
-  } else if (wantBeauty) {
-    if (BEAUTY_RE.test(name)) score += 40;
-    if (CLOTHES_RE.test(name)) score -= 100;
-    // WB: уход/косметика часто parent 49 / близкие
-    const parent = Number(product?.subjectParentId || 0);
-    if ([49, 6236, 739, 1].includes(parent) || parent === 49) score += 12;
-  } else if (CLOTHES_RE.test(q)) {
-    // Образы: не подставлять косметику вместо одежды/верхней одежды
-    if (CLOTHES_RE.test(name)) score += 30;
-    if (BEAUTY_RE.test(name)) score -= 90;
-  }
-
-  return score;
-}
-
-async function findProductThumb(
+/**
+ * Веб-поиск реальной карточки товара через Perplexity (Polza.ai).
+ * Возвращает прямые ссылки на маркетплейсы и фото (если модель их нашла),
+ * иначе — null-поля; вызывающая сторона подставит поисковые ссылки.
+ */
+async function searchProductOnMarketplaces(
   query: string,
   brandHint = ""
-): Promise<{ imageUrl: string | null; productUrl: string | null }> {
-  const key = `${brandHint} ${query}`.trim().toLowerCase().replace(/\s+/g, " ");
-  if (!key) return { imageUrl: null, productUrl: null };
-  const cached = productThumbCache.get(key);
-  if (cached && Date.now() - cached.ts < PRODUCT_THUMB_TTL_MS) {
-    if (cached.imageUrl || Date.now() - cached.ts < 10 * 60 * 1000) {
-      return { imageUrl: cached.imageUrl, productUrl: cached.productUrl };
-    }
+): Promise<ProductSearchResult> {
+  const q = [brandHint.trim(), query.trim()].filter(Boolean).join(" ").trim();
+  if (q.length < 3) return { imageUrl: null, wbUrl: null, ozonUrl: null, ymUrl: null };
+
+  const key = q.toLowerCase().replace(/\s+/g, " ");
+  const cached = productSearchCache.get(key);
+  if (cached && Date.now() - cached.ts < PRODUCT_SEARCH_TTL_MS) {
+    return { imageUrl: cached.imageUrl, wbUrl: cached.wbUrl, ozonUrl: cached.ozonUrl, ymUrl: cached.ymUrl };
   }
 
-  const brand = brandHint.trim();
-  const qClean = query.trim();
-  // Варианты: бренд+название целиком важнее укороченных (укороченные дают мусор вроде футболок)
-  const queryVariants = [
-    brand && qClean ? `${brand} ${qClean}` : "",
-    qClean,
-    brand && qClean ? `${brand} ${qClean.split(/\s+/).slice(0, 4).join(" ")}` : "",
-    brand ? `${brand} ${qClean.replace(/[0-9.,%]+/g, " ").replace(/\s+/g, " ").trim()}` : "",
-  ].filter((q, i, arr) => q.length >= 3 && arr.indexOf(q) === i);
-
-  try {
-    let best: { score: number; nmId: number; productUrl: string } | null = null;
-
-    for (const q of queryVariants) {
-      const products = await wbSearchProducts(q);
-      for (const product of products.slice(0, 24)) {
-        const nmId = Number(product?.id || product?.nmId || product?.nm_id);
-        if (!nmId) continue;
-        const score = scoreWbProduct(q, brand || qClean, product);
-        if (!best || score > best.score) {
-          best = {
-            score,
-            nmId,
-            productUrl: `https://www.wildberries.ru/catalog/${nmId}/detail.aspx`,
-          };
-        }
+  const chain = [SEARCH_MODEL, SEARCH_MODEL_FALLBACK];
+  for (const model of chain) {
+    try {
+      const raw = await callPolzaChat({
+        model,
+        systemPrompt: SEARCH_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: `Найди товар: ${q}` }],
+        temperature: 0.2,
+        maxTokens: 1200,
+        useJsonFormat: false,
+        timeoutMs: 45000,
+      });
+      const parsed = parseSearchJson(raw);
+      if (!parsed || parsed.found === false) continue;
+      const result: ProductSearchResult = {
+        imageUrl: cleanUrl(parsed.imageUrl),
+        wbUrl: cleanUrl(parsed.wbUrl),
+        ozonUrl: cleanUrl(parsed.ozonUrl),
+        ymUrl: cleanUrl(parsed.ymUrl),
+      };
+      if (result.imageUrl || result.wbUrl || result.ozonUrl || result.ymUrl) {
+        productSearchCache.set(key, { ...result, ts: Date.now() });
+        return result;
       }
-      // Если уже есть сильное совпадение (бренд + тип) — не крутим слабые варианты
-      if (best && best.score >= 70) break;
-      await new Promise((r) => setTimeout(r, 300));
+    } catch (e) {
+      console.error(`[product-search] ${model}:`, (e as Error).message);
     }
-
-    // Порог: лучше пустой плейсхолдер, чем фото футболки у сыворотки
-    if (!best || best.score < 25) {
-      productThumbCache.set(key, { imageUrl: null, productUrl: best?.productUrl || null, ts: Date.now() });
-      return { imageUrl: null, productUrl: best?.productUrl || null };
-    }
-
-    const imageUrl = await resolveWbProductImage(best.nmId);
-    const out = { imageUrl, productUrl: best.productUrl, ts: Date.now() };
-    productThumbCache.set(key, out);
-    return { imageUrl, productUrl: best.productUrl };
-  } catch (e) {
-    console.error("[product-thumb]", (e as Error).message);
-    productThumbCache.set(key, { imageUrl: null, productUrl: null, ts: Date.now() });
-    return { imageUrl: null, productUrl: null };
   }
+  return { imageUrl: null, wbUrl: null, ozonUrl: null, ymUrl: null };
 }
 
-/** Подтянуть фото WB к списку товаров (по очереди, чтобы не словить 429). */
+/** Обогатить список товаров ухода/макияжа реальными ссылками и фото (последовательно, с паузой). */
 async function enrichShopProductsWithThumbs(products: any[]): Promise<any[]> {
   const out: any[] = [];
   for (const p of products) {
     const brand = String(p.brand || "").trim();
     const name = String(p.name || "").trim();
     const q = String(p.searchQuery || `${brand} ${name}`).trim();
+    const fallback = marketplaceSearchUrls(q || name || brand);
     if (!q && !brand && !name) { out.push(p); continue; }
     try {
-      const thumb = await findProductThumb(q || name, brand);
+      const found = await searchProductOnMarketplaces(q || name, brand);
       out.push({
         ...p,
-        imageUrl: thumb.imageUrl || p.imageUrl || null,
-        wbUrl: thumb.productUrl || p.wbUrl,
+        imageUrl: found.imageUrl || p.imageUrl || null,
+        wbUrl: found.wbUrl || p.wbUrl || fallback.wbUrl,
+        ozonUrl: found.ozonUrl || p.ozonUrl || fallback.ozonUrl,
+        ymUrl: found.ymUrl || p.ymUrl || fallback.ymUrl,
       });
     } catch {
       out.push(p);
     }
-    await new Promise((r) => setTimeout(r, 450));
+    await new Promise((r) => setTimeout(r, 300));
   }
   return out;
 }
 
-/** Для образов стилиста: поиск → прямая карточка WB + фото; Ozon/YM остаются страницами поиска. */
+/** Для образов стилиста: веб-поиск реальной карточки товара + фото; иначе — страницы поиска. */
 async function enrichOutfitLooksWithWb(
   looks: any[],
   onProgress?: (done: number, total: number) => void
@@ -2586,12 +2477,12 @@ async function enrichOutfitLooksWithWb(
     const enrichedItems: any[] = [];
     for (const item of look.items || []) {
       const q = String(item.searchQuery || item.name || "").trim();
-      const queryEnc = encodeURIComponent(q);
+      const fallback = marketplaceSearchUrls(q);
       const base = {
         ...item,
-        wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${queryEnc}`,
-        ozonUrl: `https://www.ozon.ru/search/?text=${queryEnc}`,
-        ymUrl: `https://market.yandex.ru/search?text=${queryEnc}`,
+        wbUrl: fallback.wbUrl,
+        ozonUrl: fallback.ozonUrl,
+        ymUrl: fallback.ymUrl,
       };
       if (!q) {
         enrichedItems.push(base);
@@ -2600,19 +2491,21 @@ async function enrichOutfitLooksWithWb(
         continue;
       }
       try {
-        const thumb = await findProductThumb(q, String(item.brand || ""));
+        const found = await searchProductOnMarketplaces(q, String(item.brand || ""));
         enrichedItems.push({
           ...base,
-          imageUrl: thumb.imageUrl || base.imageUrl || null,
-          wbUrl: thumb.productUrl || base.wbUrl,
-          productUrl: thumb.productUrl || null,
+          imageUrl: found.imageUrl || base.imageUrl || null,
+          wbUrl: found.wbUrl || base.wbUrl,
+          ozonUrl: found.ozonUrl || base.ozonUrl,
+          ymUrl: found.ymUrl || base.ymUrl,
+          productUrl: found.wbUrl || null,
         });
       } catch {
         enrichedItems.push(base);
       }
       done++;
       onProgress?.(done, flatCount);
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 300));
     }
     out.push({ ...look, items: enrichedItems });
   }
@@ -4550,12 +4443,20 @@ updatePromoHint();
     }
   });
 
-  // Превью товара по поисковому запросу (WB) — для карточек ухода/макияжа
+  // Превью + ссылки товара по поисковому запросу (веб-поиск Perplexity) — для карточек ухода/макияжа
   app.get("/api/product-thumb", async (req: Request, res: Response) => {
     const q = ((req.query.q as string) || "").toString().trim().slice(0, 120);
     const brand = ((req.query.brand as string) || "").toString().trim().slice(0, 60);
+    const fallbackUrls = marketplaceSearchUrls(q || brand);
     if (!q && !brand) return res.json({ imageUrl: null, productUrl: null });
-    const result = await findProductThumb(q || brand, brand);
+    const found = await searchProductOnMarketplaces(q || brand, brand);
+    const result = {
+      imageUrl: found.imageUrl,
+      productUrl: found.wbUrl,
+      wbUrl: found.wbUrl || fallbackUrls.wbUrl,
+      ozonUrl: found.ozonUrl || fallbackUrls.ozonUrl,
+      ymUrl: found.ymUrl || fallbackUrls.ymUrl,
+    };
     res.setHeader("Cache-Control", "public, max-age=3600");
     res.json(result);
   });
@@ -5006,53 +4907,11 @@ ${perLookVenues}
         },
       ];
 
-      // Step 0 (premium): если есть wishes — сначала ищем свежие тренды через Perplexity Sonar
-      let trendsContext = "";
-      if (wishes) {
-        safeWrite(JSON.stringify({ type: "progress", step: 0.9, text: "Ищем свежие модные тренды по твоему запросу..." }) + "\n");
-        try {
-          const trendsResp = await fetch(`${POLZA_BASE_URL}/chat/completions`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${POLZA_API_KEY}` },
-            body: JSON.stringify({
-              model: "perplexity/sonar",
-              messages: [
-                { role: "system", content: "Ты — ассистент-исследователь модных трендов. Дай 3–5 коротких пунктов конкретики (что носят, какие вещи, цвета, бренды) по запросу. Только русский, никаких ссылок и markdown. Максимум 600 символов." },
-                { role: "user", content: `Найди свежие модные тренды 2026 по теме: "${wishes.slice(0, 180)}". Что реально носят сейчас? Какие конкретные вещи, цвета, бренды? Дай 3–5 пунктов конкретики.` },
-              ],
-              temperature: 0.5,
-              max_tokens: 600,
-            }),
-          });
-          if (trendsResp.ok) {
-            const td = await trendsResp.json();
-            const content = td?.choices?.[0]?.message?.content;
-            if (typeof content === "string" && content.trim()) {
-              trendsContext = content.trim().slice(0, 1500);
-              console.log("[Trends] Got context:", trendsContext.length, "chars");
-            }
-          }
-        } catch (e: any) {
-          console.error("[Trends] Failed (non-blocking):", e.message);
-        }
-      }
-
-      // Step 1: Analyze with Gemini 3.7 Flash (same model on Standard and Premium)
+      // Step 1: Analyze with Gemini (same model on Standard and Premium)
       safeWrite(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ фото и подбор образов с помощью AI..." }) + "\n");
 
       // Высокая температура для разнообразия образов при каждой генерации
       const analysisTemp = 0.95;
-
-      // Подмешиваем тренды в последнее user-сообщение
-      if (trendsContext) {
-        const last = messages[messages.length - 1];
-        if (last && Array.isArray(last.content)) {
-          const textPart = last.content.find((c: any) => c.type === "text");
-          if (textPart) {
-            textPart.text += `\n\n📡 СВЕЖИЕ ТРЕНДЫ ИЗ ИНТЕРНЕТА (используй эти конкретные идеи):\n${trendsContext}`;
-          }
-        }
-      }
 
       let analysisData: any;
       let analysisText = "";
@@ -5297,15 +5156,15 @@ ${perLookVenues}
         } catch (e) { console.error("[Partial save] failed:", e); }
       }
 
-      // Step 4: ищем реальные карточки на WB (как в уходе); Ozon/YM — страницы поиска
-      safeWrite(JSON.stringify({ type: "progress", step: 4.0, text: "Ищем товары на Wildberries..." }) + "\n");
+      // Step 4: ищем реальные карточки товаров через веб-поиск (Perplexity); иначе — страницы поиска
+      safeWrite(JSON.stringify({ type: "progress", step: 4.0, text: "Ищем товары на маркетплейсах..." }) + "\n");
 
       const looksWithImagesAndUrls = await enrichOutfitLooksWithWb(looksWithImages, (done, total) => {
         if (total > 0 && (done === total || done % 3 === 0)) {
           safeWrite(JSON.stringify({
             type: "progress",
             step: 4.0,
-            text: `Ищем товары на Wildberries... ${done}/${total}`,
+            text: `Ищем товары на маркетплейсах... ${done}/${total}`,
           }) + "\n");
         }
       });
