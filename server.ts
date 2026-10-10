@@ -1,14 +1,18 @@
-import express, { Request, Response, NextFunction } from "express";
+﻿import express, { Request, Response, NextFunction } from "express";
 import { createServer as createViteServer } from "vite";
 import multer from "multer";
 import cors from "cors";
-import helmet from "helmet";
-import rateLimit from "express-rate-limit";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
+import crypto from "crypto";
 import dotenv from "dotenv";
-import QRCode from "qrcode";
+import { createNailsSubscription, NAILS_MONTH_PRICE } from "./nails-subscription";
+import { pickLuxuryScenes, occasionVenueHint, occasionSceneLockEn, occasionKeyForLook } from "./luxury-scenes";
+
+const require = createRequire(import.meta.url);
+const YooCheckout = require("yookassa");
 
 type MulterFile = Express.Multer.File;
 
@@ -19,7 +23,1158 @@ dotenv.config({ path: path.join(__dirname, ".env") });
 
 const PROJECT_ROOT = __dirname;
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const TELEGRAM_BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+const TELEGRAM_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "8602635380").trim();
+
+/** Уведомления владельцу. Токен только из .env — никогда не в фронтенде. */
+function notifyTelegram(text: string): void {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.warn("[Telegram] TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не заданы");
+    return;
+  }
+  fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text }),
+  }).catch((e) => console.warn("[Telegram] send failed:", (e as Error).message));
+}
+
+// YooKassa client
+const yooKassa = new YooCheckout({
+  shopId: process.env.YOOKASSA_SHOP_ID || "",
+  secretKey: process.env.YOOKASSA_SECRET_KEY || "",
+});
+
+// Stats helpers — event-based with timestamps
+interface StatsEvent {
+  type:
+    | "visit"
+    | "paid_standard"
+    | "paid_premium"
+    | "paid_nails_month"
+    | "paid_grooming"
+    | "paid_promo_standard"
+    | "paid_promo_premium";
+  ts: string;
+}
+interface StatsData {
+  events: StatsEvent[];
+  standardPrice: number;
+  premiumPrice: number;
+  nailsMonthPrice: number;
+  groomingPrice?: number;
+}
+
+const statsPath = path.join(PROJECT_ROOT, "data", "stats.json");
+const pageviewsPath = path.join(PROJECT_ROOT, "data", "pageviews.json");
+
+type PageView = {
+  ts: string;
+  visitorId: string;
+  name: string; // пусто = аноним
+  path: string;
+  kind?: "page" | "click";
+};
+
+let _pageviewsCache: PageView[] | null = null;
+function loadPageviews(): PageView[] {
+  if (_pageviewsCache) return _pageviewsCache;
+  try {
+    if (fs.existsSync(pageviewsPath)) {
+      const raw = JSON.parse(fs.readFileSync(pageviewsPath, "utf-8"));
+      _pageviewsCache = Array.isArray(raw) ? raw : Array.isArray(raw?.events) ? raw.events : [];
+      return _pageviewsCache!;
+    }
+  } catch {}
+  _pageviewsCache = [];
+  return _pageviewsCache;
+}
+function savePageviews(events: PageView[]) {
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  const pruned = events.filter((e) => new Date(e.ts).getTime() >= cutoff).slice(-50000);
+  _pageviewsCache = pruned;
+  const dir = path.dirname(pageviewsPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(pageviewsPath, JSON.stringify(pruned));
+}
+function appendPageView(hit: PageView) {
+  const events = loadPageviews();
+  events.push(hit);
+  savePageviews(events);
+}
+function filterPageviewsByPeriod(events: PageView[], period?: string): PageView[] {
+  let cutoff: Date | null = null;
+  const now = new Date();
+  if (period === "today") cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  else if (period === "week") cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  else if (period === "month") cutoff = new Date(now.getFullYear(), now.getMonth(), 1);
+  return cutoff ? events.filter((e) => new Date(e.ts) >= cutoff!) : events;
+}
+
+/** Не считаем в статистике заходы админа и тестовые (по имени в профиле). */
+function isInternalPageView(e: PageView): boolean {
+  const n = (e.name || "").trim().toLowerCase();
+  if (!n) return false;
+  return /^(admin|админ|тест|test|tester|testing)([\s._-]|$)/i.test(n)
+    || n.includes("админ")
+    || n.includes("admin")
+    || n === "тест"
+    || n === "test";
+}
+
+function summarizePageviews(period?: string) {
+  const filtered = filterPageviewsByPeriod(loadPageviews(), period).filter((e) => !isInternalPageView(e));
+  const pages = filtered.filter((e) => (e.kind || "page") === "page");
+  const clicks = filtered.filter((e) => e.kind === "click");
+  const uniqueIds = new Set(filtered.map((e) => e.visitorId));
+  const namedIds = new Set(filtered.filter((e) => e.name.trim()).map((e) => e.visitorId));
+
+  const countBy = (events: PageView[], key: (e: PageView) => string) => {
+    const map = new Map<string, number>();
+    for (const e of events) {
+      const k = key(e);
+      if (!k) continue;
+      map.set(k, (map.get(k) || 0) + 1);
+    }
+    return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([name, count]) => ({ name, count }));
+  };
+
+  // Последние визиторы с цепочкой действий (для админки)
+  const byVisitor = new Map<string, PageView[]>();
+  for (const e of filtered) {
+    const list = byVisitor.get(e.visitorId) || [];
+    list.push(e);
+    byVisitor.set(e.visitorId, list);
+  }
+  const journeys = [...byVisitor.entries()]
+    .map(([visitorId, events]) => {
+      const sorted = events.slice().sort((a, b) => a.ts.localeCompare(b.ts));
+      const names = sorted.map((e) => e.name.trim()).filter(Boolean);
+      const name = names.length ? names[names.length - 1] : "";
+      return {
+        visitorId,
+        name,
+        firstAt: sorted[0]?.ts || "",
+        lastAt: sorted[sorted.length - 1]?.ts || "",
+        steps: sorted.length,
+        path: sorted.map((e) => (e.kind === "click" ? `клик:${e.path}` : e.path)).slice(-25),
+      };
+    })
+    .sort((a, b) => (b.lastAt || "").localeCompare(a.lastAt || ""))
+    .slice(0, 80);
+
+  return {
+    totalViews: pages.length,
+    totalClicks: clicks.length,
+    uniqueVisitors: uniqueIds.size,
+    namedVisitors: namedIds.size,
+    anonymousVisitors: Math.max(0, uniqueIds.size - namedIds.size),
+    topPages: countBy(pages, (e) => e.path),
+    topClicks: countBy(clicks, (e) => e.path),
+    journeys,
+  };
+}
+const RESULTS_DIR = path.join(PROJECT_ROOT, "data", "results");
+const ORDERS_DIR = path.join(PROJECT_ROOT, "data", "orders");
+const USERS_DIR = path.join(PROJECT_ROOT, "data", "users");
+const PHONES_DIR = path.join(PROJECT_ROOT, "data", "phones");
+const GROOMING_IMG_DIR = path.join(PROJECT_ROOT, "data", "grooming");
+const GROOMING_RESULTS_DIR = path.join(PROJECT_ROOT, "data", "grooming-results");
+if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
+if (!fs.existsSync(ORDERS_DIR)) fs.mkdirSync(ORDERS_DIR, { recursive: true });
+if (!fs.existsSync(USERS_DIR)) fs.mkdirSync(USERS_DIR, { recursive: true });
+if (!fs.existsSync(PHONES_DIR)) fs.mkdirSync(PHONES_DIR, { recursive: true });
+const PICKUP_DIR = path.join(PROJECT_ROOT, "data", "pickup-codes");
+if (!fs.existsSync(PICKUP_DIR)) fs.mkdirSync(PICKUP_DIR, { recursive: true });
+if (!fs.existsSync(GROOMING_IMG_DIR)) fs.mkdirSync(GROOMING_IMG_DIR, { recursive: true });
+if (!fs.existsSync(GROOMING_RESULTS_DIR)) fs.mkdirSync(GROOMING_RESULTS_DIR, { recursive: true });
+const GROOMING_FREE_FILE = path.join(PROJECT_ROOT, "data", "grooming-free-used.json");
+
+function readFreeGroomUsed(): Record<string, string> {
+  try {
+    if (!fs.existsSync(GROOMING_FREE_FILE)) return {};
+    const raw = JSON.parse(fs.readFileSync(GROOMING_FREE_FILE, "utf-8"));
+    return raw && typeof raw === "object" ? raw as Record<string, string> : {};
+  } catch {
+    return {};
+  }
+}
+
+function hasUsedFreeGrooming(visitorId: string): boolean {
+  if (!visitorId) return false;
+  return !!readFreeGroomUsed()[visitorId];
+}
+
+function markFreeGroomingUsed(visitorId: string): void {
+  if (!visitorId) return;
+  const data = readFreeGroomUsed();
+  data[visitorId] = new Date().toISOString();
+  try {
+    fs.writeFileSync(GROOMING_FREE_FILE, JSON.stringify(data, null, 2), "utf-8");
+  } catch (e) {
+    console.error("[Grooming] markFreeGroomingUsed failed:", e);
+  }
+}
+
+const RESULTS_TTL_MS = 5 * 60 * 60 * 1000; // 5 hours — только черновики без оплаты
+const RESULTS_TTL_PAID_MS = 24 * 60 * 60 * 1000; // сутки — оплаченные образы и причёски
+const UNFINISHED_ORDER_TTL_MS = 24 * 60 * 60 * 1000; // сутки на незавершённый оплаченный заказ
+
+/** Оплаченное хранится сутки. Неоплаченный черновик — 5 часов. */
+function resultsTtlForUser(userName?: string | null, opts?: { paid?: boolean; visitorId?: string }): number {
+  if (opts?.paid || (opts?.visitorId || "").trim() || (userName || "").trim()) return RESULTS_TTL_PAID_MS;
+  return RESULTS_TTL_MS;
+}
+
+function paidResultExpiresAtIso(ttlMs?: number | null): string {
+  return new Date(Date.now() + (ttlMs || RESULTS_TTL_PAID_MS)).toISOString();
+}
+
+type UserStyleLook = {
+  lookName: string;
+  categories: string[];
+  season?: string;
+  occasions?: string[];
+};
+type UserSession = {
+  paymentId: string;
+  tier: string;
+  at: string;
+  season?: string;
+  wishes?: string;
+  looks: UserStyleLook[];
+};
+type UserProfile = {
+  visitorId: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  orderIds: string[];
+  sessions: UserSession[];
+  /** Последние id люксовых фонов — чтобы при повторной генерации антураж не повторялся. */
+  recentSceneIds?: string[];
+};
+
+function sanitizeVisitorId(value: unknown): string {
+  return String(value || "").trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+}
+function userFile(visitorId: string) {
+  return path.join(USERS_DIR, `${sanitizeVisitorId(visitorId)}.json`);
+}
+function readUserProfile(visitorId: string): UserProfile | null {
+  const id = sanitizeVisitorId(visitorId);
+  if (!id) return null;
+  try {
+    const file = userFile(id);
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, "utf-8")) as UserProfile;
+  } catch {
+    return null;
+  }
+}
+function saveUserProfile(profile: UserProfile): void {
+  const id = sanitizeVisitorId(profile.visitorId);
+  if (!id) return;
+  profile.visitorId = id;
+  profile.updatedAt = new Date().toISOString();
+  writeJsonAtomic(userFile(id), profile);
+}
+function isOwnerVisitor(visitorId: unknown): boolean {
+  return sanitizeVisitorId(visitorId) === "280ba97e-5e4d-4634-8dfb-3e3de112ccc6";
+}
+function canonicalOwnerName(visitorId: string, name: string): string {
+  const trimmed = (name || "").trim();
+  if (isOwnerVisitor(visitorId) && (!trimmed || trimmed === "Юра")) return "Андрей";
+  return trimmed;
+}
+function ensureUserProfile(visitorId: string, name = ""): UserProfile | null {
+  const id = sanitizeVisitorId(visitorId);
+  if (!id) return null;
+  const incoming = canonicalOwnerName(id, name);
+  const existing = readUserProfile(id);
+  if (existing) {
+    if (incoming && existing.name !== incoming) {
+      existing.name = incoming.slice(0, 80);
+      saveUserProfile(existing);
+    }
+    return existing;
+  }
+  const created: UserProfile = {
+    visitorId: id,
+    name: (incoming || "").slice(0, 80),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    orderIds: [],
+    sessions: [],
+  };
+  saveUserProfile(created);
+  return created;
+}
+function buildStyleHistoryInstruction(profile: UserProfile | null, clientPast: string): string {
+  const fromSessions = (profile?.sessions || [])
+    .flatMap((s) =>
+      (s.looks || []).map((l) => {
+        const cats = (l.categories || []).filter(Boolean).slice(0, 6).join("/");
+        const season = l.season || s.season || "";
+        return [l.lookName, cats && `(${cats})`, season && `[${season}]`].filter(Boolean).join(" ");
+      })
+    )
+    .filter(Boolean);
+  const fromClient = clientPast
+    .split(/[,;|]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const item of [...fromSessions, ...fromClient]) {
+    const key = item.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+    if (merged.length >= 18) break;
+  }
+  if (!merged.length) return "";
+  const seasons = [...new Set((profile?.sessions || []).map((s) => s.season).filter(Boolean))];
+  const seasonHint = seasons.length
+    ? ` Ранее уже были сезоны: ${seasons.slice(-4).join(", ")} — варьируй палитру и слои, даже в том же сезоне.`
+    : "";
+  return (
+    `ИСТОРИЯ СТИЛЯ ЭТОГО ПОЛЬЗОВАТЕЛЯ (сервер + прошлые визиты): уже предлагались: ${merged.join("; ")}. ` +
+    `КРИТИЧЕСКИ: НЕ повторяй эти названия, силуэты, цветовые схемы и концепции. ` +
+    `Сделай принципиально ДРУГОЙ вайб: другие ткани, пропорции, акценты, настроение.${seasonHint} `
+  );
+}
+function recordUserStyleSession(opts: {
+  visitorId: string;
+  userName?: string;
+  paymentId: string;
+  tier: string;
+  season?: string;
+  wishes?: string;
+  looks: any[];
+}): void {
+  const id = sanitizeVisitorId(opts.visitorId);
+  if (!id || !opts.paymentId) return;
+  const profile = ensureUserProfile(id, opts.userName || "") || readUserProfile(id);
+  if (!profile) return;
+  if (!profile.orderIds.includes(opts.paymentId)) profile.orderIds.push(opts.paymentId);
+  if (profile.orderIds.length > 40) profile.orderIds = profile.orderIds.slice(-40);
+  const looks: UserStyleLook[] = (opts.looks || []).slice(0, 8).map((look: any): UserStyleLook => {
+    const cats: string[] = (Array.isArray(look.items) ? look.items : [])
+      .map((it: any) => String(it.category || it.name || "").trim().toLowerCase())
+      .filter((c: string) => c.length > 0);
+    const uniqueCats: string[] = Array.from(new Set<string>(cats)).slice(0, 8);
+    return {
+      lookName: String(look.lookName || look.name || "образ").slice(0, 80),
+      categories: uniqueCats,
+      season: opts.season || undefined,
+    };
+  });
+  profile.sessions.push({
+    paymentId: opts.paymentId,
+    tier: opts.tier || "standard",
+    at: new Date().toISOString(),
+    season: opts.season || undefined,
+    wishes: (opts.wishes || "").slice(0, 200) || undefined,
+    looks,
+  });
+  if (profile.sessions.length > 25) profile.sessions = profile.sessions.slice(-25);
+  saveUserProfile(profile);
+}
+const GROOMING_IMG_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — только бесплатные черновики
+const GROOMING_RESULTS_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — бесплатная 1 причёска; paid = RESULTS_TTL_PAID_MS (сутки)
+
+type OrderStatus = "awaiting_payment" | "awaiting_input" | "processing" | "partial" | "ready" | "failed" | "expired";
+interface OrderRecord {
+  paymentId: string;
+  tier: "standard" | "premium" | "grooming";
+  status: OrderStatus;
+  createdAt: string;
+  updatedAt: string;
+  paidAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  unfinishedExpiresAt?: string;
+  resultExpiresAt?: string;
+  expectedLooks?: number;
+  completedLooks?: number;
+  error?: string | null;
+  visitorId?: string;
+  userName?: string;
+  /** Старые заказы: телефон как запасной ключ */
+  phone?: string;
+  /** Код заказа для «Мои образы», без телефона: СТИЛЬ-K7M2QX */
+  pickupCode?: string;
+}
+
+type PhoneIndex = {
+  phone: string;
+  orderIds: string[];
+  updatedAt: string;
+};
+
+/** Приводит номер РФ к виду 7XXXXXXXXXX. Иначе "". */
+function normalizePhone(raw: unknown): string {
+  let digits = String(raw || "").replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("8")) digits = `7${digits.slice(1)}`;
+  if (digits.length === 10) digits = `7${digits}`;
+  if (digits.length === 11 && digits.startsWith("7")) return digits;
+  return "";
+}
+
+function phoneFile(phone: string) {
+  return path.join(PHONES_DIR, `${phone}.json`);
+}
+
+function readPhoneIndex(phone: string): PhoneIndex | null {
+  const id = normalizePhone(phone);
+  if (!id) return null;
+  try {
+    const file = phoneFile(id);
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, "utf-8")) as PhoneIndex;
+  } catch {
+    return null;
+  }
+}
+
+function linkOrderToPhone(phoneRaw: unknown, paymentIdRaw: unknown): string {
+  const phone = normalizePhone(phoneRaw);
+  const paymentId = sanitizeOrderId(paymentIdRaw);
+  if (!phone || !paymentId) return phone;
+  const existing = readPhoneIndex(phone);
+  const orderIds = existing?.orderIds ? [...existing.orderIds] : [];
+  if (!orderIds.includes(paymentId)) orderIds.push(paymentId);
+  const trimmed = orderIds.slice(-40);
+  writeJsonAtomic(phoneFile(phone), {
+    phone,
+    orderIds: trimmed,
+    updatedAt: new Date().toISOString(),
+  } satisfies PhoneIndex);
+  return phone;
+}
+
+const PICKUP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function normalizePickupCode(raw: unknown): string {
+  let s = String(raw || "").toUpperCase();
+  s = s.replace(/СТИЛЬ/g, "").replace(/STIL[bЬ]?/g, "");
+  s = s.replace(/[^A-Z0-9]/g, "");
+  if (s.length < 6 || s.length > 10) return "";
+  return s.slice(0, 8);
+}
+
+function displayPickupCode(body: string): string {
+  return body ? `СТИЛЬ-${body}` : "";
+}
+
+function generatePickupBody(): string {
+  let body = "";
+  for (let i = 0; i < 6; i++) body += PICKUP_ALPHABET[crypto.randomInt(PICKUP_ALPHABET.length)];
+  return body;
+}
+
+function pickupFile(body: string) {
+  return path.join(PICKUP_DIR, `${body}.json`);
+}
+
+function readPickup(body: string): { paymentId: string; code: string } | null {
+  const id = normalizePickupCode(body);
+  if (!id) return null;
+  try {
+    const file = pickupFile(id);
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function createUniquePickupCode(): string {
+  for (let i = 0; i < 12; i++) {
+    const body = generatePickupBody();
+    if (!fs.existsSync(pickupFile(body))) return body;
+  }
+  return generatePickupBody() + PICKUP_ALPHABET[crypto.randomInt(PICKUP_ALPHABET.length)];
+}
+
+function linkOrderToPickupCode(body: string, paymentIdRaw: unknown): string {
+  const code = normalizePickupCode(body);
+  const paymentId = String(paymentIdRaw || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!code || !paymentId) return "";
+  writeJsonAtomic(pickupFile(code), {
+    code,
+    paymentId,
+    createdAt: new Date().toISOString(),
+  });
+  return code;
+}
+
+const ADMIN_PIN = (process.env.ADMIN_PIN || "").trim();
+const ADMIN_KEY = (process.env.ADMIN_SECRET || "").trim();
+
+function parseCookies(req: Request): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i < 1) continue;
+    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+
+function adminSessionToken(): string {
+  if (!ADMIN_KEY) return "";
+  return crypto.createHmac("sha256", ADMIN_KEY).update("ys-admin").digest("hex");
+}
+
+function isAdminRequest(req: Request): boolean {
+  if (!ADMIN_PIN || !ADMIN_KEY) return false;
+  const token = adminSessionToken();
+  const cookies = parseCookies(req);
+  const cookie = cookies.ys_admin || cookies.ys_owner || "";
+  if (token && cookie && cookie.length === token.length && crypto.timingSafeEqual(Buffer.from(cookie), Buffer.from(token))) {
+    return true;
+  }
+  const provided = String(req.body?.secret || req.query.secret || "").trim();
+  return !!provided && provided === ADMIN_KEY;
+}
+
+const OWNER_IPS_FILE = path.join(PROJECT_ROOT, "data", "owner-ips.json");
+function clientIp(req: Request): string {
+  const xf = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  const xr = String(req.headers["x-real-ip"] || "").trim();
+  const sock = String(req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+  return xf || xr || sock || "";
+}
+function loadOwnerIps(): string[] {
+  try {
+    if (fs.existsSync(OWNER_IPS_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(OWNER_IPS_FILE, "utf-8"));
+      return Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+    }
+  } catch {}
+  return [];
+}
+function rememberOwnerIp(ip: string) {
+  const clean = String(ip || "").trim();
+  if (!clean || clean === "127.0.0.1" || clean === "::1" || clean === "localhost") return;
+  const list = loadOwnerIps();
+  if (list.includes(clean)) return;
+  list.push(clean);
+  writeJsonAtomic(OWNER_IPS_FILE, list);
+}
+function isOwnerRequest(req: Request): boolean {
+  if (isAdminRequest(req)) return true;
+  const ip = clientIp(req);
+  return !!ip && loadOwnerIps().includes(ip);
+}
+function ownerCookieHeaders(req: Request): string[] {
+  const token = adminSessionToken();
+  if (!token) return [];
+  const secure = req.secure || req.headers["x-forwarded-proto"] === "https";
+  const base = `HttpOnly; SameSite=Lax; Path=/; Max-Age=${400 * 86400}${secure ? "; Secure" : ""}`;
+  return [
+    `ys_admin=${token}; ${base}`,
+    `ys_owner=${token}; ${base}`,
+  ];
+}
+
+function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  if (!isAdminRequest(req)) {
+    res.status(403).json({ error: "forbidden" });
+    return;
+  }
+  next();
+}
+
+const activeOrderIds = new Set<string>();
+const activeRetryKeys = new Set<string>();
+const activePromoCodes = new Set<string>();
+const sanitizeOrderId = (value: unknown) => String(value || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
+const orderFile = (paymentId: string) => path.join(ORDERS_DIR, `${sanitizeOrderId(paymentId)}.json`);
+function readOrder(paymentId: string): OrderRecord | null {
+  const id = sanitizeOrderId(paymentId);
+  if (!id) return null;
+  try {
+    const file = orderFile(id);
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf-8")) : null;
+  } catch {
+    return null;
+  }
+}
+function writeJsonAtomic(file: string, data: unknown) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, file);
+}
+
+function groomingResultPath(jobId: string) {
+  return path.join(GROOMING_RESULTS_DIR, `${sanitizeOrderId(jobId)}.json`);
+}
+function readGroomingResult(jobId: string): any | null {
+  const id = sanitizeOrderId(jobId);
+  if (!id) return null;
+  try {
+    const file = groomingResultPath(id);
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf-8")) : null;
+  } catch {
+    return null;
+  }
+}
+function groomingHasAfterPhoto(look: any): boolean {
+  return !!(look && typeof look.imageAfter === "string" && look.imageAfter.trim());
+}
+function mergeGroomingLookPhotos(into: any, from: any) {
+  if (!into && !from) return into;
+  const next = { ...(into || {}), ...(from || {}) };
+  if (!groomingHasAfterPhoto(into) && groomingHasAfterPhoto(from)) next.imageAfter = from.imageAfter;
+  else if (groomingHasAfterPhoto(into)) next.imageAfter = into.imageAfter;
+  if (!(into?.imageClose) && from?.imageClose) next.imageClose = from.imageClose;
+  else if (into?.imageClose) next.imageClose = into.imageClose;
+  if (groomingHasAfterPhoto(next)) next.imageError = null;
+  else if (from?.imageError && !into?.imageError) next.imageError = from.imageError;
+  return next;
+}
+function saveGroomingResult(jobId: string, payload: Record<string, unknown>) {
+  const id = sanitizeOrderId(jobId);
+  if (!id) return;
+  try {
+    const prev = readGroomingResult(id) || {};
+    const mode = String(payload.mode || prev.mode || "");
+    const paid = mode === "paid";
+    const merged: Record<string, unknown> = { ...prev, ...payload, mode, jobId: id };
+    if (prev.analysis && payload.analysis && typeof payload.analysis === "object") {
+      merged.analysis = { ...prev.analysis, ...(payload.analysis as Record<string, unknown>) };
+    }
+    if (Array.isArray(prev.draftLooks) && !payload.draftLooks) {
+      merged.draftLooks = prev.draftLooks;
+    }
+    const drafts = Array.isArray(merged.draftLooks) ? merged.draftLooks as any[] : [];
+    const keepResult = payload.result || prev.result;
+    if (keepResult) {
+      merged.result = hydrateGroomingResultPhotos(keepResult, drafts, id);
+    } else if (prev.result && !payload.result) {
+      merged.result = hydrateGroomingResultPhotos(prev.result, drafts, id);
+    }
+    if (prev.sourceImage && !payload.sourceImage) merged.sourceImage = prev.sourceImage;
+    if (prev.referenceMime && !payload.referenceMime) merged.referenceMime = prev.referenceMime;
+    merged.updatedAt = new Date().toISOString();
+    merged.expiresAt = new Date(Date.now() + (paid ? RESULTS_TTL_PAID_MS : GROOMING_RESULTS_TTL_MS)).toISOString();
+    writeJsonAtomic(groomingResultPath(id), merged);
+  } catch (e) {
+    console.error("[Grooming] save result failed:", (e as Error).message);
+  }
+}
+
+function groomingLookFromParsed(look: any, agePolicy: GroomingAgePolicy) {
+  return {
+    name: look?.name || "Причёска",
+    hairColor: look?.hairColor || "",
+    lipColor: look?.lipColor || "",
+    description: look?.description || "",
+    why: look?.why || "",
+    outfitNote: look?.outfitNote || "",
+    afterNote: look?.afterNote || groomingDefaultAfterNote(agePolicy),
+    masterHowTo: look?.masterHowTo || "",
+    editPromptAfter: look?.editPromptAfter || look?.editPromptClose || look?.editPrompt || "",
+    imageClose: null as string | null,
+    imageAfter: null as string | null,
+    imageFull: null as string | null,
+    imageError: null as string | null,
+  };
+}
+
+function mapGroomingShopProducts(list: any[], howKey: "dosage" | "howTo") {
+  return (Array.isArray(list) ? list : []).map((p: any) => {
+    const query = encodeURIComponent((p.searchQuery || `${p.brand || ""} ${p.name || ""}`).toString().trim());
+    const howTo = String(p.howTo || p.dosage || "").trim();
+    const dosage = String(p.dosage || (howKey === "dosage" ? p.howTo : "") || "").trim();
+    return {
+      name: p.name || "",
+      brand: p.brand || "",
+      dosage,
+      howTo: howTo || dosage,
+      why: p.why || "",
+      searchQuery: p.searchQuery || "",
+      price: p.price || "",
+      wbUrl: p.wbUrl || `https://www.wildberries.ru/catalog/0/search.aspx?search=${query}`,
+      ozonUrl: p.ozonUrl || `https://www.ozon.ru/search/?text=${query}`,
+      ymUrl: p.ymUrl || `https://market.yandex.ru/search?text=${query}`,
+      imageUrl: p.imageUrl || null,
+    };
+  });
+}
+
+function groomingProductHasHowTo(p: any): boolean {
+  return String(p?.howTo || p?.dosage || "").trim().length > 8;
+}
+
+function mergeGroomingShopProducts(resultList: any[], analysisList: any[], howKey: "dosage" | "howTo") {
+  const fromAnalysis = mapGroomingShopProducts(analysisList, howKey);
+  const fromResult = Array.isArray(resultList) ? resultList.filter(Boolean) : [];
+  const byName = new Map<string, any>();
+  for (const p of fromAnalysis) {
+    const k = String(p.name || "").trim().toLowerCase();
+    if (k) byName.set(k, p);
+  }
+  const base = fromResult.length ? fromResult : fromAnalysis;
+  const merged = base.map((p: any) => {
+    const k = String(p?.name || "").trim().toLowerCase();
+    const extra = (k && byName.get(k)) || null;
+    const howTo = String(p?.howTo || extra?.howTo || p?.dosage || extra?.dosage || "").trim();
+    const dosage = String(p?.dosage || extra?.dosage || "").trim();
+    return {
+      ...extra,
+      ...p,
+      dosage,
+      howTo: howTo || dosage,
+      imageUrl: p?.imageUrl || extra?.imageUrl || null,
+      wbUrl: p?.wbUrl || extra?.wbUrl,
+      ozonUrl: p?.ozonUrl || extra?.ozonUrl,
+      ymUrl: p?.ymUrl || extra?.ymUrl,
+    };
+  });
+  if (merged.filter(groomingProductHasHowTo).length < 4 && fromAnalysis.filter(groomingProductHasHowTo).length > merged.filter(groomingProductHasHowTo).length) {
+    return fromAnalysis;
+  }
+  return merged;
+}
+
+function hydrateGroomingCare(result: any, analysis: any) {
+  if (!result || typeof result !== "object" || result.mode === "free") return result;
+  const a = analysis || {};
+  const scA = a.skincare || {};
+  const scR = result.skincare || {};
+  const mkA = a.makeup || {};
+  const mkR = result.makeup || {};
+  const next = { ...result };
+  next.skincare = {
+    summary: scR.summary || scA.summary || "",
+    amRoutine: scR.amRoutine || scA.amRoutine || "",
+    pmRoutine: scR.pmRoutine || scA.pmRoutine || "",
+    homeHowTo: scR.homeHowTo || scA.homeHowTo || "",
+    products: mergeGroomingShopProducts(scR.products, scA.products, "dosage"),
+  };
+  const mkProducts = mergeGroomingShopProducts(mkR.products, mkA.products, "howTo");
+  if (mkR.summary || mkA.summary || mkProducts.length) {
+    next.makeup = {
+      summary: mkR.summary || mkA.summary || "",
+      dayLook: mkR.dayLook || mkA.dayLook || "",
+      eveningLook: mkR.eveningLook || mkA.eveningLook || "",
+      placement: mkR.placement || mkA.placement || "",
+      products: mkProducts,
+    };
+  }
+  return next;
+}
+
+function paidClientCareIncomplete(result: any): boolean {
+  if (!result || result.mode === "free") return false;
+  const looks = Array.isArray(result.looks) ? result.looks : [];
+  if (looks.length < 3) return true;
+  const sc = result.skincare || {};
+  const products = Array.isArray(sc.products) ? sc.products : [];
+  if (!String(sc.summary || "").trim() || products.length < 4) return true;
+  return products.filter(groomingProductHasHowTo).length < 4;
+}
+
+function hydrateGroomingResultPhotos(result: any, drafts: any[], jobId: string) {
+  if (!result || typeof result !== "object") return result;
+  const next = { ...result, jobId: result.jobId || jobId };
+  if (next.mode === "free" || next.bestLook) {
+    next.bestLook = mergeGroomingLookPhotos(next.bestLook || {}, drafts[0] || {});
+  }
+  if (Array.isArray(next.looks)) {
+    next.looks = next.looks.map((look: any, i: number) => mergeGroomingLookPhotos(look || {}, drafts[i] || {}));
+  } else if (drafts.length && next.mode === "paid") {
+    next.looks = drafts.map((look: any) => ({ ...look }));
+  }
+  return next;
+}
+function buildGroomingClientResult(saved: any, jobId: string) {
+  const a = saved?.analysis || {};
+  const drafts = Array.isArray(saved?.draftLooks) ? saved.draftLooks : [];
+  const prev = saved?.result && typeof saved.result === "object" ? saved.result : null;
+  if (saved?.mode === "free" || prev?.mode === "free") {
+    return hydrateGroomingResultPhotos({
+      type: "result",
+      mode: "free",
+      faceShape: prev?.faceShape || a.faceShape || "",
+      colorType: prev?.colorType || a.colorType || "",
+      hairStatus: prev?.hairStatus || a.hairStatus || "",
+      coachNote: prev?.coachNote || a.coachNote || "",
+      bestLook: prev?.bestLook || drafts[0] || {},
+      upsellTeaser: prev?.upsellTeaser || a.upsellTeaser || "",
+      groomingPrice: GROOMING_PRICE,
+      jobId,
+    }, drafts, jobId);
+  }
+  return hydrateGroomingCare(hydrateGroomingResultPhotos({
+    type: "result",
+    mode: "paid",
+    coachNote: prev?.coachNote || a.coachNote || "",
+    faceAnalysis: prev?.faceAnalysis || a.faceAnalysis || {},
+    looks: Array.isArray(prev?.looks) && prev.looks.length ? prev.looks : drafts,
+    skincare: prev?.skincare || {
+      summary: a.skincare?.summary || "",
+      amRoutine: a.skincare?.amRoutine || "",
+      pmRoutine: a.skincare?.pmRoutine || "",
+      homeHowTo: a.skincare?.homeHowTo || "",
+      products: mapGroomingShopProducts(a.skincare?.products, "dosage"),
+    },
+    makeup: prev?.makeup || (a.makeup ? {
+      summary: a.makeup.summary || "",
+      dayLook: a.makeup.dayLook || "",
+      eveningLook: a.makeup.eveningLook || "",
+      placement: a.makeup.placement || "",
+      products: mapGroomingShopProducts(a.makeup.products, "howTo"),
+    } : undefined),
+    groomingPrice: GROOMING_PRICE,
+    jobId,
+  }, drafts, jobId), a);
+}
+function groomingLooksFromSaved(saved: any): any[] {
+  if (saved?.mode === "free") {
+    return [saved?.result?.bestLook || saved?.draftLooks?.[0]].filter(Boolean);
+  }
+  if (Array.isArray(saved?.result?.looks) && saved.result.looks.length) return saved.result.looks;
+  return Array.isArray(saved?.draftLooks) ? saved.draftLooks : [];
+}
+function groomingAfterPhotoCount(looks: any[]): number {
+  return looks.filter(groomingHasAfterPhoto).length;
+}
+function cleanupOldGroomingResults(): number {
+  let removed = 0;
+  const now = Date.now();
+  if (!fs.existsSync(GROOMING_RESULTS_DIR)) return 0;
+  for (const entry of fs.readdirSync(GROOMING_RESULTS_DIR)) {
+    if (!entry.endsWith(".json")) continue;
+    const file = path.join(GROOMING_RESULTS_DIR, entry);
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+      const exp = raw.expiresAt ? new Date(raw.expiresAt).getTime() : 0;
+      const mtime = fs.statSync(file).mtimeMs;
+      const ttl = String(raw.mode || "") === "paid" ? RESULTS_TTL_PAID_MS : GROOMING_RESULTS_TTL_MS;
+      if ((exp && exp < now) || (!exp && now - mtime > ttl)) {
+        fs.unlinkSync(file);
+        removed++;
+      }
+    } catch {}
+  }
+  return removed;
+}
+cleanupOldGroomingResults();
+setInterval(cleanupOldGroomingResults, 60 * 60 * 1000);
+function saveOrder(order: OrderRecord): OrderRecord {
+  const normalized = { ...order, paymentId: sanitizeOrderId(order.paymentId), updatedAt: new Date().toISOString() };
+  writeJsonAtomic(orderFile(normalized.paymentId), normalized);
+  return normalized;
+}
+function updateOrder(paymentId: string, patch: Partial<OrderRecord>): OrderRecord | null {
+  const current = readOrder(paymentId);
+  if (!current) return null;
+  return saveOrder({ ...current, ...patch, paymentId: current.paymentId });
+}
+
+/** Заказ в «Мои образы»: код СТИЛЬ-… и привязка к посетителю. Оплата без генерации тоже должна быть в списке. */
+function persistCabinetOrder(opts: {
+  paymentId: string;
+  tier: "standard" | "premium" | "grooming";
+  status?: OrderStatus;
+  paidAt?: string | null;
+  visitorId?: string;
+  userName?: string;
+  phone?: string;
+  expectedLooks?: number;
+  completedLooks?: number;
+  error?: string | null;
+  startedAt?: string;
+  completedAt?: string;
+  resultExpiresAt?: string;
+}): OrderRecord | null {
+  const id = sanitizeOrderId(opts.paymentId);
+  if (!id) return null;
+  const now = new Date().toISOString();
+  const existing = readOrder(id);
+  let pickup = existing?.pickupCode;
+  if (!pickup) {
+    const body = createUniquePickupCode();
+    linkOrderToPickupCode(body, id);
+    pickup = displayPickupCode(body);
+  }
+  if (opts.phone) linkOrderToPhone(opts.phone, id);
+  const visitorId = sanitizeVisitorId(opts.visitorId || existing?.visitorId);
+  const userName = (opts.userName || existing?.userName || "").trim().slice(0, 80);
+  if (visitorId) {
+    const profile = ensureUserProfile(visitorId, userName);
+    if (profile && !profile.orderIds.includes(id)) {
+      profile.orderIds.push(id);
+      if (profile.orderIds.length > 40) profile.orderIds = profile.orderIds.slice(-40);
+      saveUserProfile(profile);
+    }
+  }
+  return saveOrder({
+    paymentId: id,
+    tier: opts.tier || existing?.tier || "standard",
+    status: opts.status || existing?.status || "awaiting_input",
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+    paidAt: opts.paidAt === null ? existing?.paidAt : (opts.paidAt || existing?.paidAt),
+    startedAt: opts.startedAt || existing?.startedAt,
+    completedAt: opts.completedAt || existing?.completedAt,
+    unfinishedExpiresAt: existing?.unfinishedExpiresAt || new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+    resultExpiresAt: opts.resultExpiresAt || existing?.resultExpiresAt,
+    expectedLooks: opts.expectedLooks ?? existing?.expectedLooks,
+    completedLooks: opts.completedLooks ?? existing?.completedLooks,
+    error: opts.error === undefined ? (existing?.error ?? null) : opts.error,
+    visitorId: visitorId || existing?.visitorId,
+    userName: userName || existing?.userName,
+    phone: opts.phone || existing?.phone,
+    pickupCode: pickup,
+  });
+}
+
+/** Оплата прошла: не сбрасываем processing/ready, если генерация уже шла. */
+function persistPaidCabinetFromYookassa(
+  paymentId: string,
+  tier: OrderRecord["tier"],
+  visitorId?: string,
+  userName?: string,
+) {
+  const existing = readOrder(paymentId);
+  const keep = existing && existing.status !== "awaiting_payment" && existing.status !== "expired";
+  persistCabinetOrder({
+    paymentId,
+    tier,
+    status: keep ? existing.status : "awaiting_input",
+    paidAt: new Date().toISOString(),
+    visitorId,
+    userName,
+    expectedLooks: tier === "grooming" ? (existing?.expectedLooks || 3) : existing?.expectedLooks,
+  });
+}
+
+function groomingLooksForCabinet(saved: any, jobId: string): any[] {
+  if (!saved) return [];
+  const recovered = buildGroomingClientResult(saved, jobId);
+  if (saved.mode === "free") return [recovered?.bestLook].filter(Boolean);
+  if (Array.isArray(recovered?.looks) && recovered.looks.length) return recovered.looks;
+  return groomingLooksFromSaved(saved);
+}
+
+/** Оплаченная причёска в «Мои образы», даже если фото не дорисовались. */
+function syncGroomingCabinetOrder(opts: {
+  paymentId?: string;
+  jobId: string;
+  visitorId?: string;
+  userName?: string;
+  status?: OrderStatus;
+  error?: string | null;
+  started?: boolean;
+  completed?: boolean;
+}): OrderRecord | null {
+  const id = sanitizeOrderId(opts.paymentId || opts.jobId);
+  if (!id) return null;
+  const saved = readGroomingResult(opts.jobId || id);
+  const looks = groomingLooksForCabinet(saved, opts.jobId || id);
+  const expectedLooks = Number(saved?.looksTotal) || 3;
+  const completedLooks = groomingAfterPhotoCount(looks);
+  const recovered = saved ? buildGroomingClientResult(saved, opts.jobId || id) : null;
+  let status: OrderStatus = opts.status || "processing";
+  if (!opts.status) {
+    if (completedLooks >= expectedLooks && recovered && (saved?.mode !== "paid" || !paidClientCareIncomplete(recovered))) {
+      status = "ready";
+    } else if (completedLooks > 0) {
+      status = "partial";
+    } else if (saved?.status === "failed") {
+      status = "failed";
+    } else if (saved?.status === "processing") {
+      status = "processing";
+    } else {
+      status = "awaiting_input";
+    }
+  }
+  const now = new Date().toISOString();
+  return persistCabinetOrder({
+    paymentId: id,
+    tier: "grooming",
+    status,
+    visitorId: opts.visitorId,
+    userName: opts.userName,
+    expectedLooks,
+    completedLooks,
+    error: opts.error === undefined ? undefined : opts.error,
+    startedAt: opts.started ? now : undefined,
+    completedAt: opts.completed || status === "ready" ? now : undefined,
+    resultExpiresAt: (status === "ready" || status === "partial") ? paidResultExpiresAtIso() : undefined,
+  });
+}
+
+function cleanupOldResults(): number {
+  let removed = 0;
+  const now = Date.now();
+  if (fs.existsSync(ORDERS_DIR)) {
+    for (const entry of fs.readdirSync(ORDERS_DIR)) {
+      if (!entry.endsWith(".json")) continue;
+      const id = entry.slice(0, -5);
+      const order = readOrder(id);
+      if (!order || order.status === "expired") continue;
+      const expiresAt = order.resultExpiresAt || order.unfinishedExpiresAt;
+      if (!expiresAt || new Date(expiresAt).getTime() > now) continue;
+      const dir = path.join(RESULTS_DIR, id);
+      try {
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+        saveOrder({ ...order, status: "expired", error: null });
+        removed++;
+      } catch {}
+    }
+  }
+  if (!fs.existsSync(RESULTS_DIR)) return removed;
+  for (const entry of fs.readdirSync(RESULTS_DIR)) {
+    const dir = path.join(RESULTS_DIR, entry);
+    try {
+      if (readOrder(entry)) continue;
+      const st = fs.statSync(dir);
+      if (!st.isDirectory()) continue;
+      if (now - st.mtimeMs > RESULTS_TTL_MS) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        removed++;
+      }
+    } catch {}
+  }
+  if (removed > 0) console.log(`[cleanup] Expired ${removed} old order result folders`);
+  return removed;
+}
+cleanupOldResults();
+// A process restart interrupts in-memory API calls. Preserve checkpoints and expose
+// the order as retryable instead of leaving it permanently stuck in "processing".
+for (const entry of fs.readdirSync(ORDERS_DIR)) {
+  if (!entry.endsWith(".json")) continue;
+  const order = readOrder(entry.slice(0, -5));
+  if (order?.status === "processing") {
+    const complete = !!order.expectedLooks && (order.completedLooks || 0) >= order.expectedLooks;
+    saveOrder({
+      ...order,
+      status: complete ? "ready" : order.completedLooks ? "partial" : "failed",
+      completedAt: complete ? new Date().toISOString() : order.completedAt,
+      resultExpiresAt: complete ? paidResultExpiresAtIso() : order.resultExpiresAt,
+      error: complete ? null : "Генерация была прервана перезапуском сервера. Отсутствующие фото можно повторить.",
+    });
+  }
+}
+setInterval(cleanupOldResults, 60 * 60 * 1000); // every hour
+let _statsCache: StatsData | null = null;
+function loadStats(): StatsData {
+  if (_statsCache) return _statsCache;
+  try {
+    if (fs.existsSync(statsPath)) {
+      const raw = JSON.parse(fs.readFileSync(statsPath, "utf-8"));
+      if (raw.events) {
+        _statsCache = {
+          events: raw.events,
+          standardPrice: raw.standardPrice || 100,
+          premiumPrice: raw.premiumPrice || 200,
+          nailsMonthPrice: raw.nailsMonthPrice || NAILS_MONTH_PRICE,
+          groomingPrice: raw.groomingPrice || 100,
+        };
+        return _statsCache;
+      }
+      const events: StatsEvent[] = [];
+      for (let i = 0; i < (raw.visits || 0); i++) events.push({ type: "visit", ts: new Date().toISOString() });
+      for (let i = 0; i < (raw.paidStandardSales || raw.standardSales || 0); i++) events.push({ type: "paid_standard", ts: new Date().toISOString() });
+      for (let i = 0; i < (raw.paidPremiumSales || raw.premiumSales || 0); i++) events.push({ type: "paid_premium", ts: new Date().toISOString() });
+      _statsCache = {
+        events,
+        standardPrice: raw.standardPrice || 100,
+        premiumPrice: raw.premiumPrice || 200,
+        nailsMonthPrice: raw.nailsMonthPrice || NAILS_MONTH_PRICE,
+        groomingPrice: raw.groomingPrice || 100,
+      };
+      return _statsCache;
+    }
+  } catch {}
+  _statsCache = {
+    events: [],
+    standardPrice: 100,
+    premiumPrice: 200,
+    nailsMonthPrice: NAILS_MONTH_PRICE,
+    groomingPrice: 100,
+  };
+  return _statsCache;
+}
+function saveStats(stats: StatsData) {
+  _statsCache = stats;
+  const dir = path.dirname(statsPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  // Prune events older than 1 year
+  const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+  stats.events = stats.events.filter(e => new Date(e.ts) >= cutoff);
+  fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
+}
+function incVisit() {
+  const stats = loadStats();
+  stats.events.push({ type: "visit", ts: new Date().toISOString() });
+  saveStats(stats);
+}
+function incPaidSale(tier: string) {
+  const stats = loadStats();
+  const type: StatsEvent["type"] =
+    tier === "premium"
+      ? "paid_premium"
+      : tier === "nails_month"
+        ? "paid_nails_month"
+        : tier === "grooming"
+          ? "paid_grooming"
+          : "paid_standard";
+  stats.events.push({ type, ts: new Date().toISOString() });
+  saveStats(stats);
+}
+function incPromoSale(tier: string) {
+  const stats = loadStats();
+  stats.events.push({ type: tier === "premium" ? "paid_promo_premium" : "paid_promo_standard", ts: new Date().toISOString() });
+  saveStats(stats);
+}
+function computeStats(stats: StatsData, period?: string) {
+  let cutoff: Date | null = null;
+  const now = new Date();
+  if (period === "today") cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  else if (period === "week") cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  else if (period === "month") cutoff = new Date(now.getFullYear(), now.getMonth(), 1);
+  const filtered = cutoff ? stats.events.filter(e => new Date(e.ts) >= cutoff) : stats.events;
+  const visits = filtered.filter(e => e.type === "visit").length;
+  const paidStandardSales = filtered.filter(e => e.type === "paid_standard").length;
+  const paidPremiumSales = filtered.filter(e => e.type === "paid_premium").length;
+  const paidNailsMonthSales = filtered.filter(e => e.type === "paid_nails_month").length;
+  const paidGroomingSales = filtered.filter(e => e.type === "paid_grooming").length;
+  const promoStandardSales = filtered.filter(e => e.type === "paid_promo_standard").length;
+  const promoPremiumSales = filtered.filter(e => e.type === "paid_promo_premium").length;
+  const nailsMonthPrice = stats.nailsMonthPrice || NAILS_MONTH_PRICE;
+  const groomingPrice = stats.groomingPrice || 100;
+  const revenue =
+    paidStandardSales * stats.standardPrice +
+    paidPremiumSales * stats.premiumPrice +
+    paidNailsMonthSales * nailsMonthPrice +
+    paidGroomingSales * groomingPrice;
+  return {
+    visits,
+    paidStandardSales,
+    paidPremiumSales,
+    paidNailsMonthSales,
+    paidGroomingSales,
+    promoStandardSales,
+    promoPremiumSales,
+    promoRedemptions: promoStandardSales + promoPremiumSales,
+    standardPrice: stats.standardPrice,
+    premiumPrice: stats.premiumPrice,
+    nailsMonthPrice,
+    groomingPrice,
+    revenue,
+  };
+}
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // Load fashion knowledge base (2026 trends)
 const knowledgeBasePath = path.join(PROJECT_ROOT, "src", "fashion-knowledge-base.txt");
@@ -36,6 +1191,39 @@ if (fs.existsSync(systemPromptPath)) {
 }
 const systemPrompt = systemPromptTemplate.replace("{{FASHION_KNOWLEDGE_BASE}}", fashionKnowledgeBase);
 
+// Grooming (причёски + уход) knowledge + prompt
+const GROOMING_PRICE = 100;
+const groomingParts = ["part0_trends_2026.md", "part1_haircuts.md", "part2_color.md", "part3_skincare.md", "part4_makeup.md", "part5_lipstick.md"]
+  .map((f) => {
+    const p = path.join(PROJECT_ROOT, "src", "grooming", f);
+    return fs.existsSync(p) ? fs.readFileSync(p, "utf-8") : "";
+  })
+  .filter(Boolean)
+  .join("\n\n---\n\n");
+const groomingPromptPath = path.join(PROJECT_ROOT, "src", "grooming-system-prompt.txt");
+let groomingSystemPromptTemplate = fs.existsSync(groomingPromptPath)
+  ? fs.readFileSync(groomingPromptPath, "utf-8")
+  : "";
+function buildGroomingSystemPrompt(mode: "free" | "paid") {
+  return groomingSystemPromptTemplate
+    .replace("{{GROOMING_KNOWLEDGE_BASE}}", groomingParts)
+    .replace("{{MODE}}", mode);
+}
+
+const stylistChatPromptPath = path.join(PROJECT_ROOT, "src", "stylist-chat-prompt.txt");
+const stylistChatPromptTemplate = fs.existsSync(stylistChatPromptPath)
+  ? fs.readFileSync(stylistChatPromptPath, "utf-8")
+  : "Ты стилист. Отвечай по-русски только про гардероб, аксессуары, причёску и маникюр. В конце предлагай тарифы с картинками на stilist-ai.ru.";
+
+function buildStylistChatPrompt(): string {
+  const stats = loadStats();
+  return stylistChatPromptTemplate
+    .replace(/\{\{PRICE_STANDARD\}\}/g, String(stats.standardPrice || 100))
+    .replace(/\{\{PRICE_PREMIUM\}\}/g, String(stats.premiumPrice || 200))
+    .replace(/\{\{PRICE_GROOMING\}\}/g, String(stats.groomingPrice || 100))
+    .replace(/\{\{PRICE_NAILS\}\}/g, String(stats.nailsMonthPrice || NAILS_MONTH_PRICE));
+}
+
 const POLZA_API_KEY = process.env.POLZA_API_KEY;
 if (!POLZA_API_KEY) {
   console.error("POLZA_API_KEY is not set in environment variables");
@@ -43,9 +1231,357 @@ if (!POLZA_API_KEY) {
 }
 const POLZA_BASE_URL = process.env.POLZA_BASE_URL || "https://polza.ai/api/v1";
 
-const ANALYSIS_MODEL = "google/gemini-3.1-flash-lite";
-// Nano Banana 2 — генерация изображений с лицом пользователя
-const IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
+const ANALYSIS_MODEL = "google/gemini-3.8-flash";
+const GENDER_MODEL = "google/gemini-3.8-flash";
+// OpenAI GPT Image 2.5 Flare — быстрее, 2K, референс лица через Polza /media
+const IMAGE_MODEL = "gpt-image-2-5-flare";
+const IMAGE_PROMPT_MAX = 4900; // лимит модели ~5000 символов
+
+function clampImagePrompt(prompt: string): string {
+  const p = (prompt || "").trim();
+  if (p.length <= IMAGE_PROMPT_MAX) return p;
+  const mark = p.lastIndexOf("WARDROBE LOCK");
+  const tail = mark > 0 ? p.slice(mark) : p.slice(-1400);
+  const budget = IMAGE_PROMPT_MAX - tail.length - 2;
+  const head = p.slice(0, Math.max(400, budget)).trimEnd();
+  return `${head}\n${tail}`.slice(0, IMAGE_PROMPT_MAX);
+}
+
+/** Достаёт base64 из data-URL, локального /api/grooming-image или http(s) URL */
+async function resolveImageToBase64(
+  image: string | null | undefined
+): Promise<{ base64: string; mime: string } | null> {
+  if (!image) return null;
+  try {
+    const dataMatch = image.match(/^data:([^;]+);base64,(.+)$/);
+    if (dataMatch) {
+      return { mime: dataMatch[1] || "image/jpeg", base64: dataMatch[2] };
+    }
+    const localGroom = image.match(/^\/api\/grooming-image\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9._-]+)$/);
+    if (localGroom) {
+      const imgPath = path.join(GROOMING_IMG_DIR, localGroom[1], localGroom[2]);
+      if (!fs.existsSync(imgPath)) return null;
+      const buf = fs.readFileSync(imgPath);
+      const ext = path.extname(imgPath).toLowerCase();
+      const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+      return { base64: buf.toString("base64"), mime };
+    }
+    const localResult = image.match(/^\/api\/result-image\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9._-]+)$/);
+    if (localResult) {
+      const imgPath = path.join(RESULTS_DIR, localResult[1], localResult[2]);
+      if (!fs.existsSync(imgPath)) return null;
+      const buf = fs.readFileSync(imgPath);
+      const ext = path.extname(imgPath).toLowerCase();
+      const mime = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+      return { base64: buf.toString("base64"), mime };
+    }
+    if (/^https?:\/\//i.test(image)) {
+      const response = await fetchWithTimeout(image, { method: "GET" }, 120000);
+      if (!response.ok) return null;
+      const contentType = response.headers.get("content-type") || "image/jpeg";
+      const mime = contentType.includes("png")
+        ? "image/png"
+        : contentType.includes("webp")
+          ? "image/webp"
+          : "image/jpeg";
+      const buf = Buffer.from(await response.arrayBuffer());
+      return { base64: buf.toString("base64"), mime };
+    }
+  } catch (e) {
+    console.error("[resolveImageToBase64]", (e as Error).message);
+  }
+  return null;
+}
+
+function getOccasionStyleGuide(wishes: string): string {
+  const w = wishes.toLowerCase();
+  if (w.includes("яхта"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ЯХТЫ — ИГНОРИРУЙ стандартную структуру офис/вечер/color-block. На фото человек НА ЯХТЕ (палуба, тик, поручни, море), не на берегу в кустах. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. YACHT DECK CHIC: лён/шёлк, светлый или яркий resort look, очки, эспадрильи или лоферы. Вайб: палуба, закат, глянец.\n2. RIVIERA LUXE: монохромный купальный или resort look + лёгкий верхний слой, золото, шляпа. Вайб: яхта, Ибица.\n3. SUNSET COCKTAIL: элегантный вечер на палубе — платье/костюм, который держит ветер, не парк. Вайб: аперитив на яхте.`;
+  if (w.includes("горнолыжн"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ГОРНОЛЫЖНОГО КУРОРТА — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. SLOPE CHIC: premium горнолыжный комбинезон или комплект (Bogner/Fendi Ski уровень), яркий или монохромный, шлем с визором, перчатки. Вайб: Куршевель, стильно на склоне.\n2. APRÈS-SKI LUXE: кашемировый свитер + горнолыжные брюки или меховой жилет, угги или ботинки, шапка-бини. Вайб: шале, горячий шоколад, уютно и дорого.\n3. MOUNTAIN GLAM: вечерний look для ресторана курорта (платье + шуба или пуховик), элегантно в горах. Вайб: ужин в Альпах, гламур и снег.`;
+  if (w.includes("загородн") || w.includes("природ") || w.includes("пикник"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ЗАГОРОДНОГО ОТДЫХА — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. COUNTRY CHIC: льняное платье или комплект в нейтральных тонах, соломенная шляпа, сандалии или эспадрильи. Вайб: загородный дом, естественно и красиво.\n2. PICNIC STYLE: лёгкий сарафан или юбка с блузой, плетёная корзина-сумка, балетки или мюли. Вайб: пикник в поле, романтично.\n3. OUTDOOR ADVENTURE: стильный casual look (джинсы + рубашка + кроссовки), функционально и модно. Вайб: прогулка по лесу, активный отдых.`;
+  if (w.includes("пляж") || w.includes("отдых на пляже") || (w.includes("курорт") && !w.includes("горнолыж")))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ОТДЫХА/ПЛЯЖА — ИГНОРИРУЙ стандартную структуру офис/вечер/color-block. На фото — пляж, море или beach club, не городской парк. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. RESORT CHIC: яркий этнический принт (фуксия/кобальт/терракот), рубашка+шорты или платье-рубашка, соломенная шляпа, зеркальные очки, эспадрильи, плетёная сумка. Вайб: Санторини, закат, "вау какая стильная".\n2. BEACH CLUB LUXE: монохромный яркий купальный look (лимонный/коралловый/аква), парео или льняные брюки, золотые украшения-ракушки, сандалии на платформе, oversized соломенная шляпа. Вайб: Ибица, глянцевый журнал.\n3. TROPICAL MAXIMALISM: смелый цветочный или анималистичный принт, сатиновое мини или макси платье, яркие аксессуары, цветные линзы, босоножки. Вайб: Бали, тропики, Instagram-perfect.`;
+  if (w.includes("ресторан") || w.includes("ужин"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ РЕСТОРАНА — ИГНОРИРУЙ стандартную структуру. На фото человек ВНУТРИ зала ресторана (столы, свет, зал), не на улице и не в кустах, даже если сезон осень. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. CLASSIC ELEGANCE: если сезон зима — НЕ платье: надетое шерстяное пальто или шуба + шёлковая блуза с рукавом + шерстяные брюки или юбка на плотных колготках + сапоги. Если не зима — платье-футляр или костюм в нейтральном/глубоком цвете, жемчуг или тонкие украшения, каблук, маленькая сумочка. Вайб: fine dining, безупречно.\n2. MODERN CHIC: шёлковая блуза + брюки с высокой талией, интересный пояс, лоферы или мюли, statement серьги. Вайб: стильный ресторан, уверенная женщина.\n3. GLAMOUR NIGHT: если сезон зима — НЕ платье и не открытая спина: пальто надето + вечерний комплект с рукавом, шерсть, сапоги, закрытые туфли. Если не зима — вечернее платье с деталями, эффектные украшения, вечерняя сумочка. Вайб: особый повод, все взгляды на неё.`;
+  if (w.includes("свидание") || w.includes("романтич"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ СВИДАНИЯ — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. ROMANTIC EVENING: если сезон зима — НЕ платье: надетое пальто + вечерняя блуза с рукавом + шерстяные брюки или юбка на колготках + сапоги. Если не зима — элегантное платье миди в глубоком цвете, тонкие украшения, каблук, клатч. Вайб: первое свидание, ресторан, "она потрясающая".\n2. CHIC & PLAYFUL: стильный комплект — шёлковая блуза + широкие брюки или юбка миди, интересный аксессуар как акцент, лоферы или мюли. Вайб: кофе перерастает в ужин, непринуждённо и красиво.\n3. BOLD DATE LOOK: смелый монохромный total look или statement платье, яркая помада, эффектные серьги. Вайб: она точно запомнится, уверенность и шарм.`;
+  if (w.includes("вечеринк") || w.includes("клуб") || w.includes("ночная"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ВЕЧЕРИНКИ/КЛУБА — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. PARTY QUEEN: мини-платье с блеском или пайетками, высокие каблуки, bold макияж, клатч. Вайб: VIP-вечеринка, все смотрят.\n2. COOL GIRL NIGHT: кожаные брюки + шёлковый топ или корсет, ботильоны, statement украшения. Вайб: клуб, уверенность, стиль.\n3. NEON BOLD: яркий неоновый или металлический look, смелый цвет, эффектный силуэт. Вайб: фестиваль или ночной клуб, запоминающийся образ.`;
+  if (w.includes("свадьб") || w.includes("торжеств") || w.includes("выпускн"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ТОРЖЕСТВА — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. TIMELESS GLAMOUR: вечернее платье в пол (шампань/пудра/айвори), тонкие украшения с камнями, каблук, элегантная причёска. Вайб: свадьба, безупречная гостья.\n2. MODERN FORMAL: стильный костюм или платье-миди в насыщенном цвете (изумруд/сапфир/рубин), эффектные украшения. Вайб: торжество, запоминающийся образ.\n3. ROMANTIC PRINCESS: пышное или A-line платье с деталями (кружево/вышивка/объём), нежные украшения, романтичная причёска. Вайб: выпускной или свадьба, сказочный образ.`;
+  if (w.includes("офис") || w.includes("деловая") || w.includes("бизнес"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ОФИСА/БИЗНЕСА — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. POWER SUIT: идеально скроенный костюм (серый/тёмно-синий/кремовый), шёлковая блуза, каблук или лоферы, кожаная сумка. Вайб: CEO, авторитет и стиль.\n2. QUIET LUXURY OFFICE: монохромный look в нейтральных тонах, кашемировый джемпер + брюки, минималистичные украшения, дорогие детали. Вайб: Quiet Luxury, дорого без лишнего.\n3. SMART CREATIVE: пиджак с интересной деталью + брюки или юбка миди, акцентный аксессуар, лоферы. Вайб: творческий офис, стильно и профессионально.`;
+  if (w.includes("спорт") || w.includes("фитнес"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ СПОРТА — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. PREMIUM ATHLEISURE: дизайнерский спортивный комплект (Lululemon/Alo/Vuori уровень), монохромный или с акцентом, кроссовки премиум. Вайб: из спортзала прямо на кофе, безупречно.\n2. SPORT CHIC: стильный тренировочный look с модными деталями, яркий акцент, функционально и красиво. Вайб: фитнес-блогер, вдохновляет.\n3. OUTDOOR ACTIVE: premium outdoor look (беговые брюки + куртка + кроссовки), динамичная поза. Вайб: утренняя пробежка в парке, энергия и здоровье.`;
+  if (w.includes("прогулк") || w.includes("кафе") || w.includes("шопинг") || w.includes("casual"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ПРОГУЛКИ/КАФЕ — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. EFFORTLESS CHIC: джинсы идеального кроя + шёлковая блуза или тонкий джемпер, лоферы, маленькая сумка. Вайб: Париж, непринуждённо и стильно.\n2. CASUAL LUXE: льняной комплект или платье в нейтральном тоне, плетёная сумка, сандалии, минималистичные украшения. Вайб: летний город, свежо и красиво.\n3. STREET STYLE COOL: интересный принт или яркий акцент, кроссовки премиум или ботинки, стильная сумка. Вайб: уличный стиль, запоминающийся образ.`;
+  if (w.includes("театр") || w.includes("выставк"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ТЕАТРА/ВЫСТАВКИ — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. CULTURAL ELEGANCE: платье миди с интересным кроем или костюм, statement украшения, каблук или лоферы. Вайб: театральная премьера, утончённо.\n2. ARTISTIC CHIC: необычный силуэт или принт, авторские украшения, интересная обувь. Вайб: вернисаж, творческая личность с вкусом.\n3. DRAMATIC EVENING: вечернее платье с характером (асимметрия/объём/необычный цвет), эффектные украшения. Вайб: опера, незабываемый образ.`;
+  if (w.includes("путешеств") || w.includes("самолёт"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ПУТЕШЕСТВИЯ — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. TRAVEL CHIC: стильный комфортный look (широкие брюки + блуза + лёгкий пиджак), кроссовки или лоферы, вместительная сумка. Вайб: бизнес-класс, путешественница с вкусом.\n2. CITY EXPLORER: джинсы + интересный верх + кроссовки премиум, рюкзак или crossbody, удобно и стильно. Вайб: исследование нового города.\n3. RESORT ARRIVAL: лёгкое платье или льняной комплект, сандалии, соломенная шляпа. Вайб: прилетела на курорт, сразу готова к отдыху.`;
+  if (w.includes("фотосессия"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ФОТОСЕССИИ — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. STUDIO EDITORIAL: чистый минималистичный look с одним сильным акцентом (цвет/силуэт/деталь), идеальная посадка, рекламное качество. Вайб: обложка Vogue, безупречно.\n2. URBAN STREET STYLE: яркий или необычный look для городской съёмки, интересный фон, динамичная поза. Вайб: уличная мода, живой и современный.\n3. GLAMOUR PORTRAIT: эффектный вечерний или гламурный look, драматическое освещение, statement образ. Вайб: глянцевый журнал, запоминающийся портрет.`;
+  if (w.includes("фестиваль") || w.includes("концерт"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ ФЕСТИВАЛЯ/КОНЦЕРТА — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. FESTIVAL BOHO: бохо-шик с этническими деталями, яркие аксессуары, ботинки или сандалии, венок или шляпа. Вайб: Coachella, свободный дух.\n2. CONCERT COOL: стильный rock-chic look (кожаная куртка/джинсы/ботинки), bold аксессуары. Вайб: рок-концерт, уверенно и стильно.\n3. RAVE NEON: яркий неоновый или металлический look, смелые аксессуары, кроссовки. Вайб: электронный фестиваль, заметна в толпе.`;
+  if (w.includes("корпоратив"))
+    return `\n\n🎯 ИНСТРУКЦИЯ ПО ОБРАЗАМ ДЛЯ КОРПОРАТИВА — ИГНОРИРУЙ стандартную структуру. Создай образы из этих направлений (число образов = looksCount, задан выше):\n1. FESTIVE PROFESSIONAL: нарядный костюм или платье-миди в праздничном цвете (бордо/изумруд/золото), элегантно и уместно. Вайб: корпоратив в хорошей компании, запомнится.\n2. COCKTAIL CHIC: коктейльное платье или стильный комплект, интересные украшения, каблук. Вайб: вечеринка коллег, выглядит лучше всех.\n3. SMART PARTY: пиджак с блеском или интересной деталью + брюки/юбка, баланс между офисом и праздником. Вайб: профессионально и празднично одновременно.`;
+  return "";
+}
+
+/** Разворачивает «Ресторан — 2 образ(а), Курорт или яхта — 1» в список поводов по образам. */
+function expandOccasionList(occasionRaw: string): string[] {
+  const slots: string[] = [];
+  const re = /([^,;]+?)\s*[—–-]\s*(\d+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(occasionRaw || ""))) {
+    const name = m[1].replace(/^.*поводам:\s*/i, "").trim();
+    const n = Math.min(5, Math.max(1, parseInt(m[2], 10) || 1));
+    for (let i = 0; i < n && slots.length < 5; i++) slots.push(name);
+  }
+  return slots;
+}
+
+function stripFacePasteLanguage(text: string): string {
+  return String(text || "")
+    .replace(/same gaze/gi, "eyes follow the body")
+    .replace(/same head position/gi, "head follows the torso")
+    .replace(/keep the head frontal/gi, "head follows the torso")
+    .replace(/head stays frontal/gi, "head follows the torso")
+    .replace(/do not turn the head/gi, "turn the head with the body")
+    .replace(/both eyes (looking )?at (the )?camera/gi, "eyes follow the body")
+    .replace(/looking straight at the camera/gi, "looking along the body direction");
+}
+
+function seasonClimate(season?: string): string {
+  const s = (season || "").toLowerCase();
+  if (s.includes("зим"))
+    return " SEASON: deep winter, not autumn. Snow is obvious outside: falling snow or snow on the street and window ledge, no autumn leaves. A heavy winter coat is WORN: thick wool, high collar, or fur/shearling collar — not a light trench. Footwear is winter boots with a real sole, not delicate ankle boots. No camel-only fall palette, no trench-only look.";
+  if (s.includes("весн"))
+    return " SEASON: spring. Fresh cool daylight, lighter jacket/trench, tender distant greenery only — not a wall of bushes.";
+  if (s.includes("лет"))
+    return " SEASON: summer. Long daylight or golden hour, warm air, lighter fabrics, no winter coat or heavy wool overcoat.";
+  if (s.includes("осень"))
+    return " SEASON: autumn. Lower sun, longer warm-gold shadows, cooler air, trench/coat layers, dry leaves on stone — not a forest of bushes.";
+  return " SEASON: match the outfit layers already listed. Time of day comes from LIGHT.";
+}
+
+/** SCENE + LIGHT + TIME: люксовый антураж под повод, без повторов в одной выдаче. */
+function getOccasionAtmosphere(wishes: string, idx: number = 0, salt: number = 0): string {
+  const picked = pickLuxuryScenes({ occasions: [wishes || ""], salt: salt + idx * 17 });
+  return picked.prompts[0] || "";
+}
+
+function stripConflictingScene(text: string, occasionKey: string): string {
+  let t = stripGroomingFaceMorphLanguage(sanitizeEditPrompt(text || ""));
+  if (occasionKey !== "countryside") {
+    t = t.replace(/\b(autumn |fall |summer |spring |winter )?(park|bushes|shrubs|forest|woods|hedgerow)s?\b[^.]{0,60}\.?/gi, "");
+  }
+  t = t.replace(/\b(SCENE|background|setting|location)\s*[:—-]\s*/gi, "");
+  if (/restaurant|date/.test(occasionKey)) {
+    t = t.replace(/\b(city street|cobblestone street|urban street|park path)[^.]{0,40}\.?/gi, "");
+  }
+  if (occasionKey === "yacht") {
+    t = t.replace(/\b(on the shore|on the beach|city street|in a park)[^.]{0,40}\.?/gi, "");
+  }
+  return t.replace(/\s{2,}/g, " ").trim();
+}
+
+/**
+ * GPT Image 2 outfit prompt (OpenAI cookbook: CHANGE / PRESERVE / CONSTRAINTS).
+ * Image 1 is an identity reference, not a face sticker.
+ * "Copy the exact face" + locked frontal head caused a pasted-head look
+ * (selfie lighting on the face vs scene light on the body). Lock LIKENESS,
+ * relight the whole figure with the SCENE, and allow a natural pose.
+ */
+const OUTFIT_POSES_NATURAL = [
+  "stand at ease, weight on the back leg, front knee soft, shoulders dropped",
+  "slow walk, mid-stride, arms natural, any bag has real weight",
+  "clear three-quarter turn, chest and nose aimed the same way about 45 degrees off the camera, not a passport front",
+  "if the SCENE has a seat, ledge, or table — a natural sit or lean; otherwise a hip shift at rest",
+  "paused step, one hand on a bag or a railing if the SCENE has one, not a T-pose",
+];
+const OUTFIT_POSES_EDITORIAL = [
+  "editorial walk toward camera, mid-stride, fabric moving, weight real",
+  "weight on one hip, one hand at the waist or holding a bag, shoulders dropped",
+  "3/4 body turn with the head following the torso, chin slightly off-center",
+  "sit or lean only if the SCENE has a ledge or chair; otherwise a paused stride",
+  "contrapposto, one foot ahead, gaze with the body — not a locked selfie angle",
+];
+
+function seasonWardrobeImageLock(season?: string, context?: string): string {
+  const s = (season || "").toLowerCase();
+  const blob = (context || "").toLowerCase();
+  const evening = /ресторан|ужин|свидан|романт|театр|выставк|вечер|корпоратив|свадьб|party|dinner|restaurant|date|theater|wedding|gala/.test(blob);
+  if (s.includes("зим")) {
+    const eveningLine = evening
+      ? "EVENING + WINTER, not autumn: not a dress. A heavy winter coat is WORN (thick wool, high collar or fur collar). Under it: blouse or fine knit with sleeves plus wool trousers or a wool skirt with opaque tights. Winter boots, not light autumn shoes. Snow must be visible outside."
+      : "If the outfit text says dress, sundress, linen, or sandals, replace it with a worn winter coat and cold-weather layers.";
+    return `WARDROBE LOCK (overrides any dress or summer garment above): WINTER. A heavy coat is ON the body and visible. Sleeves, opaque tights if a skirt shows, closed winter shoes. No linen, no sandals, no sundress, no sleeveless dress, no bare shoulders, no bare legs. ${eveningLine}`;
+  }
+  if (s.includes("осень"))
+    return "WARDROBE LOCK: AUTUMN. A trench or wool coat is worn and visible. Boots or closed shoes. No summer sundress and no sandals as the only shoe.";
+  if (s.includes("весн"))
+    return "WARDROBE LOCK: SPRING. A light coat, trench, or jacket is worn. No winter parka and no beach dress.";
+  if (s.includes("лет"))
+    return "WARDROBE LOCK: SUMMER. Light fabrics. No heavy winter coat, no fur, no snow boots.";
+  return "";
+}
+
+function buildOutfitImagePrompt(opts: {
+  editPrompt: string;
+  detectedGender: string;
+  wishes: string;
+  lookIdx: number;
+  bodyBuildInstruction?: string;
+  season?: string;
+  atmosphere?: string;
+  sceneLock?: string;
+  occasionKey?: string;
+}): string {
+  const gender = opts.detectedGender || "person";
+  const occasionKey = opts.occasionKey || occasionKeyForLook(opts.wishes || "", opts.editPrompt || "");
+  const atmosphere = opts.atmosphere || getOccasionAtmosphere(opts.wishes || "", opts.lookIdx, Date.now());
+  const sceneLock = opts.sceneLock || occasionSceneLockEn(occasionKey as any);
+  const seasonBlock = seasonClimate(opts.season);
+  const bodyExtra = (opts.bodyBuildInstruction || "").trim();
+  let outfit = stripFacePasteLanguage(stripConflictingScene(opts.editPrompt, occasionKey));
+  if ((opts.season || "").toLowerCase().includes("зим")) {
+    outfit = outfit
+      .replace(/\bbare shoulders\b/gi, "long sleeves")
+      .replace(/\b(sundress|evening dress|silk dress|cocktail dress|slip dress|maxi dress)\b/gi, "silk blouse and wool trousers")
+      .replace(/\bdress\b/gi, "blouse and wool trousers")
+      .replace(/\bsandals\b/gi, "leather boots");
+  }
+  const isPhotoshoot = occasionKey === "photoshoot" || (opts.wishes || "").toLowerCase().includes("фотосессия");
+  const posePool = isPhotoshoot ? OUTFIT_POSES_EDITORIAL : OUTFIT_POSES_NATURAL;
+  const poseLine = posePool[opts.lookIdx % posePool.length];
+  const wardrobeLock = seasonWardrobeImageLock(opts.season, `${opts.occasionKey || ""} ${opts.wishes || ""}`);
+  const poseHarmony = "POSE HARMONY (GPT Image 2.5 Flare — failed image if broken): Turn THIS face with the shoulders. Do not invent a new face, new eyes, or a slimmer nose. A three-quarter body has a three-quarter face, nose pointing the same way as the chest. Do not paste the selfie as a sticker and do not freeze the selfie mouth. A new hairstyle is allowed. Likeness of the face stays exact.";
+
+  return `Edit Image 1. Create a real photograph — photorealistic fashion picture of ONE real ${gender}. Image 1 is the identity reference: likeness only, not a face cut-out to paste.
+
+CHANGE:
+- New venue, new outfit, new natural pose, new crop. Relight the ENTIRE person (face, neck, hair, clothes) with the SCENE key: same direction, Kelvin, and shadow hardness as the clothes and ground. Do not keep selfie or studio lighting on the face.
+- Pose: ${poseLine}. Head follows the body. Relaxed shoulders, micro-asymmetry, real weight. Not a passport stance, not a mannequin.
+- Replace EVERY garment, shoe, bag, glasses, jewelry, scarf, and hat from Image 1 with the outfit below.
+- Place the person IN the SCENE below. Do not copy Image 1's selfie crop or awkward arms.
+
+SCENE (non-negotiable — ignore park/street/forest in the outfit text):
+${sceneLock}
+${atmosphere}${seasonBlock}
+Architecture and materials: stone, walnut, teak, marble, glass, crystal, candles — luxury. Not a park of bushes, not an empty white cyclorama.
+
+OUTFIT (clothes and accessories only — do not take location from this paragraph):
+${outfit}
+
+PRESERVE (likeness, not pixels):
+- Same person as Image 1, not a lookalike: identical eye color, eye shape and spacing, brows, nose bridge and tip, lip shape and size, jaw WIDTH, cheeks, forehead, ears, freckles, moles, scars, skin undertone, ${gender}, apparent age. Do not beautify, slim, or redraw the face. Only the head angle may change so it matches the body.
+- A new hairstyle is allowed (cut, length, styling) so it matches the outfit. Do not freeze how the hair sat in the selfie. The person must stay recognizable.
+- Expression family from Image 1: if they are not smiling, do NOT add a smile; if they smile, keep a natural version of THAT smile that fits the new head angle. Do not freeze the selfie mouth onto a turned body.
+- Body of THIS person${bodyExtra ? ` — ${bodyExtra}` : "; keep real proportions; clothing fit this body"}
+- Do NOT slim the face, do NOT narrow the nose, do NOT change skull shape, do NOT beautify into another person.
+
+INTEGRATION (failed image if any of these break):
+- One continuous living body: head, neck, collarbones, and shoulders photographed together. No cut-out, halo, neck seam, or different grain on the face vs the body.
+- Face lighting MUST match the scene. Flat even light on a sunlit body is forbidden. Match lighting, shadows, and color temperature so nothing looks pasted on.
+- Contact shadow under the feet. Correct scale in the venue.
+- Fabric physics: gravity drape at waist, elbow, hem; wool matte; silk sheen ONLY from the KEY; leather grain.
+
+SKIN (optional visagiste, not a new face):
+- Slightly even tone and a healthy glow. Keep visible pores, freckles, moles — not airbrushed.
+- Do not add a new makeup look (no new lipstick, no smoky eye, no contour that changes the face).
+
+CAMERA:
+- Real camera, 3:4, 85mm look, 3–5 m back so the face never distorts. Head-to-shoes; hem and shoes readable.
+- Catchlights from THIS scene's lights. Match the face angle to the torso. A frontal selfie face on a turned body is a failed image.
+
+REALISM (GPT Image 2.5 Flare):
+- Must look like a photograph taken on a real camera, not a render.
+- Visible skin pores, peach fuzz, fabric weave, stitching, contact shadow under the feet.
+- No CGI, no 3D, no illustration, no beauty filter, no airbrushed plastic skin.
+
+CONSTRAINTS: single person; one photograph, not a collage; no watermark, text, logo, extra limbs, extra people.
+FINAL CHECK: a friend recognizes this person AND the picture looks shot in the SCENE in one take — not a face pasted onto a new body. Wrong face, pasted head, wrong season clothes, or wrong place = failed image.
+
+${wardrobeLock}
+
+${poseHarmony}`;
+}
+
+function parseDetectedGender(raw: string): "man" | "woman" | null {
+  const t = String(raw || "").toLowerCase().replace(/ё/g, "е");
+  if (/\b(woman|female|женщин|девуш|девочк)\b/i.test(t)) return "woman";
+  if (/\b(man|male|мужчин|парень|мальчик)\b/i.test(t)) return "man";
+  return null;
+}
+
+async function detectGenderFromPhoto(imageBase64: string, mimeType: string): Promise<"man" | "woman" | null> {
+  try {
+    const genderResp = await fetchWithTimeout(`${POLZA_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${POLZA_API_KEY}` },
+      body: JSON.stringify({
+        model: GENDER_MODEL,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Look at the photo and answer with ONE word only: man or woman. Gender of the person in the photo. Based ONLY on the photo, not on any name." },
+              { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+            ],
+          },
+        ],
+        temperature: 0,
+        max_tokens: 256,
+      }),
+    }, 30000);
+    if (!genderResp.ok) return null;
+    const gd = await genderResp.json();
+    const gtext = (gd?.choices?.[0]?.message?.content || "").toString();
+    const parsed = parseDetectedGender(gtext);
+    console.log("[Gender] Detected:", parsed || "unknown", "raw:", gtext.trim());
+    return parsed;
+  } catch (e: any) {
+    console.error("[Gender] Detection failed:", e.message);
+    return null;
+  }
+}
+
+function genderWardrobeInstruction(gender: "man" | "woman" | null): string {
+  if (gender === "man") {
+    return `\n\n⚠️ ПОЛ ПО ФОТО: МУЖЧИНА. Весь гардероб, description, items[], searchQuery, editPrompt и парфюм — ТОЛЬКО мужские. Запрещено: юбка, платье, сарафан, женские брюки, каблуки, лодочки, босоножки, женская блузка, женское пальто женского кроя, серьги-капли если это не мужской стиль. В каждом searchQuery должно быть слово «мужской». Парфюм — мужской или унисекс (не женский цветочный soliflore).\n`;
+  }
+  if (gender === "woman") {
+    return `\n\n⚠️ ПОЛ ПО ФОТО: ЖЕНЩИНА. Весь гардероб — женский. В каждом searchQuery слово «женский». Парфюм — женский или унисекс.\n`;
+  }
+  return `\n\n⚠️ GENDER DETECTION — CRITICAL: Determine the person's gender STRICTLY from the photo, NOT from the user's name. If the photo shows a WOMAN — women's looks. If a MAN — men's looks only (no women's trousers, skirts, heels). If the name disagrees with the photo, acknowledge it in greetingAndAnalysis and follow the PHOTO.\n`;
+}
+
+function sanitizeLooksForGender(looks: any[], gender: "man" | "woman" | null): any[] {
+  if (!Array.isArray(looks) || (gender !== "man" && gender !== "woman")) return looks;
+  const feminineOnly = /юбк|плать|сарафан|босонож|лодочк|каблук|бюстгальтер|лифчик|блузк/i;
+  const word = gender === "man" ? "мужской" : "женский";
+  const swapPrefix = gender === "man"
+    ? (s: string) => s.replace(/женск/gi, "мужск")
+    : (s: string) => s.replace(/мужск/gi, "женск");
+  return looks.map((look) => {
+    const items = (look.items || []).map((item: any) => {
+      let name = swapPrefix(String(item.name || ""));
+      let searchQuery = swapPrefix(String(item.searchQuery || ""));
+      if (gender === "man" && feminineOnly.test(`${name} ${searchQuery} ${item.category || ""}`)) {
+        name = name.replace(/юбк\w*/gi, "брюки").replace(/плать\w*/gi, "рубашка").replace(/сарафан\w*/gi, "костюм");
+        searchQuery = searchQuery.replace(/юбк\w*/gi, "брюки").replace(/плать\w*/gi, "рубашка");
+      }
+      if (searchQuery && !new RegExp(word, "i").test(searchQuery) && !/унисекс|парфюм|духи|аромат/i.test(searchQuery)) {
+        searchQuery = `${searchQuery} ${word}`.trim();
+      }
+      return { ...item, name, searchQuery };
+    });
+    return { ...look, items };
+  });
+}
 
 function sanitizeWishes(text: string): string {
   if (!text) return text;
@@ -100,6 +1636,327 @@ function sanitizeEditPrompt(text: string): string {
     .replace(/\bsuggestive\b/gi, "alluring");
 }
 
+type GroomingAgePolicy = "deage5" | "deage5mature" | "deage3" | "deage2" | "teenKeep" | "unknown";
+
+function groomingAgeYears(parsed: any): number | null {
+  const raw = parsed?.estimatedAge ?? parsed?.faceAnalysis?.estimatedAge;
+  const n = typeof raw === "string" ? parseInt(raw, 10) : Number(raw);
+  if (!Number.isFinite(n) || n < 12 || n > 90) return null;
+  return n;
+}
+
+function groomingAgePolicy(parsed: any): GroomingAgePolicy {
+  const band = String(parsed?.ageBand || parsed?.faceAnalysis?.ageBand || "")
+    .toLowerCase()
+    .replace(/[\s_-]/g, "");
+  const age = groomingAgeYears(parsed);
+  if (band === "teen" || band === "under18" || band === "<18") return "teenKeep";
+  if (band === "60plus" || band === "60+" || band === "mature60") return "deage5mature";
+  if (band === "under25" || band === "<25") return "deage2";
+  if (band === "35plus" || band === "35+" || band === "over35") return "deage5";
+  if (band === "25to34" || band === "2534") return "deage3";
+  if (age != null && age < 18) return "teenKeep";
+  if (age != null && age >= 60) return "deage5mature";
+  if (age != null && age < 25) return "deage2";
+  if (age != null && age >= 35) return "deage5";
+  if (age != null && age < 35) return "deage3";
+  return "unknown";
+}
+
+/** Убирает морф костей. «Моложе» в промпте = ретушь визажиста, не другое лицо. */
+function stripGroomingFaceMorphLanguage(text: string): string {
+  if (!text) return "";
+  return text
+    .replace(/\blooks?\s+\d+\s+years?\s+younger\b/gi, "visagiste skin retouch")
+    .replace(/\ba\s+few\s+years?\s+younger\b/gi, "visagiste skin retouch")
+    .replace(/\byounger\s+face\b/gi, "same face with visagiste skin")
+    .replace(/\byouthful\s+face\b/gi, "same face with visagiste skin")
+    .replace(/\bbaby[- ]?face\b/gi, "same adult face")
+    .replace(/\b(plastic\s+surgery|facelift|new\s+skull|different\s+skull)\b/gi, "")
+    .replace(/\b(anti[- ]age\w*|rejuvenat\w*|de[- ]?age\w*)\b/gi, "visagiste skin retouch")
+    .replace(/(?<!\b(?:do not|don't|never|not)\s+)\b(slim(?:mer)?|narrow(?:er)?|sculpt(?:ed|ing)?|refine[d]?|sharpen(?:ed)?|point(?:ed)?|v[- ]?shaped?)\s+(the\s+)?(face|jaw|jawline|chin|nose|features)\b/gi, "")
+    .replace(/(?<!\b(?:do not|don't|never|not)\s+)\b(tighter|lift(?:ed|ing)?|contour(?:ed|ing)?)\s+(the\s+)?(jaw|jawline|face|cheeks?|chin)\b/gi, "")
+    .replace(/\b(stock\s+model|beauty\s+filter|different\s+person|new\s+face|swap(?:ped)?\s+face)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function groomingAgePromptBlock(policy: GroomingAgePolicy): string {
+  if (policy === "teenKeep") {
+    return `AGE: teenager. SAME apparent age as Image 1. Same gaze, same expression, same smile if any. Fresh glow only. Modest knit/shirt. Hair must still change clearly.`;
+  }
+  if (policy === "deage5mature") {
+    return `AGE: 60+. Same generation. Visagiste only: slightly less under-eye bags if present, slightly softer forehead lines, healthy glow. SAME bones, nose, jaw WIDTH, gaze, and expression. Hair: elegant bob/lob, volume, gray blending or silver shine.`;
+  }
+  if (policy === "deage5") {
+    return `AGE: 35+ adult. Visagiste only: slightly less under-eye bags if present, slightly softer forehead lines, even glow. SAME bones, gaze, head position, smile if they are smiling. Not a teen, not a model, not a new skull. Hair and outfit MUST clearly change.`;
+  }
+  if (policy === "deage2") {
+    return `AGE: 18–24 adult. Light visagiste glow only. Same face, same gaze, same expression. Not a child. Wow = new named hairstyle and color.`;
+  }
+  if (policy === "deage3") {
+    return `AGE: 25–34 adult. Visagiste: slightly less tired under-eyes if present, a little even glow. SAME face bones, gaze, and smile. Not a teenager. Difference = HAIR + outfit + subtle skin retouch.`;
+  }
+  return `SKIN: visagiste retouch vs Image 1 (slight bags/forehead only). Same gaze and expression. Do not change bone structure. Hair must be a dramatic named change.`;
+}
+
+function groomingColorFamily(color: string): "dark" | "light" | "warm" {
+  const t = String(color || "").toLowerCase();
+  if (/copper|cinnamon|auburn|ginger|рыж|медн/.test(t)) return "warm";
+  if (/cherry|вишн|red/.test(t) && !/cola|mocha|espresso|chocolate/.test(t)) return "warm";
+  if (/blonde|butter|champagne|honey|bronde|wheat|pearl|beige|caramel|money piece|face-frame|светл/.test(t)) return "light";
+  return "dark";
+}
+
+function groomingLipFamily(lip: string): "rose" | "nude" | "warm" | "sheer" | "empty" {
+  const t = String(lip || "").toLowerCase();
+  if (!t.trim()) return "empty";
+  if (/sheer|balm|gloss|тинт|бальзам/.test(t) && /teen|berry|peach|rose/.test(t)) return "sheer";
+  if (/peach|nude|caramel|latte|beige|apricot|персик|нюд|латте/.test(t)) return "nude";
+  if (/terra|brick|coral|cinnamon rose|коралл|кирпич|терракот/.test(t)) return "warm";
+  if (/rose|berry|raspberry|mauve|plum|rosewood|blue-red|ягод|малин|слив|бордо/.test(t)) return "rose";
+  return "rose";
+}
+
+function groomingLipFallback(i: number, hairColor: string, agePolicy: GroomingAgePolicy): string {
+  if (agePolicy === "teenKeep") {
+    return ["Sheer berry balm — teen, no adult lipstick", "Sheer peach balm — teen, no adult lipstick", "Sheer rose gloss — teen, no adult lipstick"][i % 3];
+  }
+  const family = groomingColorFamily(hairColor);
+  const byHair = {
+    dark: "Rosewood satin — matches dark brunette, not the original lip color",
+    light: "Peach nude satin — matches honey/bronde face-frame, not the original lip color",
+    warm: "Terracotta satin — matches copper/cinnamon hair, not the original lip color",
+  };
+  const cycle = [
+    byHair.dark,
+    byHair.light,
+    byHair.warm,
+  ];
+  if (i === 0) return byHair[family] || cycle[0];
+  return cycle[i % 3];
+}
+
+function isBobLikeName(name: string): boolean {
+  return /bob|lob|каре|пикс|pixie|bixie|glass lob/i.test(String(name || ""));
+}
+
+/** Paid: не два каре и не два тёмных каштана — иначе «после» в крупном плане сливаются. */
+function enforceGroomingLookDiversity(looks: any[], agePolicy: GroomingAgePolicy = "unknown"): any[] {
+  if (!Array.isArray(looks) || looks.length < 2) return looks;
+  const next = looks.map((l) => ({ ...l }));
+
+  const bobIdx = next.map((l, i) => (isBobLikeName(l.name) ? i : -1)).filter((i) => i >= 0);
+  if (bobIdx.length >= 2) {
+    const alts = ["Hush cut with curtain bangs", "Soft wolf cut", "Octopus cut", "90s blowout layers"];
+    let n = 0;
+    for (const i of bobIdx.slice(1)) {
+      next[i].name = alts[n++ % alts.length];
+    }
+  }
+
+  const darkIdx = next
+    .map((l, i) => (groomingColorFamily(l.hairColor || "") === "dark" ? i : -1))
+    .filter((i) => i >= 0);
+  if (darkIdx.length >= 2) {
+    const alts = [
+      "bronde melt + honey face-frame +2 tones + beige toner",
+      "cinnamon copper + root melt + glass gloss",
+    ];
+    darkIdx.slice(1).forEach((i, k) => {
+      next[i].hairColor = alts[k % alts.length];
+    });
+  }
+
+  const lengthCue = [
+    "LENGTH IN FRAME: short — ends at chin/jaw, ears and nape visible.",
+    "LENGTH IN FRAME: mid — clearly to collarbone, longer than a chin bob.",
+    "LENGTH IN FRAME: long — past shoulders, ends below collarbone in this close-up.",
+  ];
+  next.forEach((l, i) => {
+    const cue = lengthCue[Math.min(i, 2)];
+    const ep = String(l.editPromptAfter || l.editPrompt || "");
+    if (!/LENGTH IN FRAME/i.test(ep)) l.editPromptAfter = `${ep}\n${cue}`.trim();
+  });
+
+  const lipIdx = next.map((l, i) => (groomingLipFamily(l.lipColor || "") === "empty" ? i : -1)).filter((i) => i >= 0);
+  for (const i of lipIdx) {
+    next[i].lipColor = groomingLipFallback(i, next[i].hairColor || "", agePolicy);
+  }
+  const families = next.map((l) => groomingLipFamily(l.lipColor || ""));
+  const seen = new Set<string>();
+  next.forEach((l, i) => {
+    const fam = families[i];
+    if (fam === "empty") return;
+    if (seen.has(fam) && i > 0) {
+      l.lipColor = groomingLipFallback(i, l.hairColor || "", agePolicy);
+    }
+    seen.add(groomingLipFamily(l.lipColor || ""));
+  });
+  return next;
+}
+
+function isGroomingMale(parsed: any): boolean {
+  const blob = String(parsed?.gender || parsed?.faceAnalysis?.gender || "");
+  return /\b(man|male|мужчин|парень)\b/i.test(blob) && !/\b(woman|female|женщин|девуш)\b/i.test(blob);
+}
+
+/** Что не хватает в платном JSON — иначе клиент видит «неполный» пакет. */
+function paidGroomingGaps(parsed: any): string[] {
+  const gaps: string[] = [];
+  const looks = Array.isArray(parsed?.looks) ? parsed.looks.filter((l: any) => l && (l.name || l.editPromptAfter)) : [];
+  if (looks.length < 3) gaps.push(`ещё ${3 - looks.length} причёски (короткая / до ключиц / длинная)`);
+  const sc = parsed?.skincare;
+  const scProducts = Array.isArray(sc?.products) ? sc.products : [];
+  if (!String(sc?.summary || "").trim() || scProducts.length < 4 || scProducts.filter(groomingProductHasHowTo).length < 4) {
+    gaps.push("уход: summary + 4–6 средств с howTo");
+  }
+  if (!isGroomingMale(parsed)) {
+    const mk = parsed?.makeup;
+    const mkProducts = Array.isArray(mk?.products) ? mk.products : [];
+    if (!String(mk?.summary || "").trim() || mkProducts.length < 3 || mkProducts.filter(groomingProductHasHowTo).length < 3) {
+      gaps.push("макияж: день/вечер + 3–5 средств с howTo");
+    }
+  }
+  if (!parsed?.faceAnalysis?.faceShape && !parsed?.faceAnalysis?.strengths) {
+    gaps.push("faceAnalysis");
+  }
+  return gaps;
+}
+
+function mergePaidGroomingJson(base: any, extra: any): any {
+  const a = base && typeof base === "object" ? base : {};
+  const b = extra && typeof extra === "object" ? extra : {};
+  const looks: any[] = [...(Array.isArray(a.looks) ? a.looks : [])];
+  for (const look of Array.isArray(b.looks) ? b.looks : []) {
+    if (!look) continue;
+    if (looks.length >= 3) break;
+    const name = String(look.name || "").toLowerCase();
+    if (name && looks.some((x) => String(x?.name || "").toLowerCase() === name)) continue;
+    looks.push(look);
+  }
+  const scA = a.skincare || {};
+  const scB = b.skincare || {};
+  const mkA = a.makeup || {};
+  const mkB = b.makeup || {};
+  return {
+    ...a,
+    ...b,
+    looks,
+    coachNote: b.coachNote || a.coachNote,
+    faceAnalysis: { ...(a.faceAnalysis || {}), ...(b.faceAnalysis || {}) },
+    skincare: {
+      ...scA,
+      ...scB,
+      products: (Array.isArray(scB.products) && scB.products.length >= (Array.isArray(scA.products) ? scA.products.length : 0))
+        ? scB.products
+        : (scA.products || scB.products || []),
+    },
+    makeup: {
+      ...mkA,
+      ...mkB,
+      products: (Array.isArray(mkB.products) && mkB.products.length)
+        ? mkB.products
+        : (mkA.products || []),
+    },
+  };
+}
+
+function applyGroomingGenderWipe(parsed: any): any {
+  if (!parsed || !isGroomingMale(parsed)) return parsed;
+  const wipe = (l: any) => { if (l) l.lipColor = "без помады"; };
+  wipe(parsed.bestLook);
+  (parsed.looks || []).forEach(wipe);
+  return parsed;
+}
+
+function buildGroomingAfterPrompt(opts: {
+  lookName?: string;
+  hairColor?: string;
+  lipColor?: string;
+  outfitNote?: string;
+  editPrompt?: string;
+  agePolicy: GroomingAgePolicy;
+  compact?: boolean;
+  lengthSlot?: "short" | "mid" | "long";
+}): string {
+  const name = (opts.lookName || "salon cut").trim();
+  const color = (opts.hairColor || "toned").trim();
+  const outfit = (opts.outfitNote || "new elegant shoulder outfit, not the original clothes").trim();
+  const details = stripGroomingFaceMorphLanguage(sanitizeEditPrompt(opts.editPrompt || "")).slice(0, 700);
+  const lipRaw = String(opts.lipColor || "").trim();
+  const skipLip = /^(без помады|none|-)$/i.test(lipRaw) || /для мужчин|мужчин/i.test(lipRaw);
+  const lip = skipLip
+    ? ""
+    : (lipRaw || groomingLipFallback(
+      opts.lengthSlot === "short" ? 0 : opts.lengthSlot === "long" ? 2 : 1,
+      color,
+      opts.agePolicy,
+    ));
+  const lipChange = skipLip
+    ? "- Keep natural lip color from Image 1. No lipstick."
+    : `- Lipstick for THIS look only: ${lip}. Keep the SAME lip shape and volume as Image 1 — change only the lipstick shade. Do NOT copy the original lip color from Image 1.`;
+  const lipSkin = skipLip
+    ? "- Do not add a new makeup look (no lipstick, no smoky eye, no contour that changes the face)"
+    : "- Lipstick shade IS required (see CHANGE). Do not add smoky eye, false lashes, or contour that changes the face";
+  const lengthLine = opts.lengthSlot === "short"
+    ? "LENGTH IN FRAME: hair ends at chin/jaw. Ears and nape visible. Neck open. NOT collarbone length."
+    : opts.lengthSlot === "long"
+      ? "LENGTH IN FRAME: hair past the shoulders. Ends visible below the collarbone in this close-up."
+      : "LENGTH IN FRAME: hair clearly reaches the collarbone — longer than a chin bob, shorter than mid-back.";
+  const core = `Edit Image 1. This is an IMAGE EDIT of the same real person — not a new generation, not a beauty-filter model, not a lookalike.
+
+TWO GOALS (both required):
+1) EXACT same person as Image 1 — same face, same gaze, same head position, same smile if they are smiling. A close friend must recognize them. If hair and identity conflict, keep the face.
+2) Skin like after a visagiste: slightly less under-eye bags if present, slightly softer forehead lines if present — not a different age, not a new skull
+
+CHANGE only:
+- Haircut: ${name}
+- Hair color: ${color} — this color must read clearly different from the other looks in the set
+- ${lengthLine}
+- Finished salon styling (blowout or glass or soft waves)
+- Clothes visible at shoulders: ${outfit}
+${lipChange}
+- Soft studio light, head-and-shoulders close-up
+- Visagiste skin: slight concealer on bags if any, slightly softened forehead lines if any, even glow
+
+PRESERVE from Image 1 (copy exactly — do not drift):
+- Exact nose (bridge width, tip, length), jaw WIDTH and shape, chin, eye spacing, brows, lip SHAPE and volume, cheeks, forehead, ears
+- Same gaze and eye direction as Image 1
+- Same head position, tilt, and face angle as Image 1 — do not turn the head
+- Same mouth: if they smile, keep THAT smile; if they are not smiling, do NOT add a smile
+- Freckles, moles, scars, asymmetry, ethnicity, gender
+- Do NOT slim the face, do NOT narrow the nose, do NOT point the chin, do NOT change skull shape
+
+SKIN (visagiste, subtle):
+- If under-eye bags or dark circles are on Image 1, soften them slightly — do not change the eyes
+- If forehead wrinkles are visible, soften them a little — leave natural texture, do not freeze the face
+- Slightly more even tone and a healthy glow
+- Keep pores, freckles, moles. Real photograph, not plastic, not a filter, not CGI
+${lipSkin}`;
+
+  if (opts.compact) {
+    return `${core}
+Hair, clothes${skipLip ? "" : ", and lipstick shade"} must clearly change. Same face, gaze, and smile as Image 1. Visagiste skin only.`;
+  }
+
+  return `${core}
+
+HAIR/CLOTHES DETAILS (ignore anything here about changing the face, jaw, nose, bones, gaze, or smile):
+${details || `${name}, ${color}`}
+
+${groomingAgePromptBlock(opts.agePolicy)}
+
+FINAL: same face, same gaze, same smile as Image 1. New hair + new clothes + visagiste skin${skipLip ? "" : " + this look's lipstick"}.`;
+}
+
+function groomingDefaultAfterNote(policy: GroomingAgePolicy): string {
+  if (policy === "teenKeep") {
+    return "Справа — ориентир: новая причёска и ухоженный вид. Взгляд, улыбка и лицо — как на вашем фото. Это не гарантия; решение за вами и мастером.";
+  }
+  return "Справа — ориентир: новая причёска и кожа как после визажиста (чуть меньше мешков и морщинок, если они есть). Взгляд, улыбка и лицо — как на вашем фото. Это не гарантия; решение за вами и специалистом.";
+}
+
 function safeJsonParse(text: string): any {
   if (!text) throw new Error("Empty response from AI");
   let cleaned = text.trim();
@@ -124,7 +1981,10 @@ function safeJsonParse(text: string): any {
       .replace(/,(\s*[}\]])/g, "$1")
       // Smart quotes → straight
       .replace(/[“”]/g, '"')
-      .replace(/[‘’]/g, "'");
+      .replace(/[‘’]/g, "'")
+      // Gemini sometimes prefixes JSON keys with markdown bullets: * "lookName":
+      .replace(/(^|[{\[,]\s*)\*+\s+"/gm, '$1"')
+      .replace(/(^|[{\[,]\s*)[-•]\s+"/gm, '$1"');
 
     // Escape lone control chars inside strings (newlines/tabs)
     repaired = repaired.replace(/("(?:[^"\\]|\\.)*")/g, (m: string) => {
@@ -147,6 +2007,35 @@ function safeJsonParse(text: string): any {
   }
 }
 
+// Helper: retry with exponential backoff
+async function callWithRetry<T>(fn: () => Promise<T>, attempts = 3, delayMs = 3000): Promise<T> {
+  for (let i = 0; i < attempts; i++) {
+    try { return await fn(); }
+    catch (e: any) {
+      console.error(`[Retry] Attempt ${i + 1}/${attempts} failed:`, e.message);
+      if (i === attempts - 1) throw e;
+      await new Promise(r => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw new Error("All attempts failed");
+}
+
+// Helper: fetch with timeout
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 90000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (e: any) {
+    if (e?.name === "AbortError" || /aborted/i.test(String(e?.message || ""))) {
+      throw new Error(`Превышено время ожидания ответа (${Math.round(timeoutMs / 1000)} с). Повторите генерацию.`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callPolzaChat(options: {
   model: string;
   systemPrompt: string;
@@ -154,6 +2043,7 @@ async function callPolzaChat(options: {
   temperature?: number;
   maxTokens?: number;
   useJsonFormat?: boolean;
+  timeoutMs?: number;
 }) {
   const requestBody: any = {
     model: options.model,
@@ -165,23 +2055,22 @@ async function callPolzaChat(options: {
     max_tokens: options.maxTokens ?? 8192,
   };
 
-  // Only use response_format for Gemini models. YandexGPT и Perplexity Sonar
-  // часто возвращают пустой {} либо ломают разметку при response_format=json_object.
+  // JSON-режим: Gemini и GLM. YandexGPT / Perplexity часто ломают разметку.
   if (
     options.useJsonFormat !== false &&
-    options.model.includes("gemini")
+    (options.model.includes("gemini") || options.model.includes("glm"))
   ) {
     requestBody.response_format = { type: "json_object" };
   }
 
-  const response = await fetch(`${POLZA_BASE_URL}/chat/completions`, {
+  const response = await fetchWithTimeout(`${POLZA_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${POLZA_API_KEY}`,
     },
     body: JSON.stringify(requestBody),
-  });
+  }, options.timeoutMs ?? 120000);
 
   if (!response.ok) {
     const error = await response.text();
@@ -189,73 +2078,438 @@ async function callPolzaChat(options: {
   }
 
   const data = await response.json();
-  return data.choices[0].message.content;
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content || (typeof content === "string" && !content.trim())) {
+    throw new Error("Пустой ответ модели анализа");
+  }
+  const finish = String(data?.choices?.[0]?.finish_reason || "stop").toLowerCase();
+  // length/error = обрезанный JSON (неполный пакет причёсок/ухода). Пусть цепочка моделей повторит.
+  if (!["stop", "end_turn", "eos", "completed", "null"].includes(finish)) {
+    throw new Error(`Пустой ответ модели анализа (finish_reason: ${finish})`);
+  }
+  return content;
 }
 
-async function generateImageWithFlux(prompt: string, referenceImageBase64?: string, referenceMimeType: string = "image/jpeg"): Promise<string | null> {
-  const body: any = {
-    model: IMAGE_MODEL,
-    input: {
-      prompt: prompt,
-      aspect_ratio: "3:4",
-    },
+const ANALYSIS_FALLBACK_MODELS = [
+  "google/gemini-3.5-flash-lite",
+  "google/gemini-2.5-flash",
+  "z-ai/glm-5.3-flash",
+];
+
+function isRetryableAnalysisError(err: unknown): boolean {
+  const m = String((err as Error)?.message || err || "");
+  return /503|502|504|429|SERVICE_UNAVAILABLE|RESOURCE_EXHAUSTED|finish_reason|Пустой ответ|timeout|ожидания|ECONNRESET|aborted/i.test(m);
+}
+
+function userFacingAnalysisError(raw: string): string {
+  const m = String(raw || "");
+  if (/503|SERVICE_UNAVAILABLE|недоступен|finish_reason/i.test(m)) {
+    return "Стилист временно не ответил. Нажмите генерацию ещё раз — фото уже на месте.";
+  }
+  if (/429|Quota|RESOURCE_EXHAUSTED/i.test(m)) {
+    return "Слишком много запросов. Подождите минуту и нажмите генерацию ещё раз.";
+  }
+  if (/401|API key|API_KEY/i.test(m)) {
+    return "Ошибка ключа API. Напишите нам внизу сайта.";
+  }
+  return "Не удалось разобрать лицо. Нажмите генерацию ещё раз — фото уже на месте.";
+}
+
+async function callAnalysisChat(options: {
+  model?: string;
+  systemPrompt: string;
+  messages: Array<any>;
+  temperature?: number;
+  maxTokens?: number;
+  useJsonFormat?: boolean;
+  timeoutMs?: number;
+  onRetry?: (info: { model: string; attempt: number }) => void;
+}) {
+  const primary = options.model || ANALYSIS_MODEL;
+  const chain = [primary, ...ANALYSIS_FALLBACK_MODELS.filter((m) => m !== primary)];
+  let lastErr: unknown;
+  for (let mi = 0; mi < chain.length; mi++) {
+    const model = chain[mi];
+    const attempts = mi === 0 ? (String(primary).includes("glm") ? 1 : 2) : 1;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const { onRetry: _onRetry, ...chatOpts } = options;
+        const text = await callPolzaChat({ ...chatOpts, model });
+        if (mi > 0 || i > 0) console.log(`[Analysis] recovered via ${model} attempt ${i + 1}`);
+        return text;
+      } catch (e) {
+        lastErr = e;
+        console.error(`[Analysis] ${model} attempt ${i + 1}/${attempts}:`, (e as Error).message);
+        if (!isRetryableAnalysisError(e)) throw e;
+        options.onRetry?.({ model, attempt: i + 1 });
+        if (i < attempts - 1) await new Promise((r) => setTimeout(r, 2500 * (i + 1)));
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Анализ не удался");
+}
+
+async function generateImageWithFlux(
+  prompt: string,
+  referenceImageBase64?: string,
+  referenceMimeType: string = "image/jpeg",
+  opts?: { quality?: "basic" | "medium" | "high"; aspectRatio?: string }
+): Promise<string | null> {
+  const safePrompt = clampImagePrompt(prompt);
+  const input: any = {
+    prompt: safePrompt,
+    aspect_ratio: opts?.aspectRatio || "3:4",
+    // Polza: quality только basic | medium | high (не low!)
+    quality: opts?.quality || "high",
+    image_resolution: "2K",
+    n: 1,
   };
 
   if (referenceImageBase64) {
-    body.input.images = [
-      { type: "base64", data: referenceImageBase64, mime_type: referenceMimeType }
+    // Polza media: base64 объект (как для Seedream) — модель редактирует по референсу
+    input.images = [
+      { type: "base64", data: referenceImageBase64, mime_type: referenceMimeType || "image/jpeg" },
     ];
   }
 
-  console.log("[Flux API] Request body:", JSON.stringify({ ...body, input: { ...body.input, prompt: body.input.prompt.substring(0, 200) + "..." } }));
+  const body: any = {
+    model: IMAGE_MODEL,
+    input,
+  };
 
-  const response = await fetch(`${POLZA_BASE_URL}/media`, {
+  console.log("[Image API] model:", IMAGE_MODEL, "prompt:", safePrompt.substring(0, 200) + "...");
+
+  const response = await fetchWithTimeout(`${POLZA_BASE_URL}/media`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${POLZA_API_KEY}`,
     },
     body: JSON.stringify(body),
-  });
+  }, 360000); // gpt-image часто держит соединение дольше 2 мин — иначе AbortError
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error("[Flux API] Error response:", response.status, errorText);
+    console.error("[Image API] Error response:", response.status, errorText);
     throw new Error(`Image generation failed: ${response.status} - ${errorText}`);
   }
 
   const data = await response.json();
-  console.log("[Flux API] Response keys:", Object.keys(data));
+  console.log("[Image API] Response keys:", Object.keys(data), "status:", data.status);
+
+  const isDoneStatus = (st: any) => {
+    const s = String(st || "").toLowerCase();
+    return !s || ["completed", "succeeded", "success", "ready", "done", "complete"].includes(s);
+  };
 
   // Polza.ai /media returns result in various formats
-  // Check common response patterns
-  if (data.output && data.output.url) {
-    return data.output.url;
-  }
-  if (data.output && data.output.data) {
-    return data.output.data;
-  }
-  if (data.url) {
-    return data.url;
-  }
-  if (data.data && Array.isArray(data.data) && data.data.length > 0) {
-    const imageData = data.data[0];
-    if (imageData.b64_json) {
-      return `data:image/png;base64,${imageData.b64_json}`;
+  const extractImageUrl = (d: any): string | null => {
+    if (!isDoneStatus(d?.status) && !(d?.output?.url || d?.url)) {
+      // Ещё обрабатывается — не забираем пустой/черновой data
+      if (d?.status) return null;
     }
-    if (imageData.url) {
-      return imageData.url;
+    if (d.output && d.output.url) return d.output.url;
+    if (d.output && typeof d.output.data === "string" && d.output.data.startsWith("http")) return d.output.data;
+    if (d.output && typeof d.output.data === "string" && d.output.data.startsWith("data:")) return d.output.data;
+    if (typeof d.url === "string" && d.url.startsWith("http")) return d.url;
+    if (d.data && Array.isArray(d.data) && d.data.length > 0) {
+      const imageData = d.data[0];
+      if (imageData?.b64_json) return `data:image/png;base64,${imageData.b64_json}`;
+      if (typeof imageData?.url === "string" && imageData.url) return imageData.url;
     }
-  }
-  if (data.image) {
-    return data.image;
-  }
-  if (data.images && Array.isArray(data.images) && data.images.length > 0) {
-    return data.images[0];
+    if (typeof d.image === "string" && d.image) return d.image;
+    if (d.images && Array.isArray(d.images) && d.images.length > 0 && typeof d.images[0] === "string") return d.images[0];
+    return null;
+  };
+
+  // Sync response (только если уже готово)
+  const syncUrl = extractImageUrl(data);
+  if (syncUrl) return syncUrl;
+
+  // Async polling (GPT Image / Seedream may return id + status)
+  if (data.id) {
+    console.log("[Image API] Async job, polling id:", data.id, "initial status:", data.status);
+    const maxWait = 300000; // до 5 мин на кадр (medium gpt-image может быть долгим)
+    const pollStart = Date.now();
+    while (Date.now() - pollStart < maxWait) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const pollResp = await fetchWithTimeout(`${POLZA_BASE_URL}/media/${data.id}`, {
+          method: "GET",
+          headers: { "Authorization": `Bearer ${POLZA_API_KEY}` },
+        }, 30000);
+        const pollData = await pollResp.json();
+        const url = extractImageUrl(pollData);
+        if (url) return url;
+        const st = String(pollData.status || "").toLowerCase();
+        if (st === "failed" || st === "error" || st === "cancelled") {
+          console.error("[Image API] Job failed:", JSON.stringify(pollData).substring(0, 300));
+          return null;
+        }
+      } catch (e) {
+        console.error("[Image API] Poll error:", (e as Error).message);
+      }
+    }
+    console.error("[Image API] Polling timed out");
+    return null;
   }
 
-  console.log("[Flux API] Full response:", JSON.stringify(data).substring(0, 500));
+  console.log("[Image API] Full response:", JSON.stringify(data).substring(0, 500));
   return null;
+}
+
+async function persistGeneratedImage(paymentId: string, lookIdx: number, image: string | null): Promise<string | null> {
+  if (!image) return null;
+  const id = sanitizeOrderId(paymentId);
+  if (!id) return image;
+  const resultDir = path.join(RESULTS_DIR, id);
+  fs.mkdirSync(resultDir, { recursive: true });
+
+  const dataMatch = image.match(/^data:([^;]+);base64,(.+)$/);
+  if (dataMatch) {
+    const ext = dataMatch[1].includes("png") ? "png" : dataMatch[1].includes("webp") ? "webp" : "jpg";
+    const imgFile = `look_${lookIdx}.${ext}`;
+    fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(dataMatch[2], "base64"));
+    return `/api/result-image/${id}/${imgFile}`;
+  }
+
+  if (/^https?:\/\//i.test(image)) {
+    const response = await fetchWithTimeout(image, { method: "GET" }, 120000);
+    if (!response.ok) throw new Error(`Не удалось сохранить готовое изображение: HTTP ${response.status}`);
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+    const imgFile = `look_${lookIdx}.${ext}`;
+    fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(await response.arrayBuffer()));
+    return `/api/result-image/${id}/${imgFile}`;
+  }
+
+  return image;
+}
+
+async function persistGroomingImage(folderId: string, slot: string, image: string | null): Promise<string | null> {
+  if (!image || !folderId) return null;
+  try {
+    if (/^\/api\/grooming-image\//.test(image)) return image;
+    const dir = path.join(GROOMING_IMG_DIR, folderId);
+    fs.mkdirSync(dir, { recursive: true });
+    let buf: Buffer;
+    let ext = "jpg";
+    const dataMatch = image.match(/^data:([^;]+);base64,(.+)$/);
+    if (dataMatch) {
+      ext = dataMatch[1].includes("png") ? "png" : dataMatch[1].includes("webp") ? "webp" : "jpg";
+      buf = Buffer.from(dataMatch[2], "base64");
+    } else if (/^https?:\/\//i.test(image)) {
+      let response: Awaited<ReturnType<typeof fetch>> | null = null;
+      for (let attempt = 0; attempt < 3 && !response?.ok; attempt++) {
+        try {
+          response = await fetchWithTimeout(image, { method: "GET" }, 120000);
+          if (response.ok) break;
+          console.error("[Grooming] download image failed", response.status, "attempt", attempt + 1, image.slice(0, 80));
+        } catch (e) {
+          console.error("[Grooming] download image attempt", attempt + 1, (e as Error).message);
+        }
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+      }
+      if (!response?.ok) {
+        console.error("[Grooming] download image failed permanently", image.slice(0, 80));
+        return null;
+      }
+      const contentType = response.headers.get("content-type") || "image/jpeg";
+      ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+      buf = Buffer.from(await response.arrayBuffer());
+    } else {
+      return null;
+    }
+    if (!buf.length) return null;
+    const imgFile = `${slot}.${ext}`;
+    fs.writeFileSync(path.join(dir, imgFile), buf);
+    return `/api/grooming-image/${folderId}/${imgFile}`;
+  } catch (e) {
+    console.error("[Grooming] persist image failed:", (e as Error).message);
+    return null;
+  }
+}
+
+/** Кэш результатов веб-поиска товаров: query → { imageUrl, wbUrl, ozonUrl, ymUrl, ts } */
+type ProductSearchResult = {
+  imageUrl: string | null;
+  wbUrl: string | null;
+  ozonUrl: string | null;
+  ymUrl: string | null;
+};
+const productSearchCache = new Map<string, ProductSearchResult & { ts: number }>();
+const PRODUCT_SEARCH_TTL_MS = 12 * 60 * 60 * 1000;
+
+/** Модель веб-поиска на Polza.ai: ищет реальные карточки товаров с источниками. */
+const SEARCH_MODEL = "perplexity/sonar";
+const SEARCH_MODEL_FALLBACK = "perplexity/sonar-pro";
+
+const SEARCH_SYSTEM_PROMPT =
+  "Ты поисковый агент по российским маркетплейсам (Wildberries, Ozon, Яндекс.Маркет). " +
+  "Пользователь даёт название товара (бренд + тип вещи + характеристики) на русском. " +
+  "Найди в интернете, существует ли такой товар, и верни ТОЛЬКО валидный JSON без markdown:\n" +
+  '{"found": true, "name": "точное название карточки", "brand": "бренд", "priceRub": 4990, ' +
+  '"imageUrl": "https://...jpg", "wbUrl": "https://www.wildberries.ru/...", ' +
+  '"ozonUrl": "https://www.ozon.ru/...", "ymUrl": "https://market.yandex.ru/..."}\n' +
+  "Правила: ссылки — только реальные, из результатов поиска. Если нашёл товар на конкретном маркетплейсе — " +
+  "дай прямую ссылку на карточку. Если карточки нет — поле оставь null, не выдумывай URL. " +
+  "imageUrl — прямая ссылка на фото товара (jpg/png/webp), если её видно в результатах. " +
+  "Если товар не нашёлся совсем, верни {\"found\": false}.";
+
+/** Ссылки-поисковики маркетплейсов по запросу — гарантированный fallback, если веб-поиск не дал прямых карточек. */
+function marketplaceSearchUrls(query: string): { wbUrl: string; ozonUrl: string; ymUrl: string } {
+  const q = encodeURIComponent(query.trim());
+  return {
+    wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${q}`,
+    ozonUrl: `https://www.ozon.ru/search/?text=${q}`,
+    ymUrl: `https://market.yandex.ru/search?text=${q}`,
+  };
+}
+
+function parseSearchJson(raw: string): any | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  const candidates: string[] = [text];
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) candidates.push(fence[1].trim());
+  const brace = text.match(/\{[\s\S]*\}/);
+  if (brace?.[0]) candidates.push(brace[0]);
+  for (const c of candidates) {
+    try {
+      const parsed = JSON.parse(c);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+  }
+  return null;
+}
+
+function cleanUrl(v: any): string | null {
+  const s = String(v || "").trim();
+  if (!/^https?:\/\//i.test(s)) return null;
+  return s;
+}
+
+/**
+ * Веб-поиск реальной карточки товара через Perplexity (Polza.ai).
+ * Возвращает прямые ссылки на маркетплейсы и фото (если модель их нашла),
+ * иначе — null-поля; вызывающая сторона подставит поисковые ссылки.
+ */
+async function searchProductOnMarketplaces(
+  query: string,
+  brandHint = ""
+): Promise<ProductSearchResult> {
+  const q = [brandHint.trim(), query.trim()].filter(Boolean).join(" ").trim();
+  if (q.length < 3) return { imageUrl: null, wbUrl: null, ozonUrl: null, ymUrl: null };
+
+  const key = q.toLowerCase().replace(/\s+/g, " ");
+  const cached = productSearchCache.get(key);
+  if (cached && Date.now() - cached.ts < PRODUCT_SEARCH_TTL_MS) {
+    return { imageUrl: cached.imageUrl, wbUrl: cached.wbUrl, ozonUrl: cached.ozonUrl, ymUrl: cached.ymUrl };
+  }
+
+  const chain = [SEARCH_MODEL, SEARCH_MODEL_FALLBACK];
+  for (const model of chain) {
+    try {
+      const raw = await callPolzaChat({
+        model,
+        systemPrompt: SEARCH_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: `Найди товар: ${q}` }],
+        temperature: 0.2,
+        maxTokens: 1200,
+        useJsonFormat: false,
+        timeoutMs: 45000,
+      });
+      const parsed = parseSearchJson(raw);
+      if (!parsed || parsed.found === false) continue;
+      const result: ProductSearchResult = {
+        imageUrl: cleanUrl(parsed.imageUrl),
+        wbUrl: cleanUrl(parsed.wbUrl),
+        ozonUrl: cleanUrl(parsed.ozonUrl),
+        ymUrl: cleanUrl(parsed.ymUrl),
+      };
+      if (result.imageUrl || result.wbUrl || result.ozonUrl || result.ymUrl) {
+        productSearchCache.set(key, { ...result, ts: Date.now() });
+        return result;
+      }
+    } catch (e) {
+      console.error(`[product-search] ${model}:`, (e as Error).message);
+    }
+  }
+  return { imageUrl: null, wbUrl: null, ozonUrl: null, ymUrl: null };
+}
+
+/** Обогатить список товаров ухода/макияжа реальными ссылками и фото (последовательно, с паузой). */
+async function enrichShopProductsWithThumbs(products: any[]): Promise<any[]> {
+  const out: any[] = [];
+  for (const p of products) {
+    const brand = String(p.brand || "").trim();
+    const name = String(p.name || "").trim();
+    const q = String(p.searchQuery || `${brand} ${name}`).trim();
+    const fallback = marketplaceSearchUrls(q || name || brand);
+    if (!q && !brand && !name) { out.push(p); continue; }
+    try {
+      const found = await searchProductOnMarketplaces(q || name, brand);
+      out.push({
+        ...p,
+        imageUrl: found.imageUrl || p.imageUrl || null,
+        wbUrl: found.wbUrl || p.wbUrl || fallback.wbUrl,
+        ozonUrl: found.ozonUrl || p.ozonUrl || fallback.ozonUrl,
+        ymUrl: found.ymUrl || p.ymUrl || fallback.ymUrl,
+      });
+    } catch {
+      out.push(p);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return out;
+}
+
+/** Для образов стилиста: веб-поиск реальной карточки товара + фото; иначе — страницы поиска. */
+async function enrichOutfitLooksWithWb(
+  looks: any[],
+  onProgress?: (done: number, total: number) => void
+): Promise<any[]> {
+  const flatCount = looks.reduce((n, look) => n + (look.items || []).length, 0);
+  let done = 0;
+  const out: any[] = [];
+
+  for (const look of looks) {
+    const enrichedItems: any[] = [];
+    for (const item of look.items || []) {
+      const q = String(item.searchQuery || item.name || "").trim();
+      const fallback = marketplaceSearchUrls(q);
+      const base = {
+        ...item,
+        wbUrl: fallback.wbUrl,
+        ozonUrl: fallback.ozonUrl,
+        ymUrl: fallback.ymUrl,
+      };
+      if (!q) {
+        enrichedItems.push(base);
+        done++;
+        onProgress?.(done, flatCount);
+        continue;
+      }
+      try {
+        const found = await searchProductOnMarketplaces(q, String(item.brand || ""));
+        enrichedItems.push({
+          ...base,
+          imageUrl: found.imageUrl || base.imageUrl || null,
+          wbUrl: found.wbUrl || base.wbUrl,
+          ozonUrl: found.ozonUrl || base.ozonUrl,
+          ymUrl: found.ymUrl || base.ymUrl,
+          productUrl: found.wbUrl || null,
+        });
+      } catch {
+        enrichedItems.push(base);
+      }
+      done++;
+      onProgress?.(done, flatCount);
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    out.push({ ...look, items: enrichedItems });
+  }
+  return out;
 }
 
 async function startServer() {
@@ -263,62 +2517,33 @@ async function startServer() {
   const PORT = parseInt(process.env.PORT || '3001', 10);
 
   const PROMO_FILE = path.join(PROJECT_ROOT, "promo-codes.json");
-  const PAYMENTS_FILE = path.join(PROJECT_ROOT, "payments.json");
-  const STATS_FILE = path.join(PROJECT_ROOT, "stats.json");
-  const PRICES_FILE = path.join(PROJECT_ROOT, "prices.json");
 
-  type PromoEntry = { used: boolean; tier: "standard" | "premium"; createdAt: string };
+  type PromoEntry = { used: boolean; tier: "standard" | "premium" | "grooming"; createdAt: string; redeemedAt?: string };
   type PromoStore = Record<string, PromoEntry>;
-  type PaymentEntry = { id: string; tier: string; amount: number; status: string; createdAt: string; ip?: string };
-  type StatsData = { totalRequests: number; requestsByDay: Record<string, number>; paymentsByTier: Record<string, number>; userRequests?: Record<string, number> };
-  type PricesData = { standard: number; premium: number };
 
   const loadPromos = (): PromoStore => {
-    try { if (fs.existsSync(PROMO_FILE)) return JSON.parse(fs.readFileSync(PROMO_FILE, "utf-8")); } catch {}
+    try {
+      if (fs.existsSync(PROMO_FILE)) return JSON.parse(fs.readFileSync(PROMO_FILE, "utf-8"));
+    } catch {}
     return {};
   };
   const savePromos = (store: PromoStore) => {
     try { fs.writeFileSync(PROMO_FILE, JSON.stringify(store, null, 2)); } catch {}
   };
 
-  const loadPayments = (): PaymentEntry[] => {
-    try { if (fs.existsSync(PAYMENTS_FILE)) return JSON.parse(fs.readFileSync(PAYMENTS_FILE, "utf-8")); } catch {}
-    return [];
-  };
-  const savePayments = (list: PaymentEntry[]) => {
-    try { fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(list, null, 2)); } catch {}
-  };
-
-  const loadStats = (): StatsData => {
-    try { if (fs.existsSync(STATS_FILE)) return JSON.parse(fs.readFileSync(STATS_FILE, "utf-8")); } catch {}
-    return { totalRequests: 0, requestsByDay: {}, paymentsByTier: { standard: 0, premium: 0 } };
-  };
-  const saveStats = (s: StatsData) => {
-    try { fs.writeFileSync(STATS_FILE, JSON.stringify(s, null, 2)); } catch {}
-  };
-
-  const loadPrices = (): PricesData => {
-    try { if (fs.existsSync(PRICES_FILE)) return JSON.parse(fs.readFileSync(PRICES_FILE, "utf-8")); } catch {}
-    return { standard: 100, premium: 200 };
-  };
-  const savePrices = (p: PricesData) => {
-    try { fs.writeFileSync(PRICES_FILE, JSON.stringify(p, null, 2)); } catch {}
-  };
-
   const promos = loadPromos();
-  const payments = loadPayments();
-  const stats = loadStats();
-  let prices = loadPrices();
 
-  // Инициализация промокодов из .env (если ещё не созданы)
-  const envPromoCodes = (process.env.PROMO_CODES || "").split(",").filter(Boolean);
-  for (const code of envPromoCodes) {
-    const upperCode = code.trim().toUpperCase();
-    if (!promos[upperCode]) {
-      promos[upperCode] = { used: false, tier: "standard", createdAt: new Date().toISOString() };
+  const syncPromosFromDisk = () => {
+    try {
+      const fresh = loadPromos();
+      for (const k of Object.keys(promos)) {
+        if (!(k in fresh)) delete promos[k];
+      }
+      Object.assign(promos, fresh);
+    } catch (e) {
+      console.error("[Promo] sync failed:", e);
     }
-  }
-  if (envPromoCodes.length > 0) savePromos(promos);
+  };
 
   const generateCode = () => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -330,39 +2555,111 @@ async function startServer() {
     return code;
   };
 
-  const ADMIN_SECRET = process.env.ADMIN_SECRET || "913260";
-
-  app.use(helmet({ contentSecurityPolicy: false }));
-
-  const allowedOrigin = process.env.CORS_ORIGIN || "*";
-  app.use(cors(allowedOrigin === "*" ? undefined : { origin: allowedOrigin }));
+  app.use(cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (/^https:\/\/(www\.)?stilist-ai\.ru$/.test(origin)) return cb(null, true);
+      if (/^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) return cb(null, true);
+      cb(null, false);
+    },
+    credentials: true,
+  }));
+  app.set("trust proxy", 1); // trust Nginx X-Forwarded-Proto
   app.use(express.json());
 
-  const stylizeLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 15,
-    message: { error: "Слишком много запросов. Попробуйте через час." },
-    standardHeaders: true,
-    legacyHeaders: false,
+  const nailsSub = createNailsSubscription(PROJECT_ROOT, { isAdmin: isOwnerRequest });
+  nailsSub.registerRoutes(app);
+
+  // Do not expose full master guides via static catalog files.
+  app.get(["/nails/catalog.json", "/nails/nails-data.json"], (_req: Request, res: Response) => {
+    try {
+      const file = _req.path.endsWith("nails-data.json")
+        ? path.join(PROJECT_ROOT, "public", "nails", "nails-data.json")
+        : path.join(PROJECT_ROOT, "public", "nails", "catalog.json");
+      const distFile = path.join(PROJECT_ROOT, "dist", "nails", path.basename(file));
+      const src = fs.existsSync(file) ? file : distFile;
+      if (!fs.existsSync(src)) return res.status(404).json({ error: "not_found" });
+      const raw = JSON.parse(fs.readFileSync(src, "utf-8"));
+      const strip = (item: any) => {
+        if (!item || typeof item !== "object") return item;
+        const { masterGuide, master_guide, ...rest } = item;
+        return rest;
+      };
+      if (Array.isArray(raw)) return res.json(raw.map(strip));
+      if (raw && typeof raw === "object") {
+        const out: Record<string, any> = {};
+        for (const [k, v] of Object.entries(raw)) out[k] = strip(v);
+        return res.json(out);
+      }
+      return res.json(raw);
+    } catch {
+      return res.status(500).json({ error: "catalog_error" });
+    }
   });
-  app.use("/api/stylize", stylizeLimiter);
 
   app.post("/api/check-promo", (req: Request, res: Response) => {
+    syncPromosFromDisk();
     const code = (req.body.code || "").toString().trim().toUpperCase();
+    const purpose = String(req.body.purpose || "outfits").toLowerCase(); // outfits | grooming
     if (!code) return res.json({ valid: false });
     const entry = promos[code];
     if (!entry) return res.json({ valid: false });
     if (entry.used) return res.json({ valid: false, reason: "used" });
-    entry.used = true;
-    savePromos(promos);
-    return res.json({ valid: true, tier: entry.tier });
+    if (purpose === "grooming") {
+      if (entry.tier === "grooming") return res.json({ valid: true, tier: "grooming", code });
+      return res.json({ valid: false, reason: "outfits_only" });
+    }
+    // Промокоды причёсок — только в окне «Причёска и уход», не для образов
+    if (entry.tier === "grooming") return res.json({ valid: false, reason: "grooming_only" });
+    return res.json({ valid: true, tier: entry.tier, code });
   });
 
-  app.post("/api/generate-promo", (req: Request, res: Response) => {
-    const secret = (req.headers["x-admin-secret"] || req.body.secret || "").toString();
-    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
-    const count = Math.min(parseInt(req.body.count || "10", 10), 100);
-    const tier: "standard" | "premium" = req.body.tier === "premium" ? "premium" : "standard";
+  app.post("/api/redeem-promo", (req: Request, res: Response) => {
+    syncPromosFromDisk();
+    const code = (req.body.code || "").toString().trim().toUpperCase();
+    const purpose = String(req.body.purpose || "outfits").toLowerCase();
+    if (!code) return res.json({ success: false, reason: "no_code" });
+    const entry = promos[code];
+    if (!entry) return res.json({ success: false, reason: "not_found" });
+    if (entry.used) return res.json({ success: false, reason: "used" });
+    if (purpose === "grooming") {
+      if (entry.tier !== "grooming") return res.json({ success: false, reason: "outfits_only" });
+      return res.json({ success: true, tier: "grooming", code });
+    }
+    if (entry.tier === "grooming") return res.json({ success: false, reason: "grooming_only" });
+    // НЕ помечаем как использованный здесь — только после успешной генерации в /api/stylize.
+    // Фронтенд сохранит код и передаст его в FormData при загрузке фото.
+    return res.json({ success: true, tier: entry.tier, code });
+  });
+
+  // Помечает промокод как использованный. Вызывается ТОЛЬКО после успешной генерации образов.
+  const markPromoUsed = (code: string): boolean => {
+    try {
+      const key = (code || "").toString().trim().toUpperCase();
+      if (!key) return false;
+      const store = loadPromos();
+      const entry = store[key];
+      if (!entry) return false;
+      if (entry.used) return true; // уже использован — ничего не делаем
+      entry.used = true;
+      entry.redeemedAt = new Date().toISOString();
+      savePromos(store);
+      // Синхронизируем кэш promos в памяти, чтобы promo-list и другие роуты
+      // видели актуальное состояние (и не перезаписали файл старым кэшем).
+      promos[key] = entry;
+      if (entry.tier === "standard" || entry.tier === "premium") {
+        incPromoSale(entry.tier);
+      }
+      return true;
+    } catch { return false; }
+  };
+
+  app.post("/api/generate-promo", requireAdmin, (req: Request, res: Response) => {
+    syncPromosFromDisk();
+    const count = Math.min(parseInt(req.body.count || "10", 10) || 10, 100);
+    const rawTier = (req.body.tier || "standard").toString();
+    const tier: "standard" | "premium" | "grooming" =
+      rawTier === "premium" ? "premium" : rawTier === "grooming" ? "grooming" : "standard";
     const newCodes: string[] = [];
     for (let i = 0; i < count; i++) {
       let code = generateCode();
@@ -371,162 +2668,190 @@ async function startServer() {
       newCodes.push(code);
     }
     savePromos(promos);
-    res.json({ codes: newCodes, tier, count: newCodes.length });
+    const where =
+      tier === "grooming"
+        ? "Только в окне «Причёска и уход» на сайте"
+        : tier === "premium"
+          ? "Только для тарифа Премиум (образы)"
+          : "Только для тарифа Стандарт (образы)";
+    res.json({ codes: newCodes, tier, count: newCodes.length, where });
   });
 
-  app.get("/api/promo-list", (_req: Request, res: Response) => {
-    const list = Object.entries(promos).map(([code, e]) => ({ code, ...e }));
-    res.json({ total: list.length, unused: list.filter(e => !e.used).length, codes: list });
+  app.get("/api/promo-list", requireAdmin, (req: Request, res: Response) => {
+    syncPromosFromDisk();
+    const page = Math.max(1, parseInt((req.query.page as string) || "1", 10));
+    const limit = Math.min(100, parseInt((req.query.limit as string) || "10", 10));
+    const status = (req.query.status as string) || "all";
+    const tierF = (req.query.tier as string) || "all";
+    const q = ((req.query.q as string) || "").trim().toUpperCase();
+
+    let list = Object.entries(promos).map(([code, e]) => ({ code, ...e }));
+    if (status === "free") list = list.filter(e => !e.used);
+    else if (status === "used") list = list.filter(e => e.used);
+    if (tierF === "standard" || tierF === "premium" || tierF === "grooming") list = list.filter(e => e.tier === tierF);
+    if (q) list = list.filter(e => e.code.includes(q));
+    list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+
+    const unused = list.filter(e => !e.used).length;
+    const used = list.filter(e => e.used).length;
+    const total = list.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const codes = list.slice((page - 1) * limit, page * limit);
+    res.json({ total, codes, page, totalPages, limit, unused, used });
   });
 
-  app.get("/api/payments-log", (req: Request, res: Response) => {
-    const secret = (req.headers["x-admin-secret"] || req.query.secret || "").toString();
-    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
-    const list = loadPayments();
-    const total = list.reduce((sum, p) => sum + (p.status === "succeeded" ? p.amount : 0), 0);
-    res.json({ total: list.length, totalRevenue: total, payments: list.slice().reverse() });
+  app.post("/api/promo-delete", requireAdmin, (req: Request, res: Response) => {
+    syncPromosFromDisk();
+    const code = (req.body.code || "").toString().trim().toUpperCase();
+    if (!code || !promos[code]) return res.json({ success: false, reason: "not_found" });
+    delete promos[code];
+    savePromos(promos);
+    res.json({ success: true, remaining: Object.keys(promos).length });
   });
 
-  app.get("/api/stats-data", (req: Request, res: Response) => {
-    const secret = (req.headers["x-admin-secret"] || req.query.secret || "").toString();
-    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
-    res.json(loadStats());
+  app.post("/api/promo-reset", requireAdmin, (req: Request, res: Response) => {
+    syncPromosFromDisk();
+    const code = (req.body.code || "").toString().trim().toUpperCase();
+    if (!code || !promos[code]) return res.json({ success: false, reason: "not_found" });
+    promos[code].used = false;
+    delete promos[code].redeemedAt;
+    savePromos(promos);
+    res.json({ success: true });
   });
 
-  app.get("/api/get-prices", (_req: Request, res: Response) => {
-    res.json(loadPrices());
+  // ============ SHARE WITH OG:IMAGE PREVIEW ============
+  // Storage for share metadata
+  const SHARES_FILE = path.join(__dirname, "data", "shares.json");
+  const SHARES_DIR = path.join(__dirname, "public", "share");
+  type ShareMeta = { lookName: string; description: string; createdAt: string };
+  let shares: Record<string, ShareMeta> = {};
+  try { shares = JSON.parse(fs.readFileSync(SHARES_FILE, "utf-8")); } catch {}
+  const saveShares = () => {
+    try {
+      fs.mkdirSync(path.dirname(SHARES_FILE), { recursive: true });
+      fs.writeFileSync(SHARES_FILE, JSON.stringify(shares, null, 2));
+    } catch (e) { console.error("saveShares failed:", e); }
+  };
+  const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c
+  ));
+
+  // Upload a generated branded image, store it, return public share URL
+  app.post("/api/share-image", upload.single("image"), (req: Request, res: Response) => {
+    if (!req.file) return res.status(400).json({ error: "no image" });
+    const id = (typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID() : Date.now() + "-" + Math.random()).toString().replace(/-/g, "").slice(0, 12);
+    try {
+      fs.mkdirSync(SHARES_DIR, { recursive: true });
+      fs.writeFileSync(path.join(SHARES_DIR, `${id}.jpg`), req.file.buffer);
+    } catch (e) {
+      console.error("share-image write failed:", e);
+      return res.status(500).json({ error: "write failed" });
+    }
+    shares[id] = {
+      lookName: ((req.body.lookName as string) || "Образ").slice(0, 200),
+      description: ((req.body.description as string) || "").slice(0, 500),
+      createdAt: new Date().toISOString()
+    };
+    saveShares();
+    const baseUrl = process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+    res.json({ id, url: `${baseUrl}/s/${id}`, imageUrl: `${baseUrl}/share/${id}.jpg` });
   });
 
-  app.post("/api/set-prices", (req: Request, res: Response) => {
-    const secret = (req.headers["x-admin-secret"] || req.body.secret || "").toString();
-    if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "forbidden" });
-    const standard = parseInt(req.body.standard, 10);
-    const premium = parseInt(req.body.premium, 10);
-    if (!standard || !premium || standard < 1 || premium < 1) return res.status(400).json({ error: "Неверные цены" });
-    prices = { standard, premium };
-    savePrices(prices);
-    res.json({ ok: true, prices });
+  // Static serving of share images
+  app.use("/share", express.static(SHARES_DIR, { maxAge: "30d", immutable: true }));
+
+  // Promo landing page with og:image (must be registered BEFORE SPA fallback)
+  app.get("/s/:id", (req: Request, res: Response) => {
+    const meta = shares[req.params.id];
+    if (!meta) return res.status(404).type("text/html").send("<h1>Образ не найден</h1>");
+    const baseUrl = process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`;
+    const imgUrl = `${baseUrl}/share/${req.params.id}.jpg`;
+    const title = `${meta.lookName} — Твой стилист`;
+    const firstLine = (meta.description.split("\n").find(l => l.trim()) || "Персональный AI-стилист").trim();
+    const desc = firstLine.slice(0, 200);
+    const pageUrl = `${baseUrl}/s/${req.params.id}`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`<!DOCTYPE html><html lang="ru"><head>
+<meta charset="UTF-8">
+<title>${escapeHtml(title)}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="${escapeHtml(desc)}">
+<meta property="og:title" content="${escapeHtml(title)}">
+<meta property="og:description" content="${escapeHtml(desc)}">
+<meta property="og:image" content="${imgUrl}">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:url" content="${pageUrl}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Твой стилист">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${escapeHtml(title)}">
+<meta name="twitter:description" content="${escapeHtml(desc)}">
+<meta name="twitter:image" content="${imgUrl}">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#faf7f2;color:#1a1a1a;min-height:100vh;padding:20px}
+.wrap{max-width:760px;margin:0 auto;text-align:center}
+h1{font-family:Georgia,serif;font-size:28px;font-weight:500;margin:24px 0 12px;line-height:1.25}
+.img-wrap{background:#fff;border-radius:24px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.08);margin-bottom:24px}
+img{width:100%;height:auto;display:block}
+.desc{color:#555;font-size:15px;line-height:1.6;margin:0 24px 28px;white-space:pre-wrap;text-align:left}
+.cta{display:inline-block;background:#c9a84c;color:#1a1a1a;text-decoration:none;padding:16px 32px;border-radius:999px;font-weight:600;font-size:16px;margin-bottom:32px;box-shadow:0 4px 12px rgba(201,168,76,.3);transition:transform .15s ease}
+.cta:hover{transform:translateY(-1px)}
+.tagline{color:#888;font-size:13px;margin-top:8px}
+.footer{color:#aaa;font-size:12px;margin-top:24px;padding-top:16px;border-top:1px solid #eee}
+.footer a{color:#888;text-decoration:none}
+@media(min-width:600px){h1{font-size:34px}}
+</style>
+</head><body>
+<div class="wrap">
+<h1>${escapeHtml(meta.lookName)}</h1>
+<div class="img-wrap"><img src="${imgUrl}" alt="${escapeHtml(meta.lookName)}"></div>
+<p class="desc">${escapeHtml(desc)}</p>
+<a href="${baseUrl}/" class="cta">✨ Создать свой образ</a>
+<p class="tagline">Персональный AI-стилист за 1 минуту</p>
+<div class="footer"><a href="${baseUrl}/">stilist-ai.ru</a></div>
+</div>
+</body></html>`);
   });
+  // ============ END SHARE ============
 
-  // Реквизиты
-  app.get("/rekvizity", (_req: Request, res: Response) => {
-    res.send(`<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Реквизиты — Stilist AI</title>
-  <style>
-    body { font-family: Georgia, serif; background: #1a1a1a; color: #e8dcc8; max-width: 680px; margin: 60px auto; padding: 0 24px; }
-    h1 { font-size: 1.6rem; color: #c9a84c; margin-bottom: 8px; }
-    h2 { font-size: 1rem; color: #c9a84c; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 36px; }
-    p { margin: 6px 0; line-height: 1.7; }
-    a { color: #c9a84c; text-decoration: none; }
-    .back { display: inline-block; margin-top: 40px; font-size: 0.9rem; opacity: 0.7; }
-    .back:hover { opacity: 1; }
-  </style>
-</head>
-<body>
-  <h1>Реквизиты</h1>
-  <p>Сервис «Stilist AI» — <strong>stilist-ai.ru</strong></p>
-
-  <h2>Исполнитель</h2>
-  <p>Самозанятый: <strong>Черданцев Андрей Владимирович</strong></p>
-  <p>ИНН: <strong>222304889746</strong></p>
-  <p>Место осуществления деятельности: <strong>г. Барнаул</strong></p>
-
-  <h2>Контакты</h2>
-  <p>Email: <a href="mailto:gesper2004@mail.ru">gesper2004@mail.ru</a></p>
-  <p>Телефон: <a href="tel:+79588481313">+7 958 848-13-13</a></p>
-
-  <a class="back" href="/">← На главную</a>
-</body>
-</html>`);
-  });
-
-  // Публичная оферта
-  app.get("/oferta", (_req: Request, res: Response) => {
-    res.send(`<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Публичная оферта — Stilist AI</title>
-  <style>
-    body { font-family: Georgia, serif; background: #1a1a1a; color: #e8dcc8; max-width: 680px; margin: 60px auto; padding: 0 24px; }
-    h1 { font-size: 1.6rem; color: #c9a84c; margin-bottom: 8px; }
-    h2 { font-size: 1rem; color: #c9a84c; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 36px; }
-    p, li { margin: 6px 0; line-height: 1.7; }
-    ul { padding-left: 20px; }
-    a { color: #c9a84c; text-decoration: none; }
-    .back { display: inline-block; margin-top: 40px; font-size: 0.9rem; opacity: 0.7; }
-    .back:hover { opacity: 1; }
-    .date { font-size: 0.85rem; opacity: 0.6; margin-bottom: 32px; }
-  </style>
-</head>
-<body>
-  <h1>Публичная оферта</h1>
-  <p class="date">Дата вступления в силу: 08 мая 2025 г.</p>
-
-  <p>Настоящий документ является публичной офертой самозанятого <strong>Черданцева Андрея Владимировича</strong> (ИНН 222304889746, г. Барнаул) об оказании услуг сервиса «Stilist AI» (stilist-ai.ru) и адресован любому физическому лицу.</p>
-
-  <h2>1. Предмет договора</h2>
-  <p>Исполнитель оказывает Пользователю услуги AI-стилиста: анализ фотографий и генерацию персональных рекомендаций по образам на основе загруженных изображений.</p>
-
-  <h2>2. Акцепт оферты</h2>
-  <p>Оплата любого тарифа («Стандарт» или «Премиум») означает полное и безоговорочное принятие условий настоящей оферты.</p>
-
-  <h2>3. Стоимость услуг</h2>
-  <ul>
-    <li>Тариф «Стандарт» — 100 рублей (3 образа)</li>
-    <li>Тариф «Премиум» — 200 рублей (до 5 образов, расширенные рекомендации)</li>
-  </ul>
-
-  <h2>4. Порядок оплаты</h2>
-  <p>Оплата производится онлайн через платёжный сервис ЮKassa. Доступ к результатам предоставляется сразу после подтверждения оплаты.</p>
-
-  <h2>5. Возврат денежных средств</h2>
-  <p>В случае если услуга не была оказана по техническим причинам на стороне Исполнителя, Пользователь вправе обратиться за возвратом на email <a href="mailto:gesper2004@mail.ru">gesper2004@mail.ru</a> в течение 14 дней. Возврат осуществляется в течение 7 рабочих дней.</p>
-
-  <h2>6. Ограничение ответственности</h2>
-  <p>Рекомендации сервиса носят информационный характер и не являются профессиональной консультацией. Исполнитель не несёт ответственности за решения, принятые Пользователем на их основе.</p>
-
-  <h2>7. Персональные данные</h2>
-  <p>Загружаемые фотографии используются исключительно для генерации образов в рамках одной сессии и не хранятся на серверах Исполнителя после завершения обработки.</p>
-
-  <h2>8. Контакты для связи</h2>
-  <p>Email: <a href="mailto:gesper2004@mail.ru">gesper2004@mail.ru</a></p>
-  <p>Телефон: <a href="tel:+79588481313">+7 958 848-13-13</a></p>
-
-  <a class="back" href="/">← На главную</a>
-</body>
-</html>`);
-  });
-
-  // Admin page
+  // Admin page (открытый доступ)
   app.get("/api/admin", (req: Request, res: Response) => {
-    const pin = (req.query.pin || "").toString();
-    if (pin !== "913260") {
+    const pinQ = String(req.query.pin || "");
+    if (!isAdminRequest(req) && ADMIN_PIN && pinQ && pinQ === ADMIN_PIN) {
+      rememberOwnerIp(clientIp(req));
+      res.setHeader("Set-Cookie", ownerCookieHeaders(req));
+    } else if (!isAdminRequest(req)) {
       return res.send(`<!DOCTYPE html>
 <html lang="ru">
 <head><meta charset="UTF-8"><title>Админка — Вход</title>
 <style>
-  body{font-family:-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#faf9f7}
-  .box{background:#fff;padding:40px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.1);text-align:center}
+  body{font-family:-apple-system,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#faf9f7;padding:16px;box-sizing:border-box}
+  .box{background:#fff;padding:32px 24px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.1);text-align:center;width:90%;max-width:340px}
   h2{margin:0 0 20px;font-size:20px;color:#333}
   input{padding:12px 16px;border:1px solid #ddd;border-radius:10px;font-size:18px;text-align:center;width:140px;margin-bottom:16px}
   button{padding:12px 32px;background:#c9a84c;color:#fff;border:none;border-radius:10px;font-size:15px;cursor:pointer}
   button:hover{background:#b8973b}
+  .err{color:#c62828;font-size:13px;min-height:18px}
 </style></head>
 <body>
 <div class="box">
   <h2>Введите PIN-код администратора</h2>
-  <form>
-    <input type="password" id="pin" maxlength="6" placeholder="******">
-    <br>
-    <button onclick="location.href='/api/admin?pin='+document.getElementById('pin').value;return false">Войти</button>
-  </form>
+  <input type="password" id="pin" maxlength="12" placeholder="******" autocomplete="current-password">
+  <br>
+  <p class="err" id="err"></p>
+  <button id="go">Войти</button>
 </div>
+<script>
+document.getElementById('go').onclick = async function() {
+  const pin = document.getElementById('pin').value;
+  const r = await fetch('/api/admin-login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+  if (r.ok) location.href = '/api/admin';
+  else document.getElementById('err').textContent = 'Неверный код';
+};
+document.getElementById('pin').addEventListener('keydown', function(e) { if (e.key === 'Enter') document.getElementById('go').click(); });
+</script>
 </body></html>`);
     }
     res.send(`<!DOCTYPE html>
@@ -535,19 +2860,17 @@ async function startServer() {
 <title>Админка — Твой стилист</title>
 <style>
   *{box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:0 auto;padding:24px;background:#faf9f7;color:#1a1a1a}
-  h1{font-size:22px;margin:0 0 24px;display:flex;align-items:center;gap:10px}
-  h2{font-size:16px;color:#555;margin:0 0 12px}
-  .card{background:#fff;border-radius:16px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.06);border:1px solid #eee}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}
-  .stat{background:#fff;border-radius:12px;padding:16px;text-align:center;border:1px solid #eee}
-  .stat-num{font-size:32px;font-weight:700;color:#c9a84c}
-  .stat-label{font-size:12px;color:#888;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:980px;margin:0 auto;padding:12px;background:#faf9f7;color:#1a1a1a;overflow-x:hidden}
+  h1{font-size:20px;margin:0 0 14px;display:flex;align-items:center;gap:10px}
+  h2{font-size:15px;color:#555;margin:0 0 8px}
+  .card{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);border:1px solid #eee}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+  .stat{background:#fff;border-radius:10px;padding:10px;text-align:center;border:1px solid #eee}
+  .stat-num{font-size:22px;font-weight:700;color:#c9a84c}
+  .stat-label{font-size:11px;color:#888;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+  .stat-revenue .stat-num{color:#2e7d32}
+  .stat-promo .stat-num{color:#6a1b9a}
   label{display:block;margin-bottom:6px;font-size:14px;color:#555;font-weight:500}
-  select,input[type=number],input[type=text]{padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:15px;margin-right:8px}
-  button{padding:10px 20px;background:#c9a84c;color:#1a1a1a;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
-  button:hover{background:#b8973b}
-  .btn-sm{padding:6px 14px;font-size:13px}
   input,select{padding:10px 14px;border:1px solid #ddd;border-radius:10px;font-size:15px;margin-right:8px;margin-bottom:8px}
   button{padding:10px 20px;background:#c9a84c;color:#1a1a1a;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer}
   button:hover{background:#b8973b}
@@ -556,24 +2879,40 @@ async function startServer() {
   .btn-small{padding:6px 12px;font-size:13px}
   .btn-green{background:#2e7d32;color:#fff}
   .btn-green:hover{background:#1b5e20}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th{text-align:left;padding:10px 12px;background:#f9f8f6;border-bottom:2px solid #eee;color:#888;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
-  td{padding:10px 12px;border-bottom:1px solid #f0ece4}
+  .btn-red{background:#c62828;color:#fff;padding:5px 10px;font-size:12px;border-radius:8px}
+  .btn-red:hover{background:#b71c1c}
+  .btn-blue{background:#1565c0;color:#fff;padding:5px 10px;font-size:12px;border-radius:8px}
+  .btn-blue:hover{background:#0d47a1}
+  .btn-gray{background:#888;color:#fff;padding:5px 10px;font-size:12px;border-radius:8px}
+  .btn-gray:hover{background:#666}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;padding:6px 8px;background:#f9f8f6;border-bottom:2px solid #eee;color:#888;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+  td{padding:6px 8px;border-bottom:1px solid #f0ece4;vertical-align:middle}
   .mono{font-family:'SF Mono',Monaco,monospace;font-weight:600;font-size:13px}
   .tag{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600}
   .tag-ok{background:#e8f5e9;color:#2e7d32}
   .tag-used{background:#ffebee;color:#c62828}
-  .new-code{display:inline-block;background:#1a1a1a;color:#c9a84c;padding:6px 12px;border-radius:8px;font-family:'SF Mono',Monaco,monospace;font-size:14px;font-weight:700;margin:4px 4px 0 0}
-  .section-title{display:flex;align-items:center;gap:8px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #eee}
+  .new-code{display:inline-block;background:#1a1a1a;color:#c9a84c;padding:6px 12px;border-radius:8px;font-family:'SF Mono',Monaco,monospace;font-size:14px;font-weight:700;margin:4px 4px 0 0;cursor:pointer}
+  .new-code:hover{background:#333}
+  .section-title{display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #eee}
   .price-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .price-row input{width:100px}
+  .price-row span{font-size:14px;color:#888}
   .usage-bar-wrap{background:#f0ece4;border-radius:8px;height:8px;overflow:hidden;margin-top:4px}
   .usage-bar{height:8px;background:linear-gradient(90deg,#c9a84c,#2e7d32);transition:width .3s}
   .usage-text{font-size:12px;color:#888;margin-top:4px}
   .chart-wrap{background:#f9f8f6;border-radius:12px;padding:16px;margin-top:16px}
   .chart-label{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
-  canvas{display:block;margin:0 auto}
+  canvas{display:block;margin:0 auto;max-width:100%}
   .pagination{display:flex;align-items:center;gap:8px;margin:12px 0;flex-wrap:wrap}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
+  .filters input,.filters select{margin:0}
+  .filters input[type=text]{flex:1;min-width:160px}
+  .row-actions{display:flex;gap:4px;flex-wrap:wrap}
+  .toast{position:fixed;bottom:20px;right:20px;background:#1a1a1a;color:#c9a84c;padding:12px 20px;border-radius:10px;font-size:14px;font-weight:600;box-shadow:0 4px 20px rgba(0,0,0,.3);opacity:0;transition:opacity .3s;pointer-events:none;z-index:1000}
+  .toast.show{opacity:1}
+  .legend{display:flex;gap:16px;font-size:11px;color:#888;margin-top:8px;flex-wrap:wrap}
+  .legend-dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -589,79 +2928,255 @@ async function startServer() {
     <button onclick="exportCSV()" class="btn-small btn-green" style="margin-left:auto">📥 Экспорт CSV</button>
   </div>
   <div class="grid">
-    <div class="stat"><div class="stat-num" id="visits">—</div><div class="stat-label">Посещений</div></div>
+    <div class="stat"><div class="stat-num" id="uniqueVisitors">—</div><div class="stat-label">Уникальных людей</div></div>
+    <div class="stat"><div class="stat-num" id="pageViews">—</div><div class="stat-label">Просмотров разделов</div></div>
+    <div class="stat"><div class="stat-num" id="namedVisitors">—</div><div class="stat-label">С именем</div></div>
+    <div class="stat"><div class="stat-num" id="anonymousVisitors">—</div><div class="stat-label">Анонимно</div></div>
     <div class="stat"><div class="stat-num" id="standardSales">—</div><div class="stat-label">Продаж Стандарт</div></div>
     <div class="stat"><div class="stat-num" id="premiumSales">—</div><div class="stat-label">Продаж Премиум</div></div>
-    <div class="stat"><div class="stat-num" id="revenue">— ₽</div><div class="stat-label">Выручка</div></div>
+    <div class="stat"><div class="stat-num" id="nailsMonthSales">—</div><div class="stat-label">Подписка ногти (мес.)</div></div>
+    <div class="stat"><div class="stat-num" id="groomingSales">—</div><div class="stat-label">Причёска и уход</div></div>
+    <div class="stat stat-revenue"><div class="stat-num" id="revenue">— ₽</div><div class="stat-label">Выручка</div></div>
     <div class="stat"><div class="stat-num" id="avgTicket">— ₽</div><div class="stat-label">Ср. чек</div></div>
+    <div class="stat stat-promo"><div class="stat-num" id="promoStandard">—</div><div class="stat-label">Промо Стандарт</div></div>
+    <div class="stat stat-promo"><div class="stat-num" id="promoPremium">—</div><div class="stat-label">Промо Премиум</div></div>
+    <div class="stat stat-promo"><div class="stat-num" id="promoTotal">—</div><div class="stat-label">Всего промо</div></div>
   </div>
   <div class="chart-wrap">
-    <div class="chart-label">📊 Динамика выручки</div>
-    <canvas id="revenueChart" width="800" height="120"></canvas>
+    <div class="chart-label">📊 Динамика (выручка / посещения / промо)</div>
+    <canvas id="revenueChart" width="860" height="160"></canvas>
+    <div class="legend">
+      <span><span class="legend-dot" style="background:#2e7d32"></span>Выручка</span>
+      <span><span class="legend-dot" style="background:#c9a84c"></span>Посещения</span>
+      <span><span class="legend-dot" style="background:#6a1b9a"></span>Промо</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title"><h2>🧭 Поведение на сайте</h2></div>
+  <p style="font-size:12px;color:#888;margin:0 0 12px">Где смотрят и какие кнопки нажимают. Админ/тест не считаются. Клиенты с именем (например Анастасия) видны в таблице ниже.</p>
+  <div class="grid" style="margin-bottom:14px">
+    <div class="stat"><div class="stat-num" id="totalClicks">—</div><div class="stat-label">Кликов по кнопкам</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+    <div>
+      <h2 style="margin-bottom:8px">Разделы</h2>
+      <table><thead><tr><th>Раздел</th><th>Раз</th></tr></thead><tbody id="topPagesBody"><tr><td colspan="2">—</td></tr></tbody></table>
+    </div>
+    <div>
+      <h2 style="margin-bottom:8px">Кнопки</h2>
+      <table><thead><tr><th>Кнопка</th><th>Раз</th></tr></thead><tbody id="topClicksBody"><tr><td colspan="2">—</td></tr></tbody></table>
+    </div>
+  </div>
+  <h2 style="margin-bottom:8px">Последние посетители и путь</h2>
+  <div style="overflow-x:auto;max-height:420px;overflow-y:auto">
+    <table>
+      <thead><tr><th>Имя</th><th>Шагов</th><th>Когда</th><th>Путь</th></tr></thead>
+      <tbody id="journeysBody"><tr><td colspan="4">—</td></tr></tbody>
+    </table>
   </div>
 </div>
 
 <div class="card">
   <div class="section-title"><h2>💰 Цены</h2></div>
   <div class="price-row">
-    <label style="margin:0">Стандарт:</label>
+    <label style="margin:0">Стандарт (образы):</label>
     <input type="number" id="priceStandard" min="1" max="10000" value="100">
     <span>₽</span>
     <button onclick="savePrice('standard')" class="btn-small">Сохранить</button>
   </div>
   <div class="price-row" style="margin-top:12px">
-    <label style="margin:0">Премиум:</label>
+    <label style="margin:0">Премиум (образы):</label>
     <input type="number" id="pricePremium" min="1" max="10000" value="200">
     <span>₽</span>
     <button onclick="savePrice('premium')" class="btn-small">Сохранить</button>
   </div>
+  <div class="price-row" style="margin-top:12px">
+    <label style="margin:0">Подписка ногти — месяц:</label>
+    <input type="number" id="priceNailsMonth" min="1" max="10000" value="500">
+    <span>₽</span>
+    <button onclick="savePrice('nails_month')" class="btn-small">Сохранить</button>
+  </div>
+  <div class="price-row" style="margin-top:12px">
+    <label style="margin:0">Причёска и уход:</label>
+    <input type="number" id="priceGrooming" min="1" max="10000" value="100">
+    <span>₽</span>
+    <button onclick="savePrice('grooming')" class="btn-small">Сохранить</button>
+  </div>
 </div>
 
 <div class="card">
-  <div class="section-title"><h2>🎟 Промокоды</h2><button onclick="loadList();loadStats();" class="btn-dark" style="margin-left:auto;font-size:13px;padding:8px 16px">🔄 Обновить</button></div>
-  <div class="price-row">
-    <select id="tier"><option value="standard">Стандарт</option><option value="premium">Премиум</option></select>
-    <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
-    <button id="createBtn" class="btn-small" onclick="doGenerate()">Создать коды</button>
+  <div class="section-title"><h2>🎟 Промокоды — создание</h2><button onclick="refreshAll()" class="btn-dark" style="margin-left:auto;font-size:13px;padding:8px 16px">🔄 Обновить всё</button></div>
+  <div style="background:#fff8e6;border:1px solid #f0d78c;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.5;color:#5a4a1a">
+    <b>Куда вводить код на сайте:</b><br>
+    • <b>Образы Стандарт / Премиум</b> → «Начать преображение»<br>
+    • <b>Причёска и уход</b> → окно «Причёска и уход»<br>
+    • <b>Ногти сутки / месяц</b> → база ногтей
   </div>
+  <div class="price-row" style="flex-wrap:wrap;align-items:flex-end;gap:8px">
+    <div>
+      <label style="margin:0 0 4px;display:block;font-size:12px;color:#888">Тип кода — все услуги</label>
+      <select id="tier" onchange="updatePromoHint()">
+        <option value="standard">Образы — Стандарт (100 ₽)</option>
+        <option value="premium">Образы — Премиум (200 ₽)</option>
+        <option value="grooming">Причёска и уход (100 ₽)</option>
+        <option value="nails_once">База ногтей — на сутки</option>
+        <option value="nails_month">База ногтей — на месяц</option>
+      </select>
+    </div>
+    <div>
+      <label style="margin:0 0 4px;display:block;font-size:12px;color:#888">Сколько создать</label>
+      <input type="number" id="count" value="10" min="1" max="100" style="width:70px">
+    </div>
+    <button id="createBtn" class="btn-small" onclick="doGenerate()">Создать коды</button>
+    <button class="btn-small btn-gray" onclick="copyAllNew()" id="copyAllBtn" style="display:none">📋 Скопировать все</button>
+  </div>
+  <p id="promoHint" style="font-size:12px;color:#666;margin:8px 0 0">Код Стандарт — только в «Начать преображение».</p>
   <div id="newCodes" style="display:none;margin-top:16px"></div>
 </div>
 
 <div class="card">
   <div class="section-title"><h2>📋 Промокоды — список</h2><span id="codesCount" style="margin-left:8px;font-size:13px;color:#888;font-weight:400"></span></div>
   <div id="codesUsage" style="margin-bottom:12px"></div>
+  <div class="filters">
+    <input type="text" id="searchInput" placeholder="🔍 Поиск по коду..." oninput="debounceSearch()">
+    <select id="filterStatus" onchange="loadList(1)">
+      <option value="all">Все статусы</option>
+      <option value="free">Свободные</option>
+      <option value="used">Использованные</option>
+    </select>
+    <select id="filterTier" onchange="loadList(1)">
+      <option value="all">Все тарифы</option>
+      <option value="standard">Стандарт (образы)</option>
+      <option value="premium">Премиум (образы)</option>
+      <option value="grooming">Причёска и уход</option>
+    </select>
+    <span id="filterInfo" style="font-size:12px;color:#888;margin-left:auto"></span>
+  </div>
   <div id="list"></div>
   <div class="pagination" id="pagination"></div>
 </div>
 
+<div class="card">
+  <div class="section-title"><h2>💅 Промокоды базы ногтей — список</h2><span id="nailsCodesCount" style="margin-left:8px;font-size:13px;color:#888;font-weight:400"></span></div>
+  <p style="font-size:13px;color:#666;margin:0 0 12px">Создавать коды ногтей можно сверху в общем «Тип кода». Здесь — только список и действия.</p>
+  <div id="nailsCodesUsage" style="margin-bottom:12px"></div>
+  <div class="filters">
+    <input type="text" id="nailsSearchInput" placeholder="🔍 Поиск по коду..." oninput="debounceNailsSearch()">
+    <select id="nailsFilterStatus" onchange="loadNailsList(1)">
+      <option value="all">Все статусы</option>
+      <option value="free">Свободные</option>
+      <option value="used">Использованные</option>
+    </select>
+    <select id="nailsFilterKind" onchange="loadNailsList(1)">
+      <option value="all">Все типы</option>
+      <option value="once">На сутки</option>
+      <option value="month">На месяц</option>
+    </select>
+  </div>
+  <div id="nailsList"></div>
+  <div class="pagination" id="nailsPagination"></div>
+</div>
+
+<div id="toast" class="toast"></div>
+
 <script>
-const secret = "stilist-admin-key-913260";
-function copyCode(c) { navigator.clipboard.writeText(c).then(function() { alert('Скопировано: ' + c); }); }
+const secret = "";
 let currentPeriod = 'all';
+let promoPage = 1;
+let totalPages = 1;
+let lastNewCodes = [];
+let nailsPromoPage = 1;
+let nailsTotalPages = 1;
+let lastNewNailsCodes = [];
+let nailsSearchTimer = null;
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function copyCode(c) { navigator.clipboard.writeText(c).then(() => showToast('Скопировано: ' + c)); }
+
 function setPeriod(p) {
   currentPeriod = p;
   ['today','week','month','all'].forEach(k => {
     const btn = document.getElementById('btn-' + k);
-    btn.className = k === p ? 'btn-small btn-dark' : 'btn-small';
-    if (k !== p) btn.style.border = '1px solid #ddd';
-    else btn.style.border = '';
+    if (btn) btn.className = k === p ? 'btn-small btn-dark' : 'btn-small';
   });
   loadStats();
 }
+
 async function loadStats() {
   const r = await fetch('/api/admin-stats?period=' + currentPeriod);
   const d = await r.json();
-  document.getElementById('visits').textContent = d.stats.visits.toLocaleString();
-  document.getElementById('standardSales').textContent = d.stats.paidStandardSales;
-  document.getElementById('premiumSales').textContent = d.stats.paidPremiumSales;
-  const rev = d.stats.revenue;
-  document.getElementById('revenue').textContent = (rev || 0).toLocaleString() + ' ₽';
-  const totalSales = (d.stats.paidStandardSales || 0) + (d.stats.paidPremiumSales || 0);
+  const s = d.stats || {};
+  document.getElementById('uniqueVisitors').textContent = (s.uniqueVisitors || 0).toLocaleString();
+  document.getElementById('pageViews').textContent = (s.pageViews || s.visits || 0).toLocaleString();
+  document.getElementById('namedVisitors').textContent = (s.namedVisitors || 0).toLocaleString();
+  document.getElementById('anonymousVisitors').textContent = (s.anonymousVisitors || 0).toLocaleString();
+  document.getElementById('standardSales').textContent = s.paidStandardSales || 0;
+  document.getElementById('premiumSales').textContent = s.paidPremiumSales || 0;
+  document.getElementById('nailsMonthSales').textContent = s.paidNailsMonthSales || 0;
+  document.getElementById('groomingSales').textContent = s.paidGroomingSales || 0;
+  const rev = s.revenue || 0;
+  document.getElementById('revenue').textContent = rev.toLocaleString() + ' ₽';
+  const totalSales = (s.paidStandardSales || 0) + (s.paidPremiumSales || 0) + (s.paidNailsMonthSales || 0) + (s.paidGroomingSales || 0);
   document.getElementById('avgTicket').textContent = totalSales > 0 ? Math.round(rev / totalSales).toLocaleString() + ' ₽' : '—';
-  document.getElementById('priceStandard').value = d.stats.standardPrice;
-  document.getElementById('pricePremium').value = d.stats.premiumPrice;
+  document.getElementById('promoStandard').textContent = s.promoStandardSales || 0;
+  document.getElementById('promoPremium').textContent = s.promoPremiumSales || 0;
+  document.getElementById('promoTotal').textContent = s.promoRedemptions || 0;
+  document.getElementById('priceStandard').value = s.standardPrice;
+  document.getElementById('pricePremium').value = s.premiumPrice;
+  if (document.getElementById('priceNailsMonth')) document.getElementById('priceNailsMonth').value = s.nailsMonthPrice || 500;
+  if (document.getElementById('priceGrooming')) document.getElementById('priceGrooming').value = s.groomingPrice || 100;
   drawChart(d.chartData || []);
+  renderBehavior(d.pageviews || {});
 }
+
+function renderBehavior(pv) {
+  const clicksEl = document.getElementById('totalClicks');
+  if (clicksEl) clicksEl.textContent = (pv.totalClicks || 0).toLocaleString();
+  const pagesBody = document.getElementById('topPagesBody');
+  const clicksBody = document.getElementById('topClicksBody');
+  const journeysBody = document.getElementById('journeysBody');
+  const pageLabels = {
+    home: 'Главная', pricing: 'Тарифы', stylize_standard: 'Форма Стандарт', stylize_premium: 'Форма Премиум',
+    grooming: 'Причёска', nails: 'Ногти', my_looks: 'Мои образы', stylist_chat: 'Чат со стилистом',
+  };
+  const clickLabels = {
+    start_transform: 'Начать преображение', grooming: 'Причёска и уход', nails: 'Подобрать ногти',
+    create_look: 'Создать образ', my_looks: 'Мои образы', stylist_chat: 'Чат со стилистом',
+    pricing_standard: 'Тариф Стандарт',
+    pricing_premium: 'Тариф Премиум', pay: 'Оплатить', feedback: 'Отзыв',
+  };
+  if (pagesBody) {
+    const rows = (pv.topPages || []).map(r => '<tr><td>' + (pageLabels[r.name] || r.name) + '</td><td>' + r.count + '</td></tr>');
+    pagesBody.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="2">Нет данных</td></tr>';
+  }
+  if (clicksBody) {
+    const rows = (pv.topClicks || []).map(r => '<tr><td>' + (clickLabels[r.name] || r.name) + '</td><td>' + r.count + '</td></tr>');
+    clicksBody.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="2">Нет данных</td></tr>';
+  }
+  if (journeysBody) {
+    const rows = (pv.journeys || []).map(j => {
+      const when = (j.lastAt || '').replace('T', ' ').slice(0, 16);
+      const path = (j.path || []).map(p => {
+        const raw = String(p || '');
+        const isClick = raw.indexOf('клик:') === 0;
+        const key = isClick ? raw.slice(5) : raw;
+        return (isClick ? 'клик: ' : '') + (pageLabels[key] || clickLabels[key] || key);
+      }).join(' → ');
+      const name = j.name ? ('<b>' + j.name.replace(/</g,'') + '</b>') : '<span style="color:#aaa">аноним</span>';
+      return '<tr><td>' + name + '</td><td>' + (j.steps || 0) + '</td><td style="white-space:nowrap">' + when + '</td><td style="font-size:11px;max-width:420px;word-break:break-word">' + path + '</td></tr>';
+    });
+    journeysBody.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4">Нет данных</td></tr>';
+  }
+}
+
 function drawChart(data) {
   const canvas = document.getElementById('revenueChart');
   if (!canvas) return;
@@ -669,238 +3184,1663 @@ function drawChart(data) {
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0, 0, w, h);
   if (!data.length) {
-    ctx.fillStyle = '#aaa'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('Нет данных для отображения', w / 2, h / 2); return;
+    ctx.fillStyle = '#aaa';
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Нет данных для отображения', w / 2, h / 2);
+    return;
   }
-  const max = Math.max(...data.map(d => d.revenue), 1);
-  const barW = Math.min(20, (w - 40) / data.length);
+  const maxRev = Math.max(...data.map(d => d.revenue), 1);
+  const maxVisits = Math.max(...data.map(d => d.visits), 1);
+  const maxPromo = Math.max(...data.map(d => d.promoSales || 0), 1);
+  const barW = Math.min(22, (w - 40) / data.length);
+  const labels = data.map(d => d.date.slice(5));
   data.forEach((d, i) => {
-    const bh = (d.revenue / max) * (h - 40);
     const x = 20 + i * (barW + 2);
-    const grad = ctx.createLinearGradient(0, h - 20 - bh, 0, h - 20);
-    grad.addColorStop(0, '#c9a84c'); grad.addColorStop(1, '#2e7d32');
+    // Revenue (green, primary)
+    const bhRev = (d.revenue / maxRev) * (h - 40);
+    const grad = ctx.createLinearGradient(0, h - 20 - bhRev, 0, h - 20);
+    grad.addColorStop(0, '#c9a84c');
+    grad.addColorStop(1, '#2e7d32');
     ctx.fillStyle = grad;
-    ctx.beginPath(); ctx.roundRect(x, h - 20 - bh, barW, bh, 3); ctx.fill();
-    ctx.fillStyle = '#aaa'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(d.date.slice(5), x + barW / 2, h - 4);
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, h - 20 - bhRev, barW, bhRev, 3); else ctx.rect(x, h - 20 - bhRev, barW, bhRev);
+    ctx.fill();
+    // Visits (gold dot above)
+    const bhVis = (d.visits / maxVisits) * (h - 40) * 0.4;
+    ctx.fillStyle = '#c9a84c';
+    ctx.beginPath();
+    ctx.arc(x + barW / 2, h - 20 - bhRev - bhVis - 4, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    // Promo (purple dot)
+    const bhPromo = (d.promoSales / maxPromo) * (h - 40) * 0.3;
+    ctx.fillStyle = '#6a1b9a';
+    ctx.beginPath();
+    ctx.arc(x + barW / 2, h - 20 - bhRev - bhVis - 12, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    // Label
+    ctx.fillStyle = '#aaa';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    if (i % Math.ceil(data.length / 15) === 0 || data.length <= 15) {
+      ctx.fillText(labels[i], x + barW / 2, h - 4);
+    }
   });
 }
+
 async function exportCSV() {
   const r = await fetch('/api/admin-stats?period=all');
   const d = await r.json();
-  const rows = [['Дата','Посещений','Продажи Стандарт','Продажи Премиум','Выручка']];
-  (d.chartData || []).forEach(row => rows.push([row.date, row.visits, row.standardSales, row.premiumSales, row.revenue]));
-  const csv = rows.map(r => r.join(',')).join('\\n');
+  const rows = [['Дата', 'Посещений', 'Стандарт', 'Премиум', 'Промо', 'Выручка']];
+  (d.chartData || []).forEach(row => {
+    rows.push([row.date, row.visits, row.standardSales, row.premiumSales, row.promoSales || 0, row.revenue]);
+  });
+  const csv = rows.map(r => r.join(',')).join(String.fromCharCode(10));
   const a = document.createElement('a');
   a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-  a.download = 'stilist-stats.csv'; a.click();
+  a.download = 'stilist-stats.csv';
+  a.click();
+  showToast('CSV экспортирован');
 }
+
 async function savePrice(tier) {
-  const price = tier === 'standard' ? document.getElementById('priceStandard').value : document.getElementById('pricePremium').value;
+  let price;
+  if (tier === 'standard') price = document.getElementById('priceStandard').value;
+  else if (tier === 'premium') price = document.getElementById('pricePremium').value;
+  else if (tier === 'nails_month') price = document.getElementById('priceNailsMonth').value;
+  else if (tier === 'grooming') price = document.getElementById('priceGrooming').value;
+  else return;
   await fetch('/api/admin-set-price', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
     body: JSON.stringify({secret, tier, price: parseInt(price)})
   });
+  showToast('Цена сохранена');
   loadStats();
 }
+
 async function doGenerate() {
   try {
     const tier = document.getElementById('tier').value;
     const count = document.getElementById('count').value;
-    const r = await fetch('/api/generate-promo', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({secret, tier, count})
-    });
-    if (!r.ok) { alert('Ошибка сервера: ' + r.status); return; }
-    const d = await r.json();
+    let r, d, tierLabel;
+    if (tier === 'nails_once' || tier === 'nails_month') {
+      const kind = tier === 'nails_once' ? 'once' : 'month';
+      r = await fetch('/api/nails/generate-promo', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({secret, kind, count})
+      });
+      if (!r.ok) { alert('Ошибка сервера: ' + r.status); return; }
+      d = await r.json();
+      tierLabel = kind === 'once' ? 'Ногти — на сутки' : 'Ногти — на месяц';
+      lastNewCodes = d.codes || [];
+      lastNewNailsCodes = lastNewCodes;
+      if (document.getElementById('nailsFilterKind')) {
+        document.getElementById('nailsFilterKind').value = kind;
+      }
+      loadNailsList(1);
+    } else {
+      r = await fetch('/api/generate-promo', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({secret, tier, count})
+      });
+      if (!r.ok) { alert('Ошибка сервера: ' + r.status); return; }
+      d = await r.json();
+      tierLabel = tier === 'grooming' ? 'Причёска и уход' : tier === 'premium' ? 'Образы Премиум' : 'Образы Стандарт';
+      lastNewCodes = d.codes || [];
+      if (tier === 'grooming') document.getElementById('filterTier').value = 'grooming';
+      else if (tier === 'premium') document.getElementById('filterTier').value = 'premium';
+      else document.getElementById('filterTier').value = 'standard';
+      loadList(1);
+    }
     if (!d.codes || !d.codes.length) { alert('Нет кодов: ' + JSON.stringify(d)); return; }
     const div = document.getElementById('newCodes');
-    div.innerHTML = '<div style="margin-bottom:8px;font-weight:600;color:#2e7d32">✨ Новые (' + d.codes.length + '):</div>' +
-      d.codes.map(c => '<span class="new-code">' + c + '</span>').join(' ');
+    div.innerHTML = '<div style="margin-bottom:8px;font-weight:600;color:#2e7d32">✨ Новые ' + tierLabel + ' (' + d.codes.length + '):</div>' +
+      (d.where ? '<div style="font-size:12px;color:#666;margin-bottom:10px">' + d.where + '</div>' : '') +
+      d.codes.map(c => '<span class="new-code" onclick="copyCode(\\''+c+'\\')">' + c + '</span>').join(' ');
     div.style.display = 'block';
-    loadList();
+    document.getElementById('copyAllBtn').style.display = 'inline-block';
+    showToast('Создано ' + d.codes.length + ' кодов (' + tierLabel + ')');
+    loadStats();
   } catch(e) { alert('Ошибка: ' + e); }
 }
-let promoPage = 0;
-const PAGE_SIZE = 20;
-let allCodesForPage = [];
-async function loadList() {
-  const r = await fetch('/api/promo-list');
+
+function updatePromoHint() {
+  const tier = document.getElementById('tier').value;
+  const el = document.getElementById('promoHint');
+  if (!el) return;
+  if (tier === 'grooming') el.textContent = 'Код «Причёска и уход» — только в окне «Причёска и уход».';
+  else if (tier === 'premium') el.textContent = 'Код Премиум — только в «Начать преображение» (тариф Премиум).';
+  else if (tier === 'nails_once') el.textContent = 'Код ногтей «на сутки» — один просмотр инструкций в базе ногтей.';
+  else if (tier === 'nails_month') el.textContent = 'Код ногтей «на месяц» — полный доступ к базе на 30 дней.';
+  else el.textContent = 'Код Стандарт — только в «Начать преображение» (тариф Стандарт).';
+}
+
+function copyAllNew() {
+  if (!lastNewCodes.length) return;
+  navigator.clipboard.writeText(lastNewCodes.join(String.fromCharCode(10))).then(() => showToast('Скопировано ' + lastNewCodes.length + ' кодов'));
+}
+
+let searchTimer = null;
+function debounceSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadList(1), 300);
+}
+
+async function loadList(page) {
+  promoPage = page || 1;
+  const status = document.getElementById('filterStatus').value;
+  const tier = document.getElementById('filterTier').value;
+  const q = document.getElementById('searchInput').value.trim();
+  const url = '/api/promo-list?page=' + promoPage + '&limit=10&status=' + status + '&tier=' + tier + '&q=' + encodeURIComponent(q);
+  const r = await fetch(url);
   const d = await r.json();
-  allCodesForPage = d.codes;
-  const unused = d.codes.filter(c => !c.used).length;
-  document.getElementById('codesCount').textContent = unused + ' свободных / ' + d.codes.length + ' всего';
-  const usedPct = d.codes.length > 0 ? Math.round((d.codes.length - unused) / d.codes.length * 100) : 0;
+  totalPages = d.totalPages || 1;
+  const codes = d.codes || [];
+  const total = d.total || 0;
+  const unused = d.unused || 0;
+  const used = d.used || 0;
+
+  document.getElementById('codesCount').textContent = unused + ' свободных / ' + (unused + used) + ' всего';
+  document.getElementById('filterInfo').textContent = 'Показано: ' + codes.length + ' из ' + total;
+
+  const usedPct = (unused + used) > 0 ? Math.round(used / (unused + used) * 100) : 0;
   document.getElementById('codesUsage').innerHTML =
     '<div class="usage-bar-wrap"><div class="usage-bar" style="width:' + usedPct + '%"></div></div>' +
-    '<div class="usage-text">Использовано: ' + usedPct + '% (' + (d.codes.length - unused) + '/' + d.codes.length + ')</div>';
-  promoPage = 0;
-  renderPage(d.codes, promoPage);
+    '<div class="usage-text">Использовано: ' + usedPct + '% (' + used + '/' + (unused + used) + ')</div>';
+
+  renderTable(codes);
+  renderPagination();
 }
-function renderPage(allCodes, page) {
-  const start = page * PAGE_SIZE, end = start + PAGE_SIZE;
-  const pageCodes = allCodes.slice(start, end);
-  const totalPages = Math.ceil(allCodes.length / PAGE_SIZE);
-  const rows = pageCodes.map(e =>
+
+function renderTable(codes) {
+  const rows = codes.map(e =>
     '<tr><td class="mono">' + e.code + '</td><td>' +
-    (e.tier === 'premium' ? 'Премиум' : 'Стандарт') + '</td><td>' +
+    (e.tier === 'premium' ? 'Премиум (образы)' : e.tier === 'grooming' ? 'Причёска и уход' : 'Стандарт (образы)') + '</td><td>' +
     (e.used ? '<span class="tag tag-used">Использован</span>' : '<span class="tag tag-ok">Свободен</span>') +
-    '</td><td style="color:#aaa;font-size:12px">' + (e.createdAt ? e.createdAt.slice(0,10) : '') + '</td></tr>'
+    '</td><td style="color:#aaa;font-size:12px">' + (e.createdAt ? e.createdAt.slice(0,10) : '') + '</td>' +
+    (e.used && e.redeemedAt ? '<td style="color:#aaa;font-size:12px">' + e.redeemedAt.slice(0,10) + '</td>' : '<td style="color:#ccc">—</td>') +
+    '<td><div class="row-actions">' +
+      '<button class="btn-gray" onclick="copyCode(\\''+e.code+'\\')">📋</button>' +
+      (e.used ? '<button class="btn-blue" onclick="doReset(\\''+e.code+'\\')">↺ Сброс</button>' : '') +
+      '<button class="btn-red" onclick="doDelete(\\''+e.code+'\\')">🗑</button>' +
+    '</div></td></tr>'
   ).join('');
-  document.getElementById('list').innerHTML = '<table><tr><th>Код</th><th>Тариф</th><th>Статус</th><th>Создан</th></tr>' + rows + '</table>';
+  document.getElementById('list').innerHTML = '<table><tr><th>Код</th><th>Тариф</th><th>Статус</th><th>Создан</th><th>Активирован</th><th>Действия</th></tr>' + rows + '</table>';
+}
+
+function renderPagination() {
   let pagHtml = '';
   if (totalPages > 1) {
-    if (page > 0) pagHtml += '<button class="btn-small" onclick="promoPage--;renderPage(allCodesForPage,promoPage)">← Назад</button>';
-    pagHtml += '<span style="font-size:13px;color:#888">Страница ' + (page + 1) + ' из ' + totalPages + '</span>';
-    if (page < totalPages - 1) pagHtml += '<button class="btn-small" onclick="promoPage++;renderPage(allCodesForPage,promoPage)">Вперёд →</button>';
+    if (promoPage > 1) pagHtml += '<button class="btn-small" onclick="loadList(' + (promoPage - 1) + ')">← Назад</button>';
+    pagHtml += '<span class="page-info">Страница ' + promoPage + ' из ' + totalPages + '</span>';
+    if (promoPage < totalPages) pagHtml += '<button class="btn-small" onclick="loadList(' + (promoPage + 1) + ')">Вперёд →</button>';
   }
   document.getElementById('pagination').innerHTML = pagHtml;
 }
+
+async function doReset(code) {
+  if (!confirm('Сбросить код ' + code + '? Он снова станет свободным.')) return;
+  const r = await fetch('/api/promo-reset', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({secret, code})
+  });
+  const d = await r.json();
+  if (d.success) { showToast('Код сброшен'); loadList(promoPage); loadStats(); }
+  else showToast('Ошибка: ' + (d.reason || 'unknown'));
+}
+
+async function doDelete(code) {
+  if (!confirm('Удалить код ' + code + ' безвозвратно?')) return;
+  const r = await fetch('/api/promo-delete', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({secret, code})
+  });
+  const d = await r.json();
+  if (d.success) { showToast('Код удалён'); loadList(promoPage); loadStats(); }
+  else showToast('Ошибка: ' + (d.reason || 'unknown'));
+}
+
+function refreshAll() { loadStats(); loadList(promoPage); loadNailsList(nailsPromoPage); }
+
+async function doGenerateNails() {
+  // Создание ногтей перенесено в общий select «Тип кода»
+  showToast('Выберите тип «База ногтей» сверху и нажмите «Создать коды»');
+}
+
+function copyAllNewNails() {
+  if (!lastNewNailsCodes.length) return;
+  navigator.clipboard.writeText(lastNewNailsCodes.join('\\n')).then(() => showToast('Все коды скопированы'));
+}
+
+function debounceNailsSearch() {
+  clearTimeout(nailsSearchTimer);
+  nailsSearchTimer = setTimeout(() => loadNailsList(1), 300);
+}
+
+async function loadNailsList(page) {
+  nailsPromoPage = page || 1;
+  const status = document.getElementById('nailsFilterStatus').value;
+  const kind = document.getElementById('nailsFilterKind').value;
+  const q = document.getElementById('nailsSearchInput').value || '';
+  const url = '/api/nails/promo-list?secret=' + encodeURIComponent(secret) + '&page=' + nailsPromoPage + '&limit=10&status=' + status + '&kind=' + kind + '&q=' + encodeURIComponent(q);
+  const r = await fetch(url);
+  const d = await r.json();
+  if (d.error) { document.getElementById('nailsList').innerHTML = '<p style="color:red">Нет доступа</p>'; return; }
+  nailsTotalPages = d.totalPages || 1;
+  document.getElementById('nailsCodesCount').textContent = 'всего ' + (d.total || 0);
+  document.getElementById('nailsCodesUsage').innerHTML =
+    '<span style="font-size:13px;color:#666">Свободных: <b>' + (d.unused || 0) + '</b> · Использованных: <b>' + (d.used || 0) + '</b></span>';
+  const codes = d.codes || [];
+  if (!codes.length) {
+    document.getElementById('nailsList').innerHTML = '<p style="color:#888;font-size:13px">Пока нет кодов</p>';
+    document.getElementById('nailsPagination').innerHTML = '';
+    return;
+  }
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:13px"><tr style="text-align:left;color:#888;border-bottom:1px solid #eee"><th style="padding:8px 4px">Код</th><th>Тип</th><th>Статус</th><th>Создан</th><th></th></tr>';
+  codes.forEach(e => {
+    html += '<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:8px 4px;font-family:monospace">' + e.code +
+      '</td><td>' + (e.kind === 'once' ? 'Раз' : 'Месяц') + '</td><td>' +
+      (e.used ? '<span style="color:#c62828">Использован</span>' : '<span style="color:#2e7d32">Свободен</span>') + '</td><td style="color:#888;font-size:12px">' +
+      (e.createdAt || '').slice(0, 10) + '</td><td style="text-align:right">' +
+      '<button class="btn-small btn-gray" onclick="copyCode(\\'' + e.code + '\\')">📋</button> ' +
+      (e.used ? '<button class="btn-small" onclick="resetNailsCode(\\'' + e.code + '\\')">Сброс</button> ' : '') +
+      '<button class="btn-small btn-gray" onclick="deleteNailsCode(\\'' + e.code + '\\')">✕</button></td></tr>';
+  });
+  html += '</table>';
+  document.getElementById('nailsList').innerHTML = html;
+  let pagHtml = '';
+  if (nailsPromoPage > 1) pagHtml += '<button class="btn-small" onclick="loadNailsList(' + (nailsPromoPage - 1) + ')">← Назад</button>';
+  pagHtml += '<span class="page-info">Страница ' + nailsPromoPage + ' из ' + nailsTotalPages + '</span>';
+  if (nailsPromoPage < nailsTotalPages) pagHtml += '<button class="btn-small" onclick="loadNailsList(' + (nailsPromoPage + 1) + ')">Вперёд →</button>';
+  document.getElementById('nailsPagination').innerHTML = pagHtml;
+}
+
+async function resetNailsCode(code) {
+  const r = await fetch('/api/nails/promo-reset', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({secret, code})
+  });
+  const d = await r.json();
+  if (d.success) { showToast('Код сброшен'); loadNailsList(nailsPromoPage); }
+  else showToast('Ошибка: ' + (d.reason || 'unknown'));
+}
+
+async function deleteNailsCode(code) {
+  if (!confirm('Удалить код ' + code + '?')) return;
+  const r = await fetch('/api/nails/promo-delete', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({secret, code})
+  });
+  const d = await r.json();
+  if (d.success) { showToast('Код удалён'); loadNailsList(nailsPromoPage); }
+  else showToast('Ошибка: ' + (d.reason || 'unknown'));
+}
+
 loadStats();
-loadList();
-</script>
-</body></html>`);
+loadList(1);
+loadNailsList(1);
+updatePromoHint();
+</script>`);
   });
 
-  // Admin stats endpoint (для новой панели)
-  app.get("/api/admin-stats", (req: Request, res: Response) => {
+  // Lightweight public pricing endpoint for the landing page.
+  // Admin analytics are intentionally kept out of the initial page load.
+  app.get("/api/prices", (req: Request, res: Response) => {
+    const stats = loadStats();
+    const ownerFree = isOwnerRequest(req) || isOwnerVisitor(req.query.visitorId);
+    res.setHeader("Cache-Control", ownerFree || req.query.visitorId ? "private, no-store" : "public, max-age=300");
+    res.json({
+      standard: stats.standardPrice,
+      premium: stats.premiumPrice,
+      nailsMonth: stats.nailsMonthPrice || NAILS_MONTH_PRICE,
+      grooming: stats.groomingPrice || GROOMING_PRICE,
+      ownerFree,
+    });
+  });
+
+  // Admin stats endpoint
+  app.get("/api/admin-stats", requireAdmin, (req: Request, res: Response) => {
     const period = (req.query.period as string) || "all";
-    const p = loadPrices();
-    const now = new Date();
-    const filterDate = (ts: string) => {
-      const d = new Date(ts);
-      if (period === "today") return d.toDateString() === now.toDateString();
-      if (period === "week") return (now.getTime() - d.getTime()) < 7 * 86400000;
-      if (period === "month") return (now.getTime() - d.getTime()) < 30 * 86400000;
-      return true;
-    };
-    // Читаем из NESTED data/stats.json (событийная модель)
-    let events: any[] = [];
-    try {
-      const nestedStatsFile = path.join(PROJECT_ROOT, "data", "stats.json");
-      if (fs.existsSync(nestedStatsFile)) {
-        const d = JSON.parse(fs.readFileSync(nestedStatsFile, "utf-8"));
-        events = d.events || [];
-      }
-    } catch {}
-    const filtered = events.filter(e => filterDate(e.ts));
-    const visits = filtered.filter(e => e.type === "visit").length;
-    const paidStandardSales = filtered.filter(e => e.type === "paid_standard").length;
-    const paidPremiumSales = filtered.filter(e => e.type === "paid_premium").length;
-    const revenue = paidStandardSales * p.standard + paidPremiumSales * p.premium;
+    const stats = loadStats();
+    const computed = computeStats(stats, period);
+    const pageviews = summarizePageviews(period);
+    const chartData: { date: string; revenue: number; visits: number; standardSales: number; premiumSales: number; promoSales: number }[] = [];
     const days = period === "all" ? 30 : period === "month" ? 30 : period === "week" ? 7 : 1;
-    const chartData = [];
+    const allPv = loadPageviews();
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date(); d.setDate(d.getDate() - i);
       const key = d.toISOString().slice(0, 10);
-      const dayEvents = events.filter(e => e.ts?.startsWith(key));
-      chartData.push({ date: key, revenue: dayEvents.filter(e => e.type === "paid_standard").length * p.standard + dayEvents.filter(e => e.type === "paid_premium").length * p.premium, visits: dayEvents.filter(e => e.type === "visit").length, standardSales: dayEvents.filter(e => e.type === "paid_standard").length, premiumSales: dayEvents.filter(e => e.type === "paid_premium").length });
+      const dayEvents = (stats.events || []).filter((e: StatsEvent) => e.ts?.startsWith(key));
+      const dayStandard = dayEvents.filter((e: StatsEvent) => e.type === "paid_standard").length;
+      const dayPremium = dayEvents.filter((e: StatsEvent) => e.type === "paid_premium").length;
+      const dayNails = dayEvents.filter((e: StatsEvent) => e.type === "paid_nails_month").length;
+      const dayGrooming = dayEvents.filter((e: StatsEvent) => e.type === "paid_grooming").length;
+      const dayPromo = dayEvents.filter((e: StatsEvent) => e.type === "paid_promo_standard" || e.type === "paid_promo_premium").length;
+      const dayPv = allPv.filter((e) => e.ts.startsWith(key) && !isInternalPageView(e)).length;
+      const nailsPrice = stats.nailsMonthPrice || NAILS_MONTH_PRICE;
+      const groomPrice = stats.groomingPrice || GROOMING_PRICE;
+      chartData.push({
+        date: key,
+        revenue:
+          dayStandard * stats.standardPrice +
+          dayPremium * stats.premiumPrice +
+          dayNails * nailsPrice +
+          dayGrooming * groomPrice,
+        visits: dayPv || dayEvents.filter((e: StatsEvent) => e.type === "visit").length,
+        standardSales: dayStandard,
+        premiumSales: dayPremium,
+        promoSales: dayPromo,
+      });
     }
-    res.json({ stats: { visits, paidStandardSales, paidPremiumSales, revenue, standardPrice: p.standard, premiumPrice: p.premium }, period, chartData });
+    res.json({
+      stats: {
+        ...computed,
+        uniqueVisitors: pageviews.uniqueVisitors,
+        pageViews: pageviews.totalViews,
+        namedVisitors: pageviews.namedVisitors,
+        anonymousVisitors: pageviews.anonymousVisitors,
+      },
+      period,
+      chartData,
+      pageviews,
+    });
   });
 
-  // Admin set price endpoint (для новой панели)
-  app.post("/api/admin-set-price", (req: Request, res: Response) => {
-    const { secret: reqSecret, tier, price } = req.body;
-    if (reqSecret !== "stilist-admin-key-913260") return res.status(403).json({ error: "forbidden" });
+  app.post("/api/track", (req: Request, res: Response) => {
+    try {
+      const visitorId = String(req.body?.visitorId || "").trim().slice(0, 64);
+      const pathKey = String(req.body?.path || "").trim().slice(0, 80).replace(/[^a-z0-9_/-]/gi, "");
+      const name = String(req.body?.name || "").trim().slice(0, 80);
+      const kindRaw = String(req.body?.kind || "page").trim().toLowerCase();
+      const kind: "page" | "click" = kindRaw === "click" ? "click" : "page";
+      if (!visitorId || !pathKey) return res.status(400).json({ ok: false });
+      const hit: PageView = { ts: new Date().toISOString(), visitorId, name, path: pathKey, kind };
+      // Не пишем в статистику заходы админа / теста
+      if (!isInternalPageView(hit)) appendPageView(hit);
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ ok: false });
+    }
+  });
+
+  app.get("/api/admin-visits", requireAdmin, (req: Request, res: Response) => {
+    const period = (req.query.period as string) || "all";
+    res.json(summarizePageviews(period));
+  });
+
+  // Профиль стиля пользователя (для «Мои образы» и разных результатов в следующих сессиях)
+  app.get("/api/user-profile", (req: Request, res: Response) => {
+    const visitorId = sanitizeVisitorId(req.query.visitorId);
+    if (!visitorId) return res.status(400).json({ error: "visitorId required" });
+    const profile = readUserProfile(visitorId);
+    if (!profile) return res.json({ ok: true, profile: null, pastLooks: [], orderIds: [], orders: [] });
+    const pastLooks = profile.sessions
+      .flatMap((s) => (s.looks || []).map((l) => l.lookName))
+      .filter(Boolean)
+      .slice(-18);
+    const orders = (profile.orderIds || [])
+      .map((id) => {
+        const order = readOrder(id);
+        if (!order || order.status === "expired") return null;
+        return {
+          paymentId: order.paymentId,
+          tier: order.tier,
+          status: order.status,
+          createdAt: order.createdAt,
+          paidAt: order.paidAt || null,
+        };
+      })
+      .filter(Boolean);
+    res.json({
+      ok: true,
+      profile: {
+        name: profile.name,
+        sessions: profile.sessions.length,
+        updatedAt: profile.updatedAt,
+      },
+      pastLooks,
+      orderIds: profile.orderIds || [],
+      orders,
+    });
+  });
+
+  // Кабинет «Мои образы» по телефону (после оплаты) + мягкая верификация владения номером
+  const phoneLookupHits = new Map<string, { n: number; t: number }>();
+  app.post("/api/orders-by-phone", (req: Request, res: Response) => {
+    const phone = normalizePhone(req.body?.phone);
+    if (!phone) {
+      return res.status(400).json({ error: "Укажите телефон в формате +7 XXX XXX-XX-XX" });
+    }
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "local").split(",")[0].trim();
+    const key = `${ip}:${phone}`;
+    const now = Date.now();
+    const hit = phoneLookupHits.get(key) || { n: 0, t: now };
+    if (now - hit.t > 60 * 60 * 1000) { hit.n = 0; hit.t = now; }
+    hit.n += 1;
+    phoneLookupHits.set(key, hit);
+    if (hit.n > 30) {
+      return res.status(429).json({ error: "Слишком много попыток. Подождите немного." });
+    }
+
+    const index = readPhoneIndex(phone);
+    const ids = index?.orderIds || [];
+    const orders = ids
+      .map((id) => {
+        const order = readOrder(id);
+        if (!order) return null;
+        if (order.status === "expired") return null;
+        return {
+          paymentId: order.paymentId,
+          tier: order.tier,
+          status: order.status,
+          createdAt: order.createdAt,
+          paidAt: order.paidAt || null,
+        };
+      })
+      .filter(Boolean)
+      .reverse();
+
+    // Верификация владения номером: спрашиваем последние 4 цифры номера.
+    // Владелец знает их автоматически (номер и так его). Без подтверждения заказы не отдаём.
+    const verifyRaw = String(req.body?.verify || "").replace(/\D/g, "");
+    const expected = phone.slice(-4);
+    if (orders.length > 0 && verifyRaw !== expected) {
+      // Ставим флаг только когда для номера реально есть заказы (не подсказываем пустым номерам).
+      return res.status(200).json({
+        ok: false,
+        needVerification: true,
+        hint: "last4",
+        phone,
+        count: 0,
+        orders: [],
+        message: "Подтвердите номер: введите последние 4 цифры телефона.",
+      });
+    }
+
+    res.json({ ok: true, phone, orders, count: orders.length });
+  });
+
+  const orderLookupHits = new Map<string, { n: number; t: number }>();
+  app.post("/api/find-orders", (req: Request, res: Response) => {
+    const pickup = normalizePickupCode(req.body?.code || req.body?.pickupCode);
+    if (!pickup) {
+      return res.status(400).json({ error: "Введите код заказа, например СТИЛЬ-K7M2QX" });
+    }
+    const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "local").split(",")[0].trim();
+    const key = `${ip}:${pickup}`;
+    const now = Date.now();
+    const hit = orderLookupHits.get(key) || { n: 0, t: now };
+    if (now - hit.t > 60 * 60 * 1000) { hit.n = 0; hit.t = now; }
+    hit.n += 1;
+    orderLookupHits.set(key, hit);
+    if (hit.n > 30) {
+      return res.status(429).json({ error: "Слишком много попыток. Подождите немного." });
+    }
+    const rec = readPickup(pickup);
+    const order = rec ? readOrder(rec.paymentId) : null;
+    if (!order || order.status === "expired") {
+      return res.json({ ok: true, pickupCode: displayPickupCode(pickup), orders: [], count: 0 });
+    }
+    res.json({
+      ok: true,
+      pickupCode: displayPickupCode(pickup),
+      orders: [{
+        paymentId: order.paymentId,
+        tier: order.tier,
+        status: order.status,
+        createdAt: order.createdAt,
+        paidAt: order.paidAt || null,
+        pickupCode: order.pickupCode || displayPickupCode(pickup),
+      }],
+      count: 1,
+    });
+  });
+
+  app.post("/api/admin-login", (req: Request, res: Response) => {
+    if (!ADMIN_PIN || !ADMIN_KEY || String(req.body?.pin || "") !== ADMIN_PIN) {
+      return res.status(403).json({ error: "wrong" });
+    }
+    rememberOwnerIp(clientIp(req));
+    res.setHeader("Set-Cookie", ownerCookieHeaders(req));
+    res.json({ ok: true, ownerFree: true });
+  });
+
+  app.get("/api/admin-behavior", requireAdmin, (req: Request, res: Response) => {
+    const period = (req.query.period as string) || "all";
+    res.json(summarizePageviews(period));
+  });
+
+  // Admin set price endpoint
+  app.post("/api/admin-set-price", requireAdmin, (req: Request, res: Response) => {
+    const { tier, price } = req.body;
     if (!tier || !price) return res.status(400).json({ error: "Missing params" });
-    const p = loadPrices();
-    if (tier === "standard") p.standard = parseInt(price);
-    else if (tier === "premium") p.premium = parseInt(price);
-    savePrices(p);
-    prices = p;
-    res.json({ success: true });
+    const stats = loadStats();
+    if (tier === "standard") stats.standardPrice = parseInt(price);
+    else if (tier === "premium") stats.premiumPrice = parseInt(price);
+    else if (tier === "nails_month") stats.nailsMonthPrice = parseInt(price);
+    else if (tier === "grooming") stats.groomingPrice = parseInt(price);
+    else return res.status(400).json({ error: "Unknown tier" });
+    saveStats(stats);
+    res.json({ success: true, stats });
+  });
+
+  app.get("/api/test-key", (req: Request, res: Response) => {
+    res.json({
+      POLZA_API_KEY: POLZA_API_KEY ? "configured" : "missing",
+      ANALYSIS_MODEL,
+      GENDER_MODEL,
+      IMAGE_MODEL,
+    });
   });
 
   // Payment endpoints
   const PAYMENT_MODE = process.env.PAYMENT_MODE || "test";
+  async function ensurePaidOrder(paymentIdRaw: unknown): Promise<OrderRecord | null> {
+    const paymentId = sanitizeOrderId(paymentIdRaw);
+    if (!paymentId) return null;
+    const existing = readOrder(paymentId);
+    // Промо и владелец ПК — не ЮKassa, только локальная запись
+    if (paymentId.startsWith("promo_") || paymentId.startsWith("owner_")) return existing;
+    const canRecoverLatePayment = existing?.status === "expired" && !existing.startedAt && !existing.completedAt;
+    if (existing && existing.status !== "awaiting_payment" && !canRecoverLatePayment) return existing;
+    try {
+      const payment = await yooKassa.getPayment(paymentId);
+      if (payment.status !== "succeeded") return existing;
+      const now = new Date().toISOString();
+      const metaTier = String(payment.metadata?.tier || existing?.tier || "standard");
+      const tier: OrderRecord["tier"] = metaTier === "premium" ? "premium" : metaTier === "grooming" ? "grooming" : "standard";
+      let legacyPatch: Partial<OrderRecord> = {};
+      if (!existing) {
+        const legacyResultFile = path.join(RESULTS_DIR, paymentId, "result.json");
+        if (fs.existsSync(legacyResultFile)) {
+          try {
+            const legacyResult = JSON.parse(fs.readFileSync(legacyResultFile, "utf-8"));
+            const legacyLooks = Array.isArray(legacyResult.looks) ? legacyResult.looks : [];
+            const completedLooks = legacyLooks.filter((look: any) => !!look.image).length;
+            const isComplete = legacyLooks.length > 0 && completedLooks === legacyLooks.length;
+            const completedMs = fs.statSync(legacyResultFile).mtimeMs;
+            legacyPatch = {
+              status: isComplete ? "ready" : "partial",
+              startedAt: new Date(completedMs).toISOString(),
+              completedAt: isComplete ? new Date(completedMs).toISOString() : undefined,
+              expectedLooks: legacyLooks.length,
+              completedLooks,
+              resultExpiresAt: isComplete ? paidResultExpiresAtIso() : undefined,
+              unfinishedExpiresAt: isComplete ? undefined : new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+            };
+          } catch {}
+        }
+      }
+      const metaPhone = normalizePhone((payment as any).metadata?.phone);
+      const phone = existing?.phone || metaPhone || undefined;
+      if (phone) linkOrderToPhone(phone, paymentId);
+      const visitorId = sanitizeVisitorId((payment as any).metadata?.visitorId || existing?.visitorId);
+      return saveOrder({
+        paymentId,
+        tier,
+        status: existing?.status && existing.status !== "awaiting_payment" ? existing.status : "awaiting_input",
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+        paidAt: existing?.paidAt || now,
+        startedAt: existing?.startedAt,
+        completedAt: existing?.completedAt,
+        unfinishedExpiresAt: canRecoverLatePayment
+          ? new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString()
+          : existing?.unfinishedExpiresAt || new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+        resultExpiresAt: existing?.resultExpiresAt,
+        expectedLooks: existing?.expectedLooks,
+        completedLooks: existing?.completedLooks,
+        error: null,
+        visitorId: visitorId || existing?.visitorId,
+        userName: existing?.userName,
+        phone,
+        pickupCode: existing?.pickupCode,
+        ...legacyPatch,
+      });
+    } catch (error) {
+      console.error("[Order] Payment verification failed:", paymentId, (error as Error).message);
+      return existing;
+    }
+  }
+
+  // Maps orderId (idempotenceKey) -> paymentId — persisted to disk so restarts don't lose pending payments
+  const pendingPaymentsFile = path.join(PROJECT_ROOT, "data", "pending_payments.json");
+  function loadPendingPayments(): Map<string, string> {
+    try {
+      if (fs.existsSync(pendingPaymentsFile)) {
+        return new Map(Object.entries(JSON.parse(fs.readFileSync(pendingPaymentsFile, "utf-8"))));
+      }
+    } catch {}
+    return new Map();
+  }
+  function savePendingPayment(orderId: string, paymentId: string) {
+    const m = loadPendingPayments();
+    m.set(orderId, paymentId);
+    const entries = [...m.entries()].slice(-500);
+    fs.writeFileSync(pendingPaymentsFile, JSON.stringify(Object.fromEntries(entries)));
+  }
+  const pendingPayments = loadPendingPayments();
 
   app.post("/api/create-payment", async (req: Request, res: Response) => {
     try {
       const { tier } = req.body;
-      const currentPrices = loadPrices();
-      const amount = tier === "premium" ? currentPrices.premium : currentPrices.standard;
-      const paymentId = `test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      let qrData = "";
-      if (PAYMENT_MODE === "test") {
-        qrData = await QRCode.toDataURL(`https://qr.nspk.ru/test-payment-${paymentId}?sum=${amount}`);
-      } else {
-        qrData = await QRCode.toDataURL(`https://yookassa.ru/payment/${paymentId}`);
+      const phone = normalizePhone(req.body?.phone);
+      const visitorId = sanitizeVisitorId(req.body?.visitorId);
+      const userName = canonicalOwnerName(visitorId, String(req.body?.userName || "").trim().slice(0, 80));
+      const stats = loadStats();
+      const isNailsMonth = tier === "nails_month";
+      const isGrooming = tier === "grooming";
+      if (isOwnerRequest(req) || isOwnerVisitor(visitorId)) {
+        const paymentId = sanitizeOrderId(
+          `owner_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+        );
+        const nowIso = new Date().toISOString();
+        if (isNailsMonth) {
+          const granted = nailsSub.grantFromPayment(paymentId);
+          return res.json({
+            paymentId,
+            ownerFree: true,
+            confirmationUrl: null,
+            nailsToken: granted.token,
+            expiresAt: granted.expiresAt,
+            kind: "month",
+            days: 30,
+          });
+        }
+        if (!isNailsMonth) {
+          persistCabinetOrder({
+            paymentId,
+            tier: isGrooming ? "grooming" : (tier === "premium" ? "premium" : "standard"),
+            status: "awaiting_input",
+            paidAt: nowIso,
+            visitorId,
+            userName,
+            phone: phone || undefined,
+            expectedLooks: isGrooming ? 3 : undefined,
+          });
+        }
+        return res.json({
+          paymentId,
+          ownerFree: true,
+          confirmationUrl: null,
+          pickupCode: !isNailsMonth ? readOrder(paymentId)?.pickupCode : undefined,
+        });
       }
-      // Log payment
-      const paymentsList = loadPayments();
-      paymentsList.push({ id: paymentId, tier: tier || "standard", amount, status: "created", createdAt: new Date().toISOString(), ip: (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").toString().split(",")[0].trim() });
-      savePayments(paymentsList);
-      res.json({ paymentId, qrCode: qrData, amount });
+      const amount = isNailsMonth
+        ? (stats.nailsMonthPrice || NAILS_MONTH_PRICE)
+        : isGrooming
+          ? (stats.groomingPrice || GROOMING_PRICE)
+          : tier === "premium"
+            ? stats.premiumPrice
+            : stats.standardPrice;
+      const paymentDescription = isNailsMonth
+        ? "База ногтей — доступ на месяц + инструкции для мастера"
+        : isGrooming
+          ? "Причёска и уход — 3 образа + рекомендации по коже"
+          : tier === "premium"
+            ? "Премиум тариф - до 5 образов + 22 повода + астро-разбор"
+            : "Стандарт тариф - 3 образа от стилиста";
+
+      // Создаём платёж через YooKassa (авто-подтверждение)
+      const idempotenceKey = crypto.randomUUID();
+      const payment = await yooKassa.createPayment({
+        amount: {
+          value: amount.toFixed(2),
+          currency: "RUB",
+        },
+        confirmation: {
+          type: "redirect",
+          return_url: `${process.env.BASE_URL || "https://stilist-ai.ru"}/api/confirm-payment?orderId=${idempotenceKey}`,
+        },
+        capture: true, // Автоматическое подтверждение платежа
+        description: paymentDescription,
+        metadata: {
+          tier: isNailsMonth ? "nails_month" : isGrooming ? "grooming" : tier,
+          idempotenceKey,
+          ...(phone ? { phone } : {}),
+          ...(visitorId ? { visitorId } : {}),
+          ...(userName ? { userName: userName.slice(0, 40) } : {}),
+        },
+      }, idempotenceKey);
+
+      // Сохраняем маппинг orderId → paymentId для confirm-payment
+      pendingPayments.set(idempotenceKey, payment.id);
+      savePendingPayment(idempotenceKey, payment.id);
+      if (!isNailsMonth) {
+        try {
+          persistCabinetOrder({
+            paymentId: payment.id,
+            tier: isGrooming ? "grooming" : (tier === "premium" ? "premium" : "standard"),
+            status: "awaiting_payment",
+            visitorId,
+            userName,
+            phone: phone || undefined,
+            expectedLooks: isGrooming ? 3 : undefined,
+          });
+        } catch (orderError) {
+          console.error("[Order] Failed to persist newly created payment:", payment.id, orderError);
+        }
+      }
+
+      console.log("[YooKassa] Payment created:", payment.id, "status:", payment.status, "tier:", isNailsMonth ? "nails_month" : isGrooming ? "grooming" : tier);
+
+      const created = readOrder(payment.id);
+      res.json({
+        paymentId: payment.id,
+        confirmationUrl: payment.confirmation?.confirmation_url,
+        status: payment.status,
+        pickupCode: created?.pickupCode || null,
+      });
     } catch (err: any) {
+      console.error("[YooKassa] Payment error:", err);
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post("/api/check-payment", (req: Request, res: Response) => {
-    const { paymentId } = req.body;
-    if (!paymentId) return res.json({ status: "pending" });
-    if (PAYMENT_MODE === "test") {
-      // Update payment status to succeeded
-      const paymentsList = loadPayments();
-      const p = paymentsList.find(x => x.id === paymentId);
-      if (p && p.status !== "succeeded") {
-        p.status = "succeeded";
-        savePayments(paymentsList);
-        const s = loadStats();
-        s.paymentsByTier[p.tier] = (s.paymentsByTier[p.tier] || 0) + 1;
-        saveStats(s);
-      }
-      return res.json({ status: "succeeded" });
+  app.post("/api/check-payment", async (req: Request, res: Response) => {
+    try {
+      const { paymentId } = req.body;
+      if (!paymentId) return res.json({ status: "pending" });
+
+      const payment = await yooKassa.getPayment(paymentId);
+      res.json({ status: payment.status });
+    } catch (err: any) {
+      console.error("[YooKassa] Check payment error:", err);
+      res.status(500).json({ error: err.message });
     }
-    return res.json({ status: "pending" });
   });
 
-  app.post("/api/stylize", upload.array("images", 3), async (req: Request, res: Response) => {
+  // Webhook для уведомлений от YooKassa
+  app.post("/api/yookassa-webhook", async (req: Request, res: Response) => {
+    try {
+      const hintedId = String(req.body?.object?.id || "").trim();
+      if (!hintedId) return res.status(200).json({ status: "ignored" });
+      const payment = await yooKassa.getPayment(hintedId);
+      console.log("[YooKassa Webhook] verified", payment.id, payment.status);
+
+      if (payment.status === "succeeded") {
+        const paymentId = payment.id;
+        const tier = payment.metadata?.tier || "standard";
+        const amount = (payment as any).amount?.value || "?";
+
+        if (tier === "nails_month") {
+          nailsSub.grantFromPayment(paymentId);
+          notifyTelegram(`✅ Оплата ${amount}₽ (База ногтей — месяц)`);
+        } else if (tier === "grooming") {
+          await ensurePaidOrder(paymentId);
+          persistPaidCabinetFromYookassa(
+            paymentId,
+            "grooming",
+            sanitizeVisitorId((payment as any).metadata?.visitorId),
+            String((payment as any).metadata?.userName || "").trim().slice(0, 80),
+          );
+          notifyTelegram(`✅ Оплата ${amount}₽ (Причёска и уход)`);
+        } else {
+          await ensurePaidOrder(paymentId);
+          persistPaidCabinetFromYookassa(
+            paymentId,
+            tier === "premium" ? "premium" : "standard",
+            sanitizeVisitorId((payment as any).metadata?.visitorId),
+          );
+          incPaidSale(tier);
+          const tierName = tier === "premium" ? "Премиум" : "Стандарт";
+          notifyTelegram(`✅ Оплата ${amount}₽ (${tierName})`);
+        }
+      }
+
+      res.status(200).json({ status: "ok" });
+    } catch (err: any) {
+      console.error("[YooKassa Webhook] Error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Подтверждение оплаты - вызывается после возврата с YooKassa
+  app.get("/api/confirm-payment", async (req: Request, res: Response) => {
+    try {
+      const orderId = req.query.orderId as string;
+      const paymentId = orderId ? pendingPayments.get(orderId) : (req.query.paymentId as string);
+      if (!paymentId) {
+        console.log(`[YooKassa] confirm-payment: no paymentId for orderId=${orderId}`);
+        return res.redirect("/?payment_error=no_id");
+      }
+
+      let p = await yooKassa.getPayment(paymentId);
+      console.log(`[YooKassa] confirm-payment status: ${p.status}, id: ${paymentId}`);
+
+      // СБП может вернуть pending — ждём до 15 сек
+      if (p.status === "pending") {
+        for (let i = 0; i < 5; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          p = await yooKassa.getPayment(paymentId);
+          console.log(`[YooKassa] poll ${i + 1}: ${p.status}`);
+          if (p.status !== "pending") break;
+        }
+      }
+
+      // Если платёж ожидает захвата (two-stage), подтверждаем
+      if (p.status === "waiting_for_capture") {
+        await yooKassa.capturePayment(paymentId, undefined, paymentId);
+        console.log(`[YooKassa] Payment captured: ${paymentId}`);
+        p = await yooKassa.getPayment(paymentId);
+      }
+
+      if (p.status === "succeeded") {
+        const tier = p.metadata?.tier || "standard";
+        const amount = (p as any).amount?.value || "?";
+        if (tier === "nails_month") {
+          const granted = nailsSub.grantFromPayment(paymentId);
+          console.log(`[YooKassa] Nails month confirmed: ${paymentId}`);
+          notifyTelegram(`✅ Оплата ${amount}₽ (База ногтей — месяц) [confirm]`);
+          res.redirect(
+            `/?payment_success=true&payment_id=${paymentId}&tier=nails_month&nails_token=${encodeURIComponent(granted.token)}`
+          );
+        } else if (tier === "grooming") {
+          await ensurePaidOrder(paymentId);
+          persistPaidCabinetFromYookassa(
+            paymentId,
+            "grooming",
+            sanitizeVisitorId((p as any).metadata?.visitorId),
+            String((p as any).metadata?.userName || "").trim().slice(0, 80),
+          );
+          console.log(`[YooKassa] Grooming confirmed: ${paymentId}`);
+          notifyTelegram(`✅ Оплата ${amount}₽ (Причёска и уход) [confirm]`);
+          const pickup = readOrder(paymentId)?.pickupCode || "";
+          res.redirect(
+            `/?payment_success=true&payment_id=${paymentId}&tier=grooming${pickup ? `&pickup_code=${encodeURIComponent(pickup)}` : ""}`,
+          );
+        } else {
+          await ensurePaidOrder(paymentId);
+          persistPaidCabinetFromYookassa(
+            paymentId,
+            tier === "premium" ? "premium" : "standard",
+            sanitizeVisitorId((p as any).metadata?.visitorId),
+          );
+          console.log(`[YooKassa] Payment confirmed: ${paymentId}, tier: ${tier}`);
+          // Fallback: increment stats and notify Telegram (webhook may not have fired yet)
+          incPaidSale(tier);
+          const tierName = tier === "premium" ? "Премиум" : "Стандарт";
+          notifyTelegram(`✅ Оплата ${amount}₽ (${tierName}) [confirm]`);
+          const pickup = readOrder(paymentId)?.pickupCode || "";
+          res.redirect(
+            `/?payment_success=true&payment_id=${paymentId}&tier=${tier}${pickup ? `&pickup_code=${encodeURIComponent(pickup)}` : ""}`,
+          );
+        }
+      } else {
+        console.log(`[YooKassa] Payment not succeeded: ${paymentId}, status: ${p.status}`);
+        res.redirect("/?payment_error=cancelled");
+      }
+    } catch (err: any) {
+      console.error("[YooKassa] Confirm payment error:", err);
+      res.redirect("/?payment_error=check_failed");
+    }
+  });
+
+  // API для проверки оплаченного заказа (вызывается из фронтенда)
+  app.get("/api/check-paid", async (req: Request, res: Response) => {
+    try {
+      const paymentId = req.query.paymentId as string;
+      if (!paymentId) return res.json({ paid: false });
+      if (paymentId.startsWith("owner_") || paymentId.startsWith("promo_")) {
+        const order = readOrder(paymentId);
+        return res.json({ paid: !!order?.paidAt, tier: order?.tier || "standard", ownerFree: paymentId.startsWith("owner_") });
+      }
+
+      const payment = await yooKassa.getPayment(paymentId);
+      if (payment.status === "succeeded") {
+        const tier = payment.metadata?.tier || "standard";
+        if (tier === "nails_month") {
+          const granted = nailsSub.grantFromPayment(paymentId);
+          return res.json({
+            paid: true,
+            tier: "nails_month",
+            kind: "month",
+            nailsToken: granted.token,
+            expiresAt: granted.expiresAt,
+            days: 30,
+          });
+        }
+        return res.json({ paid: true, tier });
+      }
+      res.json({ paid: false });
+    } catch (err: any) {
+      console.error("[YooKassa] Check paid error:", err);
+      res.json({ paid: false });
+    }
+  });
+
+  app.get("/api/order/:paymentId", async (req: Request, res: Response) => {
+    const paymentId = sanitizeOrderId(req.params.paymentId);
+    if (!paymentId) return res.status(400).json({ error: "invalid id" });
+    const order = await ensurePaidOrder(paymentId);
+    if (!order) return res.status(404).json({ status: "not_found", paid: false });
+    const expiresAt = order.resultExpiresAt || order.unfinishedExpiresAt;
+    if (expiresAt && new Date(expiresAt).getTime() <= Date.now() && order.status !== "expired") {
+      cleanupOldResults();
+      const expired = readOrder(paymentId);
+      return res.json({ ...(expired || order), paid: !!order.paidAt, status: "expired" });
+    }
+    if (order.tier === "grooming") {
+      const saved = readGroomingResult(paymentId);
+      if (saved) {
+        const recovered = buildGroomingClientResult(saved, paymentId);
+        const looks = groomingLooksForCabinet(saved, paymentId);
+        const expectedLooks = Number(saved.looksTotal) || 3;
+        const completedLooks = groomingAfterPhotoCount(looks);
+        const updatedMs = saved.updatedAt ? new Date(saved.updatedAt).getTime() : 0;
+        const recentlyUpdated = !!updatedMs && (Date.now() - updatedMs < 20 * 60 * 1000);
+        const waiting = saved.status === "processing" && recentlyUpdated
+          && (completedLooks < expectedLooks || (saved.mode === "paid" && paidClientCareIncomplete(recovered)));
+        if (waiting) {
+          return res.json({
+            ...order,
+            paid: !!order.paidAt,
+            status: "processing",
+            expectedLooks,
+            completedLooks,
+          });
+        }
+        const complete = completedLooks >= expectedLooks
+          && (saved.mode !== "paid" || !paidClientCareIncomplete(recovered));
+        const nextStatus: OrderStatus = complete
+          ? "ready"
+          : completedLooks
+            ? "partial"
+            : (saved.status === "failed" || order.status === "processing" ? "failed" : order.status);
+        if (nextStatus !== order.status || completedLooks !== (order.completedLooks || 0)) {
+          updateOrder(paymentId, {
+            status: nextStatus,
+            expectedLooks,
+            completedLooks,
+            error: complete ? null : (order.error || "Генерация прервалась. Можно продолжить без новой оплаты."),
+            resultExpiresAt: (nextStatus === "ready" || nextStatus === "partial")
+              ? (order.resultExpiresAt || paidResultExpiresAtIso())
+              : order.resultExpiresAt,
+          });
+        }
+        const shown = readOrder(paymentId) || order;
+        return res.json({ ...shown, paid: !!order.paidAt, status: nextStatus });
+      }
+      if (order.status === "processing") {
+        const patched = updateOrder(paymentId, {
+          status: "failed",
+          error: "Генерация прервалась. Можно продолжить без новой оплаты.",
+        });
+        return res.json({ ...(patched || order), paid: !!order.paidAt, status: "failed" });
+      }
+      return res.json({ ...order, paid: !!order.paidAt });
+    }
+    // «processing» только пока этот процесс реально генерирует. Иначе окно «зайдите через 10 минут» блокирует повтор.
+    if (order.status === "processing" && !activeOrderIds.has(paymentId)) {
+      const complete = !!order.expectedLooks && (order.completedLooks || 0) >= order.expectedLooks;
+      const nextStatus = complete ? "ready" : order.completedLooks ? "partial" : "failed";
+      const patched = updateOrder(paymentId, {
+        status: nextStatus,
+        error: complete ? null : "Генерация прервалась. Можно продолжить без новой оплаты.",
+      });
+      const shown = patched || order;
+      return res.json({ ...shown, paid: !!order.paidAt, status: nextStatus });
+    }
+    res.json({ ...order, paid: !!order.paidAt });
+  });
+
+  // Recover saved result by paymentId
+  app.get("/api/result/:paymentId", (req: Request, res: Response) => {
+    const id = sanitizeOrderId(req.params.paymentId);
+    if (!id) return res.status(400).json({ error: "invalid id" });
+    const order = readOrder(id);
+    const expiresAt = order?.resultExpiresAt || order?.unfinishedExpiresAt;
+    if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) {
+      cleanupOldResults();
+      return res.json({ ready: false, status: "expired", expired: true });
+    }
+    const groomingSaved = readGroomingResult(id);
+    if (order?.tier === "grooming" || groomingSaved) {
+      if (groomingSaved?.expiresAt && new Date(groomingSaved.expiresAt).getTime() < Date.now()) {
+        try { fs.unlinkSync(groomingResultPath(id)); } catch {}
+        return res.json({ kind: "grooming", ready: false, status: "expired", expired: true, jobId: id });
+      }
+      if (!groomingSaved) {
+        return res.json({
+          kind: "grooming",
+          ready: false,
+          status: order?.status || "awaiting_input",
+          expired: order?.status === "expired",
+          expectedLooks: order?.expectedLooks || 3,
+          completedLooks: order?.completedLooks || 0,
+          error: order?.error || null,
+          jobId: id,
+        });
+      }
+      const recovered = buildGroomingClientResult(groomingSaved, id);
+      const looks = groomingLooksForCabinet(groomingSaved, id);
+      const looksTotal = Number(groomingSaved.looksTotal) || (groomingSaved.mode === "free" ? 1 : 3);
+      const afterCount = groomingAfterPhotoCount(looks);
+      const complete = afterCount >= looksTotal
+        && (groomingSaved.mode !== "paid" || !paidClientCareIncomplete(recovered));
+      const thumbLooks = looks
+        .filter(groomingHasAfterPhoto)
+        .map((look: any) => ({
+          image: look.imageAfter,
+          lookName: look.name || "Причёска",
+        }));
+      const status = complete
+        ? "ready"
+        : afterCount
+          ? "partial"
+          : (groomingSaved.status === "failed" ? "failed" : (order?.status || groomingSaved.status || "processing"));
+      return res.json({
+        kind: "grooming",
+        ready: complete || afterCount > 0,
+        status,
+        expired: false,
+        expiresAt: order?.resultExpiresAt || groomingSaved.expiresAt || null,
+        looks: thumbLooks,
+        grooming: recovered,
+        jobId: id,
+        expectedLooks: looksTotal,
+        completedLooks: afterCount,
+        error: groomingSaved.error || order?.error || null,
+      });
+    }
+    const file = path.join(RESULTS_DIR, id, "result.json");
+    if (!fs.existsSync(file)) {
+      if (order) {
+        return res.json({
+          ready: false,
+          status: order.status,
+          expired: order.status === "expired",
+          expectedLooks: order.expectedLooks || 0,
+          completedLooks: order.completedLooks || 0,
+          error: order.error || null,
+        });
+      }
+      return res.status(404).json({ ready: false, status: "not_found", expired: false });
+    }
+    try {
+      const data = JSON.parse(fs.readFileSync(file, "utf-8"));
+      const looks = Array.isArray(data.looks) ? data.looks : [];
+      const complete = looks.length > 0 && looks.every((look: any) => !!look.image);
+      res.json({
+        ready: true,
+        status: complete ? "ready" : (order?.status || "partial"),
+        expiresAt: order?.resultExpiresAt || null,
+        ...data,
+      });
+    } catch {
+      res.status(500).json({ error: "read failed" });
+    }
+  });
+
+  // Serve saved result images
+  app.get("/api/result-image/:paymentId/:file", (req: Request, res: Response) => {
+    const id = req.params.paymentId.replace(/[^a-zA-Z0-9_-]/g, "");
+    const file = req.params.file.replace(/[^a-zA-Z0-9._-]/g, "");
+    if (!id || !file) return res.status(400).end();
+    const imgPath = path.join(RESULTS_DIR, id, file);
+    if (!fs.existsSync(imgPath)) return res.status(404).end();
+    res.sendFile(imgPath);
+  });
+
+  // Serve grooming images (free/paid package photos)
+  app.get("/api/grooming-image/:folderId/:file", (req: Request, res: Response) => {
+    const id = String(req.params.folderId || "").replace(/[^a-zA-Z0-9_-]/g, "");
+    const file = String(req.params.file || "").replace(/[^a-zA-Z0-9._-]/g, "");
+    if (!id || !file) return res.status(400).end();
+    const imgPath = path.join(GROOMING_IMG_DIR, id, file);
+    if (!fs.existsSync(imgPath)) return res.status(404).end();
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.sendFile(imgPath);
+  });
+
+  // Восстановление результата причёсок, если поток оборвался
+  app.get("/api/grooming-result/:jobId", (req: Request, res: Response) => {
+    const id = sanitizeOrderId(req.params.jobId);
+    if (!id) return res.status(400).json({ error: "Некорректный id" });
+    const saved = readGroomingResult(id);
+    if (!saved) return res.status(404).json({ error: "Результат ещё не готов или уже удалён" });
+    if (saved.expiresAt && new Date(saved.expiresAt).getTime() < Date.now()) {
+      try { fs.unlinkSync(groomingResultPath(id)); } catch {}
+      return res.status(404).json({ error: "Результат истёк" });
+    }
+    const recovered = buildGroomingClientResult(saved, id);
+    const looks = saved.mode === "free"
+      ? [recovered?.bestLook].filter(Boolean)
+      : (Array.isArray(recovered?.looks) ? recovered.looks : groomingLooksFromSaved(saved));
+    const looksTotal = Number(saved.looksTotal) || (saved.mode === "free" ? 1 : 3);
+    const afterCount = groomingAfterPhotoCount(looks);
+    const updatedMs = saved.updatedAt ? new Date(saved.updatedAt).getTime() : 0;
+    const recentlyUpdated = !!updatedMs && (Date.now() - updatedMs < 20 * 60 * 1000);
+    const allFailed = looks.length > 0 && looks.every((look: any) => !groomingHasAfterPhoto(look) && look?.imageError);
+    const waitingPhotos = afterCount < looksTotal && !allFailed
+      && looks.some((look: any) => !groomingHasAfterPhoto(look) && !look?.imageError);
+    const careIncomplete = saved.mode === "paid" && saved.status === "processing" && paidClientCareIncomplete(recovered);
+    const stillDrawing = (waitingPhotos || careIncomplete) && saved.status !== "failed"
+      && (saved.status === "processing" || recentlyUpdated);
+    if (stillDrawing) {
+      return res.status(202).json({
+        status: "processing",
+        jobId: id,
+        progressText: saved.progressText || (afterCount ? `Готово ${afterCount} из ${looksTotal} фото…` : "Ещё рисуем фото «после»…"),
+        looksDone: afterCount,
+        looksTotal,
+      });
+    }
+    const complete = !waitingPhotos && !careIncomplete;
+    if (complete && saved.status !== "ready" && saved.status !== "failed") {
+      saveGroomingResult(id, {
+        status: "ready",
+        mode: saved.mode,
+        result: recovered,
+        looksDone: afterCount,
+        looksTotal,
+      });
+    }
+    return res.json({ status: "ready", jobId: id, result: recovered });
+  });
+
+  app.get("/api/grooming-latest", (req: Request, res: Response) => {
+    if (!isOwnerRequest(req)) return res.status(404).json({ error: "not found" });
+    try {
+      if (!fs.existsSync(GROOMING_RESULTS_DIR)) return res.status(404).json({ error: "none" });
+      let best: { jobId: string; result: any; ms: number } | null = null;
+      for (const entry of fs.readdirSync(GROOMING_RESULTS_DIR)) {
+        if (!entry.endsWith(".json")) continue;
+        const file = path.join(GROOMING_RESULTS_DIR, entry);
+        let saved: any;
+        try { saved = JSON.parse(fs.readFileSync(file, "utf-8")); } catch { continue; }
+        if (saved?.mode !== "paid") continue;
+        const jobId = saved.jobId || entry.replace(/\.json$/, "");
+        const recovered = buildGroomingClientResult(saved, jobId);
+        if (paidClientCareIncomplete(recovered)) continue;
+        const looks = Array.isArray(recovered?.looks) ? recovered.looks : [];
+        if (groomingAfterPhotoCount(looks) < 3) continue;
+        const ms = saved.updatedAt ? new Date(saved.updatedAt).getTime() : fs.statSync(file).mtimeMs;
+        if (!best || ms > best.ms) best = { jobId, result: recovered, ms };
+      }
+      if (!best) return res.status(404).json({ error: "none" });
+      return res.json({ status: "ready", jobId: best.jobId, result: best.result });
+    } catch {
+      return res.status(500).json({ error: "read failed" });
+    }
+  });
+
+  app.post("/api/grooming-retry-image", async (req: Request, res: Response) => {
+    try {
+      const jobId = sanitizeOrderId(req.body?.jobId);
+      const lookIndex = parseInt(String(req.body?.lookIndex ?? "0"), 10);
+      if (!jobId || !Number.isInteger(lookIndex) || lookIndex < 0) {
+        return res.status(400).json({ error: "Некорректный запрос" });
+      }
+      const saved = readGroomingResult(jobId);
+      if (!saved) return res.status(404).json({ error: "Результат не найден" });
+      const looks: any[] = saved.mode === "free"
+        ? [saved.result?.bestLook || saved.draftLooks?.[0]].filter(Boolean)
+        : (saved.result?.looks || saved.draftLooks || []);
+      const look = looks[lookIndex];
+      if (!look) return res.status(404).json({ error: "Причёска не найдена" });
+      const ref = await resolveImageToBase64(saved.sourceImage || look.imageClose);
+      if (!ref) return res.status(409).json({ error: "Исходное фото не сохранилось. Загрузите фото ещё раз." });
+      const agePolicy = groomingAgePolicy(saved.analysis || saved.result || {});
+      const lengthSlot = lookIndex === 0 ? "short" : lookIndex === 2 ? "long" : "mid";
+      const prompt = buildGroomingAfterPrompt({
+        lookName: look.name,
+        hairColor: look.hairColor,
+        lipColor: look.lipColor,
+        outfitNote: look.outfitNote,
+        editPrompt: look.editPromptAfter || look.editPromptClose || look.editPrompt,
+        agePolicy,
+        lengthSlot,
+      });
+      let image: string | null = null;
+      for (let attempt = 0; attempt < 3 && !image; attempt++) {
+        try {
+          const useCompact = attempt >= 2;
+          image = await generateImageWithFlux(
+            useCompact
+              ? buildGroomingAfterPrompt({
+                  lookName: look.name,
+                  hairColor: look.hairColor,
+                  lipColor: look.lipColor,
+                  outfitNote: look.outfitNote,
+                  agePolicy,
+                  compact: true,
+                  lengthSlot,
+                })
+              : prompt,
+            ref.base64,
+            ref.mime,
+            { quality: "high" }
+          );
+        } catch (e: any) {
+          console.error("[Grooming] retry attempt", attempt + 1, e?.message);
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        }
+      }
+      const folderId = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      const imageAfter = await persistGroomingImage(folderId, "after", image)
+        || ((image && (/^https?:\/\//i.test(image) || image.startsWith("data:"))) ? image : null);
+      if (!imageAfter) return res.status(503).json({ error: "Не удалось создать фото «после». Попробуйте ещё раз." });
+      look.imageAfter = imageAfter;
+      look.imageError = null;
+      looks[lookIndex] = look;
+      if (saved.result) {
+        if (saved.mode === "free") saved.result.bestLook = look;
+        else saved.result.looks = looks;
+      }
+      saveGroomingResult(jobId, {
+        status: "ready",
+        mode: saved.mode,
+        result: saved.result || buildGroomingClientResult({ ...saved, draftLooks: looks }, jobId),
+        draftLooks: looks,
+      });
+      res.json({ imageAfter, look });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Ошибка повтора" });
+    }
+  });
+
+  // Превью + ссылки товара по поисковому запросу (веб-поиск Perplexity) — для карточек ухода/макияжа
+  app.get("/api/product-thumb", async (req: Request, res: Response) => {
+    const q = ((req.query.q as string) || "").toString().trim().slice(0, 120);
+    const brand = ((req.query.brand as string) || "").toString().trim().slice(0, 60);
+    const fallbackUrls = marketplaceSearchUrls(q || brand);
+    if (!q && !brand) return res.json({ imageUrl: null, productUrl: null });
+    const found = await searchProductOnMarketplaces(q || brand, brand);
+    const result = {
+      imageUrl: found.imageUrl,
+      productUrl: found.wbUrl,
+      wbUrl: found.wbUrl || fallbackUrls.wbUrl,
+      ozonUrl: found.ozonUrl || fallbackUrls.ozonUrl,
+      ymUrl: found.ymUrl || fallbackUrls.ymUrl,
+    };
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.json(result);
+  });
+
+  // Отзывы с сайта → Telegram владельцу + контакт для ответа
+  app.post("/api/feedback", (req: Request, res: Response) => {
+    const text = String(req.body?.text || "").trim().slice(0, 2000);
+    const userName = String(req.body?.userName || "").trim().slice(0, 80);
+    const paymentId = sanitizeOrderId(req.body?.paymentId) || "";
+    let telegram = String(req.body?.telegram || "").trim().slice(0, 64);
+    telegram = telegram.replace(/^@/, "").replace(/^https?:\/\/(t\.me|telegram\.me)\//i, "");
+    const telegramIdRaw = req.body?.telegramId;
+    const telegramId =
+      typeof telegramIdRaw === "number"
+        ? telegramIdRaw
+        : Number(String(telegramIdRaw || "").replace(/\D/g, "")) || 0;
+
+    if (!text) return res.status(400).json({ ok: false, error: "Пустой отзыв" });
+    // Нужен @username, телефон или id из Mini App — иначе ответить некому
+    const looksLikePhone = /^\+?\d[\d\s()-]{8,20}$/.test(telegram);
+    const looksLikeUser = /^[a-zA-Z][a-zA-Z0-9_]{3,31}$/.test(telegram);
+    if (!looksLikePhone && !looksLikeUser && !telegramId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Укажите Telegram (@ник) или телефон — чтобы мы могли ответить",
+      });
+    }
+
+    const entry = {
+      id: `fb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      at: new Date().toISOString(),
+      userName,
+      telegram: telegram || null,
+      telegramId: telegramId || null,
+      paymentId: paymentId || null,
+      text,
+    };
+    try {
+      const feedbackFile = path.join(PROJECT_ROOT, "data", "feedbacks.json");
+      fs.mkdirSync(path.dirname(feedbackFile), { recursive: true });
+      let list: any[] = [];
+      if (fs.existsSync(feedbackFile)) {
+        try { list = JSON.parse(fs.readFileSync(feedbackFile, "utf8")); } catch { list = []; }
+      }
+      if (!Array.isArray(list)) list = [];
+      list.unshift(entry);
+      if (list.length > 500) list = list.slice(0, 500);
+      writeJsonAtomic(feedbackFile, list);
+    } catch (e) {
+      console.error("[Feedback] save failed:", e);
+    }
+
+    let contactLine = "";
+    if (looksLikeUser) {
+      contactLine = `📱 Telegram: @${telegram}\n➡️ Ответить: https://t.me/${telegram}`;
+    } else if (looksLikePhone) {
+      contactLine = `📱 Телефон / WhatsApp: ${telegram}`;
+    } else if (telegramId) {
+      contactLine = `📱 Telegram ID: ${telegramId}\n(из Mini App; ответить можно, если человек писал боту)`;
+    }
+
+    notifyTelegram(
+      `💬 Отзыв от ${userName || "пользователя"}:\n${contactLine}\n${paymentId ? `🧾 Заказ: ${paymentId}\n` : ""}\n${text}`
+    );
+    res.json({ ok: true });
+  });
+
+
+  app.post("/api/stylize", (req: Request, res: Response, next: NextFunction) => {
+    upload.array("images", 3)(req, res, (err) => {
+      if (err && err.code === "LIMIT_FILE_SIZE") {
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+        res.flushHeaders();
+        res.write(JSON.stringify({ type: "error", error: "Фото слишком большое. Пожалуйста, уменьшите размер до 50 МБ или сделайте новое фото." }) + "\n");
+        return res.end();
+      }
+      if (err) return next(err);
+      next();
+    });
+  }, async (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
+    // Track client connection — continue processing even if client disconnects
+    let clientConnected = true;
+    req.on('close', () => { clientConnected = false; });
+    const safeWrite = (data: string) => {
+      if (!res.writableEnded) {
+        try { res.write(data); } catch (e) {}
+      }
+    };
+
     let heartbeat: ReturnType<typeof setInterval> | undefined;
 
+    // Variables for emergency save in catch block
+    let greetingAndAnalysis: string | undefined;
+    let bodyTypeSummary: string | undefined;
+    let astroReading: string | null | undefined;
+    let looksWithImages: any[] | undefined;
+    let lockedOrderId: string | null = null;
+    let lockedPromoCode: string | null = null;
+    let paymentId = "";
+    let stylizeTier: "standard" | "premium" = "standard";
+
     try {
-      res.write(JSON.stringify({ type: "progress", step: 0.8, text: "Фотографии получены сервером..." }) + "\n");
-
-      // Track request stats and user diversity
-      const s = loadStats();
-      s.totalRequests = (s.totalRequests || 0) + 1;
-      const today = new Date().toISOString().slice(0, 10);
-      s.requestsByDay[today] = (s.requestsByDay[today] || 0) + 1;
-
-      // Для разнообразия образов при повторных обращениях
-      const userId = (req.body.userId || "").toString().trim();
-      const userRequestCount = userId ? ((s.userRequests || {})[userId] || 0) + 1 : 1;
-      if (userId) {
-        s.userRequests = s.userRequests || {};
-        s.userRequests[userId] = userRequestCount;
-      }
-      saveStats(s);
+      safeWrite(JSON.stringify({ type: "progress", step: 0.8, text: "Фотографии получены сервером..." }) + "\n");
 
       const files = req.files as MulterFile[];
       if (!files || files.length === 0) {
-        res.write(JSON.stringify({ type: "error", error: "No images uploaded" }) + "\n");
+        safeWrite(JSON.stringify({ type: "error", error: "No images uploaded" }) + "\n");
         return res.end();
+      }
+
+      paymentId = sanitizeOrderId(req.body.paymentId);
+      const promoCodeForAccess = (req.body.promoCode || "").toString().trim().toUpperCase();
+      if (!paymentId && !promoCodeForAccess && isOwnerRequest(req)) {
+        paymentId = sanitizeOrderId(
+          `owner_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+        );
+        const nowIso = new Date().toISOString();
+        const pickupBody = createUniquePickupCode();
+        linkOrderToPickupCode(pickupBody, paymentId);
+        stylizeTier = String(req.body.tier || "") === "premium" || Number(req.body.looksCount) > 3 ? "premium" : "standard";
+        saveOrder({
+          paymentId,
+          tier: stylizeTier,
+          status: "processing",
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          paidAt: nowIso,
+          startedAt: nowIso,
+          unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+          error: null,
+          pickupCode: displayPickupCode(pickupBody),
+          visitorId: sanitizeVisitorId(req.body.visitorId) || undefined,
+          userName: String(req.body.userName || "").trim().slice(0, 80) || undefined,
+        });
+        activeOrderIds.add(paymentId);
+        lockedOrderId = paymentId;
+        safeWrite(JSON.stringify({
+          type: "order",
+          paymentId,
+          pickupCode: displayPickupCode(pickupBody),
+          text: "Владелец — генерация без оплаты, результат в «Мои образы».",
+        }) + "\n");
+      } else if (paymentId) {
+        const paidOrder = await ensurePaidOrder(paymentId);
+        if (!paidOrder?.paidAt) {
+          safeWrite(JSON.stringify({ type: "error", error: "Оплата заказа не подтверждена." }) + "\n");
+          return res.end();
+        }
+        if (paidOrder.status === "expired") {
+          safeWrite(JSON.stringify({ type: "error", error: "Срок продолжения этого заказа истёк." }) + "\n");
+          return res.end();
+        }
+        const existingResult = path.join(RESULTS_DIR, paymentId, "result.json");
+        if (fs.existsSync(existingResult)) {
+          safeWrite(JSON.stringify({ type: "error", error: "Заказ уже создан. Откройте «Мои образы» — там можно повторить только отсутствующие фото." }) + "\n");
+          return res.end();
+        }
+        if (activeOrderIds.has(paymentId)) {
+          safeWrite(JSON.stringify({ type: "error", error: "Этот заказ уже генерируется. Его можно закрыть и открыть позже в разделе «Мои образы»." }) + "\n");
+          return res.end();
+        }
+        if (paidOrder.status === "processing") {
+          updateOrder(paymentId, { status: "failed", error: null });
+        }
+        stylizeTier = paidOrder.tier === "premium" ? "premium" : "standard";
+        activeOrderIds.add(paymentId);
+        lockedOrderId = paymentId;
+      } else {
+        const promo = promoCodeForAccess ? promos[promoCodeForAccess] : null;
+        if (!promo || promo.used) {
+          safeWrite(JSON.stringify({ type: "error", error: "Для генерации нужна подтверждённая оплата или действующий промокод." }) + "\n");
+          return res.end();
+        }
+        if (promo.tier === "grooming") {
+          safeWrite(JSON.stringify({ type: "error", error: "Этот промокод только для причёсок — откройте «Причёска и уход»." }) + "\n");
+          return res.end();
+        }
+        if (promo.tier !== "standard" && promo.tier !== "premium") {
+          safeWrite(JSON.stringify({ type: "error", error: "Этот промокод не для образов." }) + "\n");
+          return res.end();
+        }
+        if (activePromoCodes.has(promoCodeForAccess)) {
+          safeWrite(JSON.stringify({ type: "error", error: "Этот промокод уже используется для генерации." }) + "\n");
+          return res.end();
+        }
+        // Как у оплаты: создаём заказ и папку результата — иначе при обрыве/рестарте нечего открыть в «Мои образы»
+        paymentId = sanitizeOrderId(
+          `promo_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+        );
+        const nowIso = new Date().toISOString();
+        const promoPhone = normalizePhone(req.body.phone);
+        if (promoPhone) linkOrderToPhone(promoPhone, paymentId);
+        const pickupBody = createUniquePickupCode();
+        linkOrderToPickupCode(pickupBody, paymentId);
+        stylizeTier = promo.tier === "premium" ? "premium" : "standard";
+        saveOrder({
+          paymentId,
+          tier: promo.tier,
+          status: "processing",
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          paidAt: nowIso,
+          startedAt: nowIso,
+          unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+          error: null,
+          pickupCode: displayPickupCode(pickupBody),
+          phone: promoPhone || undefined,
+          visitorId: sanitizeVisitorId(req.body.visitorId) || undefined,
+          userName: String(req.body.userName || "").trim().slice(0, 80) || undefined,
+        });
+        activePromoCodes.add(promoCodeForAccess);
+        lockedPromoCode = promoCodeForAccess;
+        activeOrderIds.add(paymentId);
+        lockedOrderId = paymentId;
+        safeWrite(JSON.stringify({
+          type: "order",
+          paymentId,
+          tier: promo.tier,
+          pickupCode: displayPickupCode(pickupBody),
+          text: "Заказ по промокоду создан — результат сохранится в «Мои образы».",
+        }) + "\n");
+      }
+
+      {
+        const resultDir = path.join(RESULTS_DIR, paymentId);
+        fs.mkdirSync(resultDir, { recursive: true });
+        for (const name of fs.readdirSync(resultDir)) {
+          if (/^source_\d+\.(jpg|png|webp)$/i.test(name)) fs.rmSync(path.join(resultDir, name), { force: true });
+        }
+        files.forEach((file, idx) => {
+          const ext = file.mimetype.includes("png") ? "png" : file.mimetype.includes("webp") ? "webp" : "jpg";
+          fs.writeFileSync(path.join(resultDir, `source_${idx}.${ext}`), file.buffer);
+        });
+        const visitorIdEarly = sanitizeVisitorId(req.body.visitorId);
+        const phoneEarly = normalizePhone(req.body.phone) || readOrder(paymentId)?.phone || "";
+        if (phoneEarly) linkOrderToPhone(phoneEarly, paymentId);
+        writeJsonAtomic(path.join(resultDir, "input.json"), {
+          height: req.body.height || "",
+          weight: req.body.weight || "",
+          wishes: req.body.wishes || "",
+          looksCount: req.body.looksCount || "",
+          userName: req.body.userName || "",
+          budget: req.body.budget || "",
+          birthDate: req.body.birthDate || "",
+          season: req.body.season || "",
+          seasons: req.body.seasons || "",
+          occasions: req.body.occasions || "",
+          promoCode: promoCodeForAccess || "",
+          visitorId: visitorIdEarly || "",
+          phone: phoneEarly || "",
+          savedAt: new Date().toISOString(),
+        });
+        updateOrder(paymentId, {
+          status: "processing",
+          startedAt: new Date().toISOString(),
+          completedLooks: 0,
+          error: null,
+          visitorId: visitorIdEarly || undefined,
+          userName: String(req.body.userName || "").trim().slice(0, 80) || undefined,
+          phone: phoneEarly || undefined,
+          unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+        });
+        if (visitorIdEarly) ensureUserProfile(visitorIdEarly, String(req.body.userName || ""));
       }
 
       const height = req.body.height || "не указан";
       const weight = req.body.weight || "не указан";
       const rawWishes = (req.body.wishes || "").toString().slice(0, 500).trim();
+      const occasionRaw = (req.body.occasions || "").toString().slice(0, 600).trim();
+
+      // Блокировка повторной генерации: если для этого paymentId уже есть сохранённый
+      // результат (моложе 5 часов) — не запускаем новую генерацию, сразу возвращаем ошибку.
+      // Пользователь должен смотреть свои уже сгенерированные образы, а не тратить токены заново.
+      const earlyPaymentId = paymentId;
+      if (earlyPaymentId) {
+        try {
+          const existingResult = path.join(RESULTS_DIR, earlyPaymentId, "result.json");
+          if (fs.existsSync(existingResult)) {
+            const st = fs.statSync(existingResult);
+            if (Date.now() - st.mtimeMs < RESULTS_TTL_MS) {
+              safeWrite(JSON.stringify({ type: "error", error: "У вас уже есть сгенерированные образы. Откройте раздел «Мои образы», чтобы посмотреть их. Создать новые можно через 5 часов." }) + "\n");
+              return res.end();
+            }
+          }
+        } catch {}
+      }
+      // Сезон: Стандарт может дать свой сезон на каждый образ (лето, лето, осень).
+      const wishesLower = `${occasionRaw} ${rawWishes}`.toLowerCase();
+      const seasonMap: Record<string, string> = {
+        "лет": "лето", "жара": "лето", "пляж": "лето", "отпуск": "лето", "курорт": "лето",
+        "осень": "осень", "дождь": "осень",
+        "зим": "зима", "холод": "зима", "мороз": "зима",
+        "весн": "весна",
+      };
+      const allowedSeasons = ["зима", "весна", "лето", "осень"];
+      const parseLookSeasons = (body: any): string[] => {
+        const raw = body?.seasons;
+        if (raw) {
+          try {
+            const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+            if (Array.isArray(arr)) {
+              return arr
+                .map((s: any) => String(s).trim().toLowerCase())
+                .filter((s: string) => allowedSeasons.includes(s));
+            }
+          } catch {}
+        }
+        const one = (body?.season || "").toString().trim().toLowerCase();
+        if (one.includes(",")) {
+          return one.split(",").map((s: string) => s.trim()).filter((s: string) => allowedSeasons.includes(s));
+        }
+        return allowedSeasons.includes(one) ? [one] : [];
+      };
+      const parsedLookSeasons = parseLookSeasons(req.body);
+      const seasonFromForm = (req.body.season || "").toString().trim().toLowerCase();
+      const detectedSeason =
+        (parsedLookSeasons.length === 1 ? parsedLookSeasons[0] : null)
+        || (allowedSeasons.includes(seasonFromForm) ? seasonFromForm : null)
+        || Object.entries(seasonMap).find(([k]) => wishesLower.includes(k))?.[1];
+      const outerwearBySeason =
+        `🧥 ВЕРХНЯЯ ОДЕЖДА — ОБЯЗАТЕЛЬНА в КАЖДОМ образе отдельным item в items[] с category "верхняя одежда" и searchQuery на русском:\n` +
+        `- зима: пальто / пуховик / тёплая куртка / шерстяное пальто\n` +
+        `- осень: тренч / лёгкое пальто / куртка / пиджак с подкладкой\n` +
+        `- весна: плащ / лёгкое пальто / куртка / пиджак\n` +
+        `- лето: лёгкий пиджак / overshirt / льняной пиджак / лёгкая куртка-бомбер (НЕ пропускай — рабочий и городской образ без верхнего слоя неполный)\n` +
+        `Для офиса/корпоратива пиджак или куртка ОБЯЗАТЕЛЬНЫ всегда. Без ссылки на верхнюю одежду образ считается браком.
+СЕЗОН ВАЖНЕЕ ШАБЛОНА «ПЛАТЬЕ В РЕСТОРАН». Место задаёт фон, сезон задаёт одежду.
+- зима + ресторан / ужин / свидание / театр / вечер: НЕ платье. На человеке НАДЕТО пальто, кейп или шуба (видно в кадре) и вечерняя одежда: блуза или топ с рукавом, шерстяные брюки или юбка на плотных колготках, сапоги или закрытые туфли. Запрещены открытые плечи, лён, босоножки, летнее платье.
+- зима в любом поводе: верхняя одежда надета, закрытая зимняя обувь, нет голых ног.
+- осень: тренч или пальто надето, закрытая обувь, не сарафан.
+- весна: плащ или лёгкое пальто, не пуховик и не пляжное платье.
+- лето: лёгкие ткани, без зимнего пальто и меха.
+editPrompt описывает именно эти слои, даже если повод обычно рисуют платьем.`;
+      const mixedSeasonLines = (seasons: string[]) =>
+        seasons.map((s, i) => `- Образ ${i + 1}: строго ${s}`).join("\n");
+      let seasonInstruction = parsedLookSeasons.length > 1
+        ? `\n🗓️ СЕЗОНЫ ПО ОБРАЗАМ (ОБЯЗАТЕЛЬНО):\n${mixedSeasonLines(parsedLookSeasons)}\nКаждый look в массиве looks — СВОЙ сезон из списка. Если сезоны разные — НЕ делай все образы под одно время года. Ткани, обувь, слои и верхняя одежда должны соответствовать сезону этого образа.\n${outerwearBySeason}`
+        : detectedSeason
+        ? `\n🗓️ СЕЗОН (ОБЯЗАТЕЛЬНО): ${detectedSeason}. ВСЕ образы строго под этот сезон (ткани, обувь, слои).\n${outerwearBySeason}`
+        : `\n🧥 ВЕРХНЯЯ ОДЕЖДА: в каждом образе добавь отдельный item category "верхняя одежда" (пиджак/куртка/пальто по погоде) с searchQuery — иначе образ неполный для покупки.`;
       const wishes = sanitizeWishes(rawWishes);
-      const looksCount = Math.min(5, Math.max(1, parseInt(req.body.looksCount) || 3));
+      const promoCode = (req.body.promoCode || "").toString().trim().toUpperCase();
+      const budgetRaw = parseInt((req.body.budget || "").toString()) || 0;
+      const budgetInstruction = budgetRaw > 0
+        ? `\n\n💰 БЮДЖЕТ ПОЛЬЗОВАТЕЛЯ: ${budgetRaw.toLocaleString("ru-RU")} ₽ на один образ. КРИТИЧЕСКИ ВАЖНО: сумма всех items[] в каждом образе НЕ должна превышать ${budgetRaw.toLocaleString("ru-RU")} ₽. Подбирай реальные вещи в этом ценовом диапазоне. Расставляй приоритеты: сначала ключевые вещи образа, потом аксессуары. Указывай честные цены — не занижай и не завышай.`
+        : "";
+      const requestedLooks = parseInt(String(req.body.looksCount || ""), 10);
+      const looksCount = stylizeTier === "premium"
+        ? Math.min(5, Math.max(1, Number.isFinite(requestedLooks) && requestedLooks > 0 ? requestedLooks : 5))
+        : 3;
+      if (parsedLookSeasons.length > 1) {
+        const forLooks = parsedLookSeasons.slice(0, looksCount);
+        while (forLooks.length < looksCount) forLooks.push(forLooks[forLooks.length - 1] || "лето");
+        seasonInstruction =
+          `\n🗓️ СЕЗОНЫ ПО ОБРАЗАМ (ОБЯЗАТЕЛЬНО):\n${mixedSeasonLines(forLooks)}\nКаждый look в массиве looks — СВОЙ сезон из списка. Если сезоны разные — НЕ делай все образы под одно время года. Ткани, обувь, слои и верхняя одежда должны соответствовать сезону этого образа.\n${outerwearBySeason}`;
+      }
+      if (paymentId) updateOrder(paymentId, { expectedLooks: looksCount });
       const userName = (req.body.userName || "").toString().trim().slice(0, 50);
+      const visitCount = Math.max(1, parseInt(req.body.visitCount) || 1);
+      const visitorId = sanitizeVisitorId(req.body.visitorId);
+      const pastLooksClient = (req.body.pastLooks || "").toString().trim().slice(0, 500);
+      const userProfile = visitorId ? (ensureUserProfile(visitorId, userName) || readUserProfile(visitorId)) : null;
+      const pastLooksInstruction = buildStyleHistoryInstruction(userProfile, pastLooksClient);
+      const sessionCount = userProfile?.sessions?.length || 0;
+      const isReturning = visitCount > 1 || sessionCount > 0;
+      const effectiveVisit = Math.max(visitCount, sessionCount + 1);
+      const returningInstruction = isReturning
+        ? `ВАЖНО: это визит №${effectiveVisit} этого пользователя (уже было ${sessionCount} сохранённых сессий стиля). Тон приветствия должен быть тем теплее и дружелюбнее, чем больше визитов:
+- Визит 2-3: как старый знакомый — "О, снова вы!", "Рад снова вас видеть!", "Снова в деле!"
+- Визит 4-6: как близкий знакомый — "О, это уже традиция!", "Мой любимый клиент снова здесь!", "Я уже начинаю знать ваш вкус"
+- Визит 7+: как лучший друг — "Ну наконец-то!", "Я уже скучал!", "Без вас тут было скучновато"
+ЭКСПЕРИМЕНТ: поскольку человек уже был — предложи ему что-то смелее обычного и НЕ ПОХОЖЕЕ на прошлые сессии. ОДИН из образов сделай экспериментальным — выйди за рамки привычного стиля этого человека. В описании этого образа добавь реплику стилиста про эксперимент. Каждый раз придумывай РАЗНЫЙ оборот. `
+        : "";
       const nameInstruction = userName ? `Обращайся к пользователю по имени "${userName}" в приветствии и 1-2 раза по ходу анализа. ` : "";
 
       // Astro block — parse birth date and compute zodiac sign
       const birthDateRaw = (req.body.birthDate || "").toString().trim();
-      const birthRegion = (req.body.birthRegion || "").toString().trim();
-      const birthCity = (req.body.birthCity || "").toString().trim();
-      const birthTime = (req.body.birthTime || "").toString().trim();
+      console.log("[Astro] birthDateRaw received:", JSON.stringify(birthDateRaw));
+      console.log("[Astro] req.body keys:", Object.keys(req.body));
       let zodiacBlock = "";
       if (birthDateRaw) {
         const [d, m] = birthDateRaw.split(".").map(Number);
@@ -909,19 +4849,17 @@ loadList();
           const now = new Date();
           const monthName = now.toLocaleString("ru-RU", { month: "long" });
           const year = now.getFullYear();
-          zodiacBlock = zodiacBlock.replace("Текущий месяц: ${monthName} ${year}", `Текущий месяц: ${monthName} ${year}
-${birthRegion || birthCity || birthTime ? `Место рождения: ${birthRegion || ""}${birthCity ? (birthRegion ? ", " : "") + birthCity : ""}${birthTime ? ", время: " + birthTime : ""}` : ""}
-${birthRegion && birthCity && birthTime ? "✅ Все данные для точного гороскопа получены!" : "⚠️ Для полного гороскопа нужны: область, город и время рождения."}`);
+          zodiacBlock = `\n\n♦ АСТРО-ДАННЫЕ ПОЛЬЗОВАТЕЛЯ:\nДата рождения: ${birthDateRaw}\nЗнак зодиака: ${sign}\nТекущий месяц: ${monthName} ${year}\n\n⭐ ЗАДАЧА ПЕРСОНАЛЬНОГО ПРЕДСКАЗАНИЯ:\nПосле основного анализа добавь поле astroReading — живое персональное предсказание на ${monthName}. ВАЖНО: описывай внешность и характер ТОЛЬКО по оригинальной загруженной фотографии, не по сгенерированным образам. Формат — поток предсказания, не сухие категории:\n\n1. ПОРТРЕТ: Назови 2-3 черты личности ${sign} и найди их отражение в реальной внешности человека на фото (взгляд, черты лица, энергетика). Конкретно.\n\n2. ГЛАВНАЯ ТЕМА ${monthName.toUpperCase()}: Что несёт этот период — ключевой посыл судьбы для ${sign} прямо сейчас. 2-3 предложения.\n\n3. ВОЗМОЖНОСТИ: Что важно не упустить, какие двери открываются, счастливые моменты месяца. Интригующе и конкретно.\n\n4. ПРЕДУПРЕЖДЕНИЯ: Чего избегать, скрытые риски, что может пойти не так — честно и без прикрас.\n\n5. К ЧЕМУ ГОТОВИТЬСЯ: Что придёт в жизнь в ближайшее время — событие, встреча, перемена. Добавь интригу.\n\n6. ИНТУИЦИЯ ЗВЁЗД: Личный совет именно этому человеку — исходя из его внешности и энергетики ${sign}. Мистично и точно.\n\n7. ОБЯЗАТЕЛЬНО завершить фразой-крючком — загадочной и интригующей, намекающей что в следующем месяце звёзды раскроют нечто важное. Заканчивай словами: "Возвращайтесь — прогноз обновляется каждый месяц 🌙"\n\nВАЖНО: только ${monthName}, не год. Пиши как настоящий астролог — живо, лично, с интригой. Никаких скучных перечислений.`;
         }
       }
 
       if (!POLZA_API_KEY) {
-        res.write(JSON.stringify({ type: "error", error: "API ключ не настроен. Добавьте POLZA_API_KEY в .env" }) + "\n");
+        safeWrite(JSON.stringify({ type: "error", error: "API ключ не настроен. Добавьте POLZA_API_KEY в .env" }) + "\n");
         return res.end();
       }
 
       heartbeat = setInterval(() => {
-        res.write(JSON.stringify({ type: "heartbeat" }) + "\n");
+        safeWrite(JSON.stringify({ type: "heartbeat" }) + "\n");
       }, 15000);
 
       // Use the first image as reference
@@ -929,7 +4867,33 @@ ${birthRegion && birthCity && birthTime ? "✅ Все данные для точ
       const referenceImageBase64 = referenceImage.buffer.toString("base64");
       const mimeType = referenceImage.mimetype;
 
+      safeWrite(JSON.stringify({ type: "progress", step: 0.85, text: "Смотрим фото — определяем, чей это образ..." }) + "\n");
+      const detectedGender = await detectGenderFromPhoto(referenceImageBase64, mimeType);
+      const genderBlock = genderWardrobeInstruction(detectedGender);
+      if (paymentId) {
+        try {
+          const inputPath = path.join(RESULTS_DIR, paymentId, "input.json");
+          if (fs.existsSync(inputPath)) {
+            const prev = JSON.parse(fs.readFileSync(inputPath, "utf-8"));
+            writeJsonAtomic(inputPath, { ...prev, detectedGender: detectedGender || null });
+          }
+        } catch {}
+      }
+
       // Prepare messages with image for Gemini analysis
+      const occasionSlotsForGuide = expandOccasionList(occasionRaw);
+      const mixedOccasions = occasionSlotsForGuide.length > 1;
+      const perLookVenues = (occasionSlotsForGuide.length > 0 ? occasionSlotsForGuide : Array.from({ length: looksCount }, () => occasionRaw || wishes || "город"))
+        .slice(0, looksCount)
+        .map((name, i) => `Look ${i + 1} (${name || "повод"}): SCENE = ${occasionVenueHint(name || wishes)} — люкс, ДРУГОЕ место, чем у соседних looks.`)
+        .join("\n");
+      const occasionGuide = mixedOccasions
+        ? `\n\n🎯 ПОВОДЫ ПО ОБРАЗАМ (обязательно, тот же порядок, что и сезоны):\n${occasionRaw}\nКаждый look — СВОЙ повод. Не своди все образы к одному типу, если поводы разные.\n`
+        : getOccasionStyleGuide(`${occasionRaw} ${wishes}`);
+      const locationLock = `\n\n📍 Место задаёт интерьер. Сезон задаёт одежду и не отменяется местом. Всё — luxury, не парк и не кусты. У КАЖДОГО look свой антураж, не повторять фон.
+${perLookVenues}
+Ресторан = зал fine dining. Свидание / романтический ужин = стол на двоих, приглушённый свет, свечи. Яхта = НА палубе. Курорт = вилла / beach club. Осень и лето меняют одежду и свет, но не переносят человека в парк.
+В editPrompt в SCENE напиши конкретное люксовое место (мрамор, тик, хрусталь, свечи) — не «autumn park».\n`;
       const wishesBlock = wishes
         ? `\n\n🌟 ОСОБЫЕ ПОЖЕЛАНИЯ ПОЛЬЗОВАТЕЛЯ (PREMIUM — ВЫСШИЙ ПРИОРИТЕТ): "${wishes}"\n\n⚠️ КРИТИЧЕСКОЕ ПРАВИЛО ПРИ НАЛИЧИИ ПОЖЕЛАНИЙ:\nЕсли пользователь сформулировал конкретный запрос — ПОЛНОСТЬЮ ИГНОРИРУЙ структуру "офис/вечер/color-block" и стандартный список из 6 направлений. Создавай РОВНО то, что человек попросил.\n\nКонкретные сценарии:\n- "хочу образ рокера и 2 для свидания" → ровно 1 рокер + 2 свидания (НЕ офис/вечер/color-block!)\n- "три ярких на курорт" → все 3 курортных, можно оставить летние правила\n- "посоветуй макияж/причёску для X" → расширь раздел груминга в каждом образе с конкретикой под X (продукты, бренды, шаги)\n- "дай совет на первое свидание" → добавь блок "💬 Совет для свидания" в каждом образе: парфюм-нота, как зайти, что говорить, чего избегать\n- Любой другой запрос — БУКВАЛЬНО следуй пожеланию\n\nОБЯЗАТЕЛЬНЫЙ ПУНКТ ПАРФЮМ:\nЕсли пожелание касается свидания/вечера/мероприятия/стиля жизни — в каждом образе ОБЯЗАТЕЛЬНО рекомендуй парфюм (одну конкретную нишевую/премиум модель). ВАЖНО: каждый раз выбирай РАЗНЫЕ ароматы, не повторяй одни и те же. Для вдохновения — большой пул на выбор:\n\nМУЖСКИЕ/УНИСЕКС нишевые: Le Labo Santal 33, Le Labo Bergamote 22, Le Labo Rose 31, Maison Margiela Replica Jazz Club, Maison Margiela Replica By the Fireplace, Maison Margiela Replica Sailing Day, Tom Ford Tobacco Vanille, Tom Ford Oud Wood, Tom Ford Grey Vetiver, Tom Ford Neroli Portofino, Byredo Mojave Ghost, Byredo Bal d\'Afrique, Byredo Gypsy Water, Creed Aventus, Creed Silver Mountain Water, Acqua di Parma Colonia, Acqua di Parma Blu Mediterraneo, Diptyque Tam Dao, Diptyque Eau des Sens, Memo Paris Irish Leather, Parfums de Marly Layton, Parfums de Marly Percival, Initio Oud for Greatness, Initio Rehab, Nasomatto Black Afgano, Juliette Has a Gun Not a Perfume, Comme des Garçons Series 3 Incense Kyoto, Serge Lutens Ambre Sultan, Serge Lutens Chergui, Xerjoff Naxos, Xerjoff Alexandria II, Roja Dove Oligarch\n\nЖЕНСКИЕ/УНИСЕКС нишевые: Maison Francis Kurkdjian Baccarat Rouge 540, Maison Francis Kurkdjian Aqua Celestia, Maison Francis Kurkdjian À la Rose, Diptyque Philosykos, Diptyque Do Son, Diptyque Eau Rose, Chloé Atelier des Fleurs Rose Naturelle, Byredo Blanche, Byredo La Tulipe, Frederic Malle Portrait of a Lady, Frederic Malle Musc Ravageur, Frederic Malle Une Fleur de Cassie, Guerlain Spiritueuse Double Vanille, Guerlain Mon Guerlain Bloom of Rose, Penhaligon\'s Empressa, Penhaligon\'s Juniper Sling, Jo Malone Peony & Blush Suede, Jo Malone Wood Sage & Sea Salt, Jo Malone Lime Basil & Mandarin, Annick Goutal Petite Chérie, Memo Paris Inlé, Amouage Reflection Woman, Amouage Honour Woman, Serge Lutens Sa Majesté la Rose, Etat Libre d\'Orange Putain des Palaces, Comme des Garçons Wonderwood, Viktor&Rolf Flowerbomb Nectar, Narciso Rodriguez for Her Musc Noir\n\nВсегда объясняй ПОЧЕМУ этот конкретный аромат подходит к образу/ситуации/характеру человека.\n\nЕсли пожелания нет или они общие (типа "красиво") — следуй стандартной структуре офис/вечер/color-block.`
         : "";
@@ -937,101 +4901,122 @@ ${birthRegion && birthCity && birthTime ? "✅ Все данные для точ
         {
           role: "user",
           content: [
-            { type: "text", text: `${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.${userRequestCount > 1 ? `\n\n⚠️ IMPORTANT: This is user request #${userRequestCount}. To ensure variety, GENERATE COMPLETELY DIFFERENT STYLES from previous requests. Vary: silhouettes, color palettes, moods, occasions, formality levels. NO repeating similar looks from previous sessions.` : ""}\n\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${wishesBlock}${zodiacBlock}` },
+            { type: "text", text: `${returningInstruction}${pastLooksInstruction}${nameInstruction}CRITICAL OVERRIDE: You MUST generate EXACTLY ${looksCount} look${looksCount > 1 ? "s" : ""} in the "looks" array — no more, no less. Ignore any default number mentioned in your instructions.${genderBlock}\nUser's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide ${looksCount} distinct fashion look${looksCount > 1 ? "s" : ""} based on this person. Use the 2026 fashion trends from the knowledge base.${seasonInstruction}${budgetInstruction}${wishesBlock}${occasionGuide}${locationLock}${zodiacBlock}` },
             { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
           ],
         },
       ];
 
-      // Step 0 (premium): если есть wishes — сначала ищем свежие тренды через Perplexity Sonar
-      let trendsContext = "";
-      if (wishes) {
-        res.write(JSON.stringify({ type: "progress", step: 0.9, text: "Ищем свежие модные тренды по твоему запросу..." }) + "\n");
-        try {
-          const trendsResp = await fetch(`${POLZA_BASE_URL}/chat/completions`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": `Bearer ${POLZA_API_KEY}` },
-            body: JSON.stringify({
-              model: "perplexity/sonar",
-              messages: [
-                { role: "system", content: "Ты — ассистент-исследователь модных трендов. Дай 3–5 коротких пунктов конкретики (что носят, какие вещи, цвета, бренды) по запросу. Только русский, никаких ссылок и markdown. Максимум 600 символов." },
-                { role: "user", content: `Найди свежие модные тренды лета 2026 по теме: "${wishes}". Что реально носят сейчас? Какие конкретные вещи, цвета, бренды? Дай 3–5 пунктов конкретики.` },
-              ],
-              temperature: 0.5,
-              max_tokens: 600,
-            }),
-          });
-          if (trendsResp.ok) {
-            const td = await trendsResp.json();
-            const content = td?.choices?.[0]?.message?.content;
-            if (typeof content === "string" && content.trim()) {
-              trendsContext = content.trim().slice(0, 1500);
-              console.log("[Trends] Got context:", trendsContext.length, "chars");
-            }
-          }
-        } catch (e: any) {
-          console.error("[Trends] Failed (non-blocking):", e.message);
-        }
-      }
+      // Step 1: Analyze with Gemini (same model on Standard and Premium)
+      safeWrite(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ фото и подбор образов с помощью AI..." }) + "\n");
 
-      // Step 1: Analyze with Gemini 3.1 Flash Lite
-      res.write(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ фото и подбор образов с помощью AI..." }) + "\n");
-
-      // Если есть wishes — temperature чуть выше для креативности, но не настолько чтобы JSON ломался
-      const analysisTemp = wishes ? 0.95 : 0.8;
-
-      // Подмешиваем тренды в последнее user-сообщение
-      if (trendsContext) {
-        const last = messages[messages.length - 1];
-        if (last && Array.isArray(last.content)) {
-          const textPart = last.content.find((c: any) => c.type === "text");
-          if (textPart) {
-            textPart.text += `\n\n📡 СВЕЖИЕ ТРЕНДЫ ИЗ ИНТЕРНЕТА (используй эти конкретные идеи):\n${trendsContext}`;
-          }
-        }
-      }
+      // Высокая температура для разнообразия образов при каждой генерации
+      const analysisTemp = 0.95;
 
       let analysisData: any;
+      let analysisText = "";
       try {
-        const analysisText = await callPolzaChat({
+        analysisText = await callAnalysisChat({
           model: ANALYSIS_MODEL,
           systemPrompt,
           messages,
           temperature: analysisTemp,
-          maxTokens: 8192,
+          maxTokens: looksCount >= 4 ? 12288 : 8192,
+          timeoutMs: looksCount >= 4 ? 180000 : 120000,
         });
-
-        if (typeof analysisText === "string") {
-          analysisData = safeJsonParse(analysisText);
-        } else {
-          analysisData = analysisText;
-        }
+        analysisData = typeof analysisText === "string" ? safeJsonParse(analysisText) : analysisText;
       } catch (e: any) {
+        console.error("[Analysis] failed:", e?.message || e);
         clearInterval(heartbeat);
+        if (paymentId) updateOrder(paymentId, { status: "failed", error: e.message || "Ошибка анализа изображения." });
         let msg = e.message;
         if (msg.includes("Quota") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("429")) {
           msg = "Превышен лимит запросов API. Подождите 1 минуту и попробуйте снова.";
         } else if (msg.includes("API key not valid") || msg.includes("API_KEY_INVALID") || msg.includes("401")) {
           msg = "Введен неверный API ключ. Пожалуйста, проверьте POLZA_API_KEY в настройках.";
         }
-        res.write(JSON.stringify({ type: "error", error: "Ошибка AI: " + msg }) + "\n");
+        safeWrite(JSON.stringify({ type: "error", error: "Ошибка AI: " + msg }) + "\n");
         return res.end();
       }
 
-      const { greetingAndAnalysis, bodyTypeSummary, astroReading, looks } = analysisData;
+      // Assign to outer variables for emergency save in catch
+      let looks: any[];
+      ({ greetingAndAnalysis, bodyTypeSummary, looks } = analysisData as any);
+      astroReading = analysisData?.astroReading;
+      looks = sanitizeLooksForGender(looks, detectedGender);
+      if (Array.isArray(looks) && looks.length > looksCount) looks = looks.slice(0, looksCount);
+
+      // Fallback: искать astroReading в raw-тексте между маркерами
+      if (!astroReading && analysisText) {
+        const match = analysisText.match(/⭐ ЗАДАЧА ПЕРСОНАЛЬНОГО ПРЕДСКАЗАНИЯ:([\s\S]*?)(?=\n\n[🎯🌈🌞]|$)/i);
+        if (match && match[1]) {
+          astroReading = match[1].trim();
+          console.log("[Astro] Found astroReading via fallback parsing");
+        }
+      }
+
+      console.log("[Astro] Final astroReading:", astroReading ? "present (" + astroReading.length + " chars)" : "MISSING");
+      console.log("[Astro] analysisData keys:", Object.keys(analysisData));
 
       if (!looks || !Array.isArray(looks) || looks.length === 0) {
         clearInterval(heartbeat);
-        res.write(JSON.stringify({ type: "error", error: "AI не смог сгенерировать образы. Попробуйте еще раз." }) + "\n");
+        if (paymentId) updateOrder(paymentId, { status: "failed", error: "AI не смог подготовить описания образов." });
+        safeWrite(JSON.stringify({ type: "error", error: "AI не смог сгенерировать образы. Попробуйте еще раз." }) + "\n");
         return res.end();
       }
 
-      res.write(JSON.stringify({ type: "progress", step: 1.5, text: "Анализ и подбор гардероба завершен. Переходим к визуализации..." }) + "\n");
+      const checkpointLooks = looks.map((look: any) => ({ ...look, image: null, imageError: null }));
+      if (paymentId) {
+        const resultDir = path.join(RESULTS_DIR, paymentId);
+        writeJsonAtomic(path.join(resultDir, "result.json"), {
+          greetingAndAnalysis,
+          bodyTypeSummary,
+          astroReading: astroReading || null,
+          looks: checkpointLooks,
+          savedAt: new Date().toISOString(),
+        });
+      }
 
-      // Step 2: Generate images with Nano Banana 2 — IN PARALLEL
-      res.write(JSON.stringify({ type: "progress", step: 2.0, text: `Визуализация ${looks.length} образов параллельно...` }) + "\n");
+      safeWrite(JSON.stringify({ type: "progress", step: 1.5, text: "Анализ и подбор гардероба завершен. Переходим к визуализации..." }) + "\n");
 
-      const looksWithImages = await Promise.all(looks.map(async (look: any) => {
+      // Step 2: все кадры сразу — Стандарт 3, Премиум до 5. Цена та же, ждать меньше.
+      safeWrite(JSON.stringify({
+        type: "progress",
+        step: 2.0,
+        text: `Рисуем ${looks.length} образов сразу — обычно около минуты…`,
+      }) + "\n");
+
+      const occasionSlots = expandOccasionList(occasionRaw);
+      const occasionTexts = looks.map((look: any, idx: number) =>
+        occasionSlots[idx] || occasionRaw || wishes || look.lookName || ""
+      );
+      const lookHints = looks.map((look: any) =>
+        [look.lookName, look.description, look.editPrompt].filter(Boolean).join(" ")
+      );
+      const luxuryPick = pickLuxuryScenes({
+        occasions: occasionTexts,
+        lookHints,
+        recentIds: userProfile?.recentSceneIds,
+        salt: Date.now() ^ Math.floor(Math.random() * 1e9),
+      });
+      console.log("[Scene] keys:", luxuryPick.keys.join(", "), "ids:", luxuryPick.ids.join(", "));
+      if (visitorId && luxuryPick.ids.length) {
+        try {
+          const p = ensureUserProfile(visitorId);
+          if (p) {
+            p.recentSceneIds = [...luxuryPick.ids, ...(p.recentSceneIds || [])].slice(0, 48);
+            saveUserProfile(p);
+          }
+        } catch (e) {
+          console.error("[Scenes] remember failed:", (e as Error).message);
+        }
+      }
+
+      // Track completed images for progress updates
+      let completedImages = 0;
+      const totalImages = looks.length;
+
+      looksWithImages = await Promise.all(looks.map(async (look: any, idx: number) => {
         let generatedImageBase64 = null;
         let imageGenerationError = null;
 
@@ -1040,13 +5025,60 @@ ${birthRegion && birthCity && birthTime ? "✅ Все данные для точ
           let lastError = "";
           for (let attempt = 0; attempt < 2; attempt++) {
             try {
-              const fluxPrompt = `High-end fashion editorial photography. Single person only, one subject in frame. ${sanitizeEditPrompt(look.editPrompt)}`;
+              const heightNum = parseFloat(String(height).replace(",", "."));
+              const weightNum = parseFloat(String(weight).replace(",", "."));
+              let bodyBuildInstruction = "";
+              if (!isNaN(heightNum) && !isNaN(weightNum) && heightNum > 100 && heightNum < 230 && weightNum > 30 && weightNum < 250) {
+                const bmi = weightNum / Math.pow(heightNum / 100, 2);
+                // Для полных людей — генерируем тело "минус 15-20 кг" от реального веса,
+                // но не ниже здорового минимума (BMI не ниже 22). Одинаково для всех трёх образов.
+                let targetWeight = weightNum;
+                let buildDesc = "";
+                let buildShort = "";
+                if (bmi >= 40) {
+                  const minWeight = 22 * Math.pow(heightNum / 100, 2);
+                  targetWeight = Math.max(weightNum - 20, minWeight);
+                } else if (bmi >= 35) {
+                  const minWeight = 22 * Math.pow(heightNum / 100, 2);
+                  targetWeight = Math.max(weightNum - 18, minWeight);
+                } else if (bmi >= 30) {
+                  const minWeight = 22 * Math.pow(heightNum / 100, 2);
+                  targetWeight = Math.max(weightNum - 15, minWeight);
+                } else if (bmi >= 27) {
+                  const minWeight = 22 * Math.pow(heightNum / 100, 2);
+                  targetWeight = Math.max(weightNum - 8, minWeight);
+                }
+                const targetBmi = targetWeight / Math.pow(heightNum / 100, 2);
+                if (targetBmi >= 35) { buildDesc = `very large plus-size heavy-set person, full round midsection, thick torso, wide hips, thick limbs, large frame`; buildShort = `very large heavy-set`; }
+                else if (targetBmi >= 30) { buildDesc = `plus-size heavy-set person, full midsection, broad frame, thick torso`; buildShort = `plus-size heavy-set`; }
+                else if (targetBmi >= 27) { buildDesc = `slightly fuller person with a soft midsection, fuller frame`; buildShort = `fuller`; }
+                else if (targetBmi >= 22) { buildDesc = `average medium-build person, proportionate frame, healthy weight`; buildShort = `average medium`; }
+                else { buildDesc = `slim lean narrow-build person, slender frame`; buildShort = `slim lean`; }
+
+                if (targetWeight < weightNum) {
+                  bodyBuildInstruction = `BODY: ${heightNum} cm, render ~${Math.round(targetWeight)} kg (${buildDesc}) — slightly slimmer than real ${weightNum} kg but still full-figured, not skinny. Clothing fit flatters this build.`;
+                } else {
+                  bodyBuildInstruction = `BODY: ${heightNum} cm / ${weightNum} kg, ${buildDesc}. Keep real proportions — do not slim down. Clothing fit flatters this ${buildShort} build.`;
+                }
+              }
+              const lookOccasion = occasionSlots[idx] || occasionRaw;
+              const fluxPrompt = buildOutfitImagePrompt({
+                editPrompt: look.editPrompt,
+                detectedGender: detectedGender || "person",
+                wishes: `${lookOccasion} ${wishes}`.trim(),
+                lookIdx: idx,
+                bodyBuildInstruction,
+                season: (parsedLookSeasons[idx] || detectedSeason || "").toString(),
+                atmosphere: luxuryPick.prompts[idx],
+                sceneLock: occasionSceneLockEn(luxuryPick.keys[idx] || occasionKeyForLook(lookOccasion || wishes, look.editPrompt || "")),
+                occasionKey: luxuryPick.keys[idx],
+              });
               imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
               if (imageDataUrl) break;
               lastError = "No image data returned from Flux model.";
             } catch (e: any) {
               lastError = e.message;
-              if (attempt === 0) await new Promise(r => setTimeout(r, 2000));
+              if (attempt < 1) await new Promise(r => setTimeout(r, 800));
             }
           }
           if (imageDataUrl) {
@@ -1063,11 +5095,44 @@ ${birthRegion && birthCity && birthTime ? "✅ Все данные для точ
           imageGenerationError = "No editPrompt provided for this look.";
         }
 
-        return { ...look, image: generatedImageBase64, imageError: imageGenerationError };
+        // Progress update after each image completes
+        completedImages++;
+        const progressStep = 2.0 + (completedImages / totalImages) * 1.5;
+        safeWrite(JSON.stringify({
+          type: "progress",
+          step: progressStep,
+          text: completedImages >= totalImages
+            ? `Готовы все ${totalImages} образа`
+            : `Готово ${completedImages} из ${totalImages} — остальные ещё рисуются…`,
+        }) + "\n");
+
+        const completedLook = { ...look, image: generatedImageBase64, imageError: imageGenerationError };
+        if (paymentId) {
+          try {
+            const resultDir = path.join(RESULTS_DIR, paymentId);
+            const imageRef = await persistGeneratedImage(paymentId, idx, generatedImageBase64);
+            checkpointLooks[idx] = { ...look, image: imageRef, imageError: imageGenerationError };
+            writeJsonAtomic(path.join(resultDir, "result.json"), {
+              greetingAndAnalysis,
+              bodyTypeSummary,
+              astroReading: astroReading || null,
+              looks: checkpointLooks,
+              savedAt: new Date().toISOString(),
+            });
+            updateOrder(paymentId, {
+              status: "processing",
+              completedLooks: checkpointLooks.filter((item: any) => !!item.image).length,
+              error: imageGenerationError || null,
+            });
+          } catch (checkpointError) {
+            console.error("[Checkpoint] failed:", checkpointError);
+          }
+        }
+        return completedLook;
       }));
 
       // Step 3: Send intermediate result with images so user sees greeting + looks immediately
-      res.write(JSON.stringify({
+      safeWrite(JSON.stringify({
         type: "partial_result",
         greetingAndAnalysis,
         bodyTypeSummary,
@@ -1075,215 +5140,989 @@ ${birthRegion && birthCity && birthTime ? "✅ Все данные для точ
         looks: looksWithImages,
       }) + "\n");
 
-      // Step 4: Build Google Shopping search URLs — универсальный поиск,
-      // не привязан к одному магазину, выдаёт товары из десятков площадок РФ
-      res.write(JSON.stringify({ type: "progress", step: 4.0, text: "Формируем поисковые ссылки..." }) + "\n");
+      // Save partial result immediately after image generation — survives if shopping URLs fail
+      if (paymentId) {
+        try {
+          const resultDir = path.join(RESULTS_DIR, paymentId);
+          fs.mkdirSync(resultDir, { recursive: true });
+          const looksForPartial = looksWithImages.map((look: any, idx: number) => ({
+            ...look,
+            image: checkpointLooks[idx]?.image || null,
+          }));
+          writeJsonAtomic(
+            path.join(resultDir, "result.json"),
+            { greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null, looks: looksForPartial, savedAt: new Date().toISOString() }
+          );
+        } catch (e) { console.error("[Partial save] failed:", e); }
+      }
 
-      const looksWithImagesAndUrls = looksWithImages.map((look: any) => {
-        const enrichedItems = (look.items || []).map((item: any) => {
-          const query = encodeURIComponent((item.searchQuery || item.name || "").toString());
-          return {
-            ...item,
-            wbUrl: `https://www.wildberries.ru/catalog/0/search.aspx?search=${query}`,
-            ozonUrl: `https://www.ozon.ru/search/?text=${query}`,
-            ymUrl: `https://market.yandex.ru/search?text=${query}`,
-          };
-        });
-        return { ...look, items: enrichedItems };
+      // Step 4: ищем реальные карточки товаров через веб-поиск (Perplexity); иначе — страницы поиска
+      safeWrite(JSON.stringify({ type: "progress", step: 4.0, text: "Ищем товары на маркетплейсах..." }) + "\n");
+
+      const looksWithImagesAndUrls = await enrichOutfitLooksWithWb(looksWithImages, (done, total) => {
+        if (total > 0 && (done === total || done % 3 === 0)) {
+          safeWrite(JSON.stringify({
+            type: "progress",
+            step: 4.0,
+            text: `Ищем товары на маркетплейсах... ${done}/${total}`,
+          }) + "\n");
+        }
       });
 
-      res.write(JSON.stringify({
+      // Persist result BEFORE sending to client — update with shopping URLs
+      if (paymentId) {
+        try {
+          const resultDir = path.join(RESULTS_DIR, paymentId);
+          fs.mkdirSync(resultDir, { recursive: true });
+          const looksForStorage = looksWithImagesAndUrls.map((look: any, idx: number) => ({
+            ...look,
+            image: checkpointLooks[idx]?.image || null,
+          }));
+          writeJsonAtomic(
+            path.join(resultDir, "result.json"),
+            { greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null, looks: looksForStorage, savedAt: new Date().toISOString() }
+          );
+        } catch (e) { console.error("[Result] Save failed:", e); }
+      }
+
+      if (paymentId) {
+        const completedLooks = checkpointLooks.filter((look: any) => !!look.image).length;
+        const isComplete = completedLooks === looksWithImagesAndUrls.length;
+        const completedAt = isComplete ? new Date().toISOString() : undefined;
+        const ttlMs = resultsTtlForUser(userName, { paid: true, visitorId });
+        updateOrder(paymentId, {
+          status: isComplete ? "ready" : "partial",
+          completedLooks,
+          completedAt,
+          visitorId: visitorId || undefined,
+          userName: userName || undefined,
+          resultExpiresAt: isComplete ? paidResultExpiresAtIso(ttlMs) : undefined,
+          unfinishedExpiresAt: isComplete ? undefined : new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+          error: isComplete ? null : "Не все изображения удалось создать. Повторите только отсутствующие фото.",
+        });
+        // Профиль пользователя + история стиля (для следующих визитов — другие образы)
+        if (visitorId) {
+          try {
+            recordUserStyleSession({
+              visitorId,
+              userName,
+              paymentId,
+              tier: String(req.body.tier || (promoCode ? "promo" : "standard")),
+              season: parsedLookSeasons.length
+                ? parsedLookSeasons.join(", ")
+                : String(req.body.season || "").trim(),
+              wishes: rawWishes,
+              looks: looksWithImagesAndUrls,
+            });
+          } catch (e) {
+            console.error("[UserProfile] record failed:", e);
+          }
+        }
+      }
+
+      // Промокод сгорает только когда ВСЕ фото готовы — иначе можно добить «Повторить генерацию»
+      if (promoCode && paymentId) {
+        const completedLooks = checkpointLooks.filter((look: any) => !!look.image).length;
+        if (completedLooks === looksWithImagesAndUrls.length && completedLooks > 0) {
+          try { markPromoUsed(promoCode); } catch (e) { console.error("[Promo] markPromoUsed failed:", e); }
+        }
+      }
+
+      safeWrite(JSON.stringify({
         type: "result",
+        paymentId: paymentId || undefined,
         greetingAndAnalysis,
         bodyTypeSummary,
         astroReading: astroReading || null,
         looks: looksWithImagesAndUrls,
       }) + "\n");
-      
+
       clearInterval(heartbeat);
-      res.end();
+      if (!res.writableEnded) res.end();
 
     } catch (error) {
       clearInterval(heartbeat);
       console.error("Error processing image in /api/stylize:", error);
-      res.write(JSON.stringify({ type: "error", error: (error as Error).message }) + "\n");
-      res.end();
+
+      // Emergency save: persist whatever was generated before the error
+      const paymentIdEmergency = paymentId || sanitizeOrderId(req.body?.paymentId);
+      if (paymentIdEmergency && greetingAndAnalysis && looksWithImages && looksWithImages.length > 0) {
+        try {
+          const resultDir = path.join(RESULTS_DIR, paymentIdEmergency);
+          fs.mkdirSync(resultDir, { recursive: true });
+          // Check if result.json already exists (saved by partial save)
+          const resultFile = path.join(resultDir, "result.json");
+          if (!fs.existsSync(resultFile)) {
+            const emergencyLooks = looksWithImages.map((look: any, idx: number) => {
+              let imageRef = look.image;
+              if (look.image && look.image.startsWith("data:")) {
+                const m = look.image.match(/^data:([^;]+);base64,(.+)$/);
+                if (m) {
+                  const ext = m[1].includes("png") ? "png" : "jpg";
+                  const imgFile = `look_${idx}.${ext}`;
+                  fs.writeFileSync(path.join(resultDir, imgFile), Buffer.from(m[2], "base64"));
+                  imageRef = `/api/result-image/${paymentIdEmergency}/${imgFile}`;
+                }
+              }
+              return { ...look, image: imageRef };
+            });
+            writeJsonAtomic(resultFile, {
+              greetingAndAnalysis, bodyTypeSummary, astroReading: astroReading || null,
+              looks: emergencyLooks, savedAt: new Date().toISOString()
+            });
+            console.log("[Emergency save] Saved partial result for", paymentIdEmergency);
+          }
+        } catch (saveErr) { console.error("[Emergency save] failed:", saveErr); }
+      }
+
+      if (paymentIdEmergency) {
+        const completedLooks = looksWithImages?.filter((look: any) => !!look.image).length || 0;
+        updateOrder(paymentIdEmergency, {
+          status: completedLooks > 0 ? "partial" : "failed",
+          completedLooks,
+          error: (error as Error).message,
+          unfinishedExpiresAt: new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+        });
+      }
+
+      safeWrite(JSON.stringify({ type: "error", error: (error as Error).message }) + "\n");
+      if (!res.writableEnded) res.end();
+    } finally {
+      if (lockedOrderId) activeOrderIds.delete(lockedOrderId);
+      if (lockedPromoCode) activePromoCodes.delete(lockedPromoCode);
     }
   });
 
-  // --- TRIAL: бесплатный анализ без картинок ---
-  app.post("/api/stylize-trial", upload.array("images", 1), async (req: Request, res: Response) => {
-    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
-
+  // Regenerate a single look image
+  app.post("/api/regenerate-image", upload.single("image"), async (req: Request, res: Response) => {
+    let retryKey = "";
     try {
-      res.write(JSON.stringify({ type: "progress", step: 0.5, text: "Фотография получена..." }) + "\n");
-
-      const s = loadStats();
-      s.totalRequests = (s.totalRequests || 0) + 1;
-      const today = new Date().toISOString().slice(0, 10);
-      s.requestsByDay[today] = (s.requestsByDay[today] || 0) + 1;
-      saveStats(s);
-
-      const files = req.files as MulterFile[];
-      if (!files || files.length === 0) {
-        res.write(JSON.stringify({ type: "error", error: "Загрузите фото" }) + "\n");
-        return res.end();
+      const paymentId = sanitizeOrderId(req.body.paymentId);
+      const lookIdx = parseInt(req.body.lookIdx || "0", 10);
+      if (!paymentId || !Number.isInteger(lookIdx) || lookIdx < 0) {
+        return res.status(400).json({ error: "Некорректный заказ или номер образа." });
       }
 
-      const height = req.body.height || "не указан";
-      const weight = req.body.weight || "не указан";
-      const userName = (req.body.userName || "").toString().trim().slice(0, 50);
-      const nameInstruction = userName
-        ? `Обращайся к пользователю по имени "${userName}" в приветствии. `
-        : "";
-
-      if (!POLZA_API_KEY) {
-        res.write(JSON.stringify({ type: "error", error: "API ключ не настроен" }) + "\n");
-        return res.end();
+      const order = await ensurePaidOrder(paymentId);
+      if (!order?.paidAt) return res.status(403).json({ error: "Оплата заказа не подтверждена." });
+      const expiresAt = order.resultExpiresAt || order.unfinishedExpiresAt;
+      if (order.status === "expired" || (expiresAt && new Date(expiresAt).getTime() <= Date.now())) {
+        cleanupOldResults();
+        return res.status(410).json({ error: "Срок хранения заказа истёк." });
+      }
+      // Только живая генерация в этом процессе — не блокируем «зависший» processing после рестарта
+      if (activeOrderIds.has(paymentId)) {
+        return res.status(409).json({ error: "Основная генерация этого заказа ещё выполняется." });
+      }
+      if (order.status === "processing") {
+        updateOrder(paymentId, { status: "partial", error: null });
       }
 
-      heartbeat = setInterval(() => {
-        res.write(JSON.stringify({ type: "heartbeat" }) + "\n");
-      }, 15000);
+      const resultDir = path.join(RESULTS_DIR, paymentId);
+      const resultFile = path.join(resultDir, "result.json");
+      if (!fs.existsSync(resultFile)) return res.status(409).json({ error: "Описание образов ещё не готово." });
+      const saved = JSON.parse(fs.readFileSync(resultFile, "utf-8"));
+      if (!saved.looks?.[lookIdx]) return res.status(404).json({ error: "Образ не найден." });
+      if (saved.looks[lookIdx].image) return res.json({ image: saved.looks[lookIdx].image, alreadyReady: true });
 
-      res.write(JSON.stringify({ type: "progress", step: 0.8, text: "Анализ фото и подбор образа..." }) + "\n");
+      retryKey = paymentId;
+      if (activeRetryKeys.has(retryKey)) return res.status(409).json({ error: "Для этого заказа уже повторяется другое фото." });
+      activeRetryKeys.add(retryKey);
 
-      const referenceImage = files[0];
-      const referenceImageBase64 = referenceImage.buffer.toString("base64");
-      const mimeType = referenceImage.mimetype;
+      const uploadedFile = req.file as MulterFile | undefined;
+      let sourceBuffer: Buffer;
+      let mimeType: "image/jpeg" | "image/png" | "image/webp";
+      if (uploadedFile) {
+        sourceBuffer = uploadedFile.buffer;
+        mimeType = uploadedFile.mimetype as "image/jpeg" | "image/png" | "image/webp";
+      } else {
+        const sourceName = fs.readdirSync(resultDir).find(name => /^source_0\.(jpg|png|webp)$/i.test(name));
+        if (!sourceName) return res.status(409).json({ error: "Исходное фото заказа не найдено." });
+        sourceBuffer = fs.readFileSync(path.join(resultDir, sourceName));
+        mimeType = sourceName.endsWith(".png") ? "image/png" : sourceName.endsWith(".webp") ? "image/webp" : "image/jpeg";
+      }
 
-      const messages = [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `${nameInstruction}User's Height: ${height} cm. User's Weight: ${weight} kg. Please analyze the attached photo and provide EXACTLY 1 fashion look in the "looks" array — no more, no less. Use the 2026 fashion trends from the knowledge base. Generate a single best look for this person.`,
-            },
-            { type: "image_url", image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` } },
-          ],
-        },
-      ];
-
-      let analysisData: any;
+      let input: any = {};
       try {
-        const analysisText = await callPolzaChat({
-          model: ANALYSIS_MODEL,
-          systemPrompt,
-          messages,
-          temperature: 0.85,
-          maxTokens: 8192,
-        });
+        const inputFile = path.join(resultDir, "input.json");
+        if (fs.existsSync(inputFile)) input = JSON.parse(fs.readFileSync(inputFile, "utf-8"));
+      } catch {}
+      const editPrompt = (saved.looks[lookIdx].editPrompt || req.body.editPrompt || "").toString().trim();
+      const wishes = (input.wishes || req.body.wishes || "").toString().trim();
+      const occasions = (input.occasions || req.body.occasions || "").toString().trim();
+      if (!editPrompt) return res.status(409).json({ error: "Инструкция для этого образа не сохранилась." });
 
-        if (typeof analysisText === "string") {
-          analysisData = safeJsonParse(analysisText);
-        } else {
-          analysisData = analysisText;
+      const referenceImageBase64 = sourceBuffer.toString("base64");
+      updateOrder(paymentId, { status: "partial", error: null });
+
+      let imageDataUrl: string | null = null;
+      let lastError = "";
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          const occasionSlots = expandOccasionList(occasions);
+          const lookOccasion = occasionSlots[lookIdx] || occasions;
+          let retrySeason = String(input.season || "").toLowerCase();
+          try {
+            const raw = input.seasons;
+            const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+            if (Array.isArray(arr) && arr[lookIdx]) retrySeason = String(arr[lookIdx]).toLowerCase();
+          } catch {}
+          const retryVisitor = sanitizeVisitorId(input.visitorId);
+          const retryProfile = retryVisitor ? readUserProfile(retryVisitor) : null;
+          const retryScene = pickLuxuryScenes({
+            occasions: [lookOccasion || wishes],
+            lookHints: [editPrompt],
+            recentIds: retryProfile?.recentSceneIds,
+            salt: Date.now() ^ (attempt + 1) * 9973,
+          });
+          if (retryVisitor && retryScene.ids[0]) {
+            try {
+              const p = ensureUserProfile(retryVisitor);
+              if (p) {
+                p.recentSceneIds = [...retryScene.ids, ...(p.recentSceneIds || [])].slice(0, 48);
+                saveUserProfile(p);
+              }
+            } catch {}
+          }
+          const fluxPrompt = buildOutfitImagePrompt({
+            editPrompt,
+            detectedGender: (input.detectedGender || "person").toString(),
+            wishes: `${lookOccasion} ${wishes}`.trim(),
+            lookIdx,
+            season: retrySeason,
+            atmosphere: retryScene.prompts[0],
+            sceneLock: occasionSceneLockEn(retryScene.keys[0] || occasionKeyForLook(lookOccasion || wishes, editPrompt)),
+            occasionKey: retryScene.keys[0],
+          });
+          imageDataUrl = await generateImageWithFlux(fluxPrompt, referenceImageBase64, mimeType);
+          if (imageDataUrl) break;
+        } catch (e: any) {
+          lastError = e.message;
+          if (attempt < 4) await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
         }
-      } catch (e: any) {
-        clearInterval(heartbeat);
-        let msg = e.message;
-        if (msg.includes("Quota") || msg.includes("429")) {
-          msg = "Превышен лимит. Попробуйте через минуту.";
-        }
-        res.write(JSON.stringify({ type: "error", error: "Ошибка AI: " + msg }) + "\n");
-        return res.end();
       }
 
-      const { greetingAndAnalysis, looks } = analysisData;
-
-      if (!looks || !Array.isArray(looks) || looks.length === 0) {
-        clearInterval(heartbeat);
-        res.write(JSON.stringify({ type: "error", error: "AI не смог сгенерировать образ. Попробуйте ещё раз." }) + "\n");
-        return res.end();
+      if (!imageDataUrl) {
+        updateOrder(paymentId, { status: "partial", error: lastError || "Не удалось повторить генерацию изображения." });
+        return res.status(503).json({ error: "Не удалось создать фото после нескольких попыток. Попробуйте позже." });
       }
 
-      res.write(JSON.stringify({ type: "progress", step: 1.0, text: "Анализ готов!" }) + "\n");
+      const imageRef = await persistGeneratedImage(paymentId, lookIdx, imageDataUrl);
+      saved.looks[lookIdx].image = imageRef;
+      saved.looks[lookIdx].imageError = null;
+      saved.savedAt = new Date().toISOString();
+      writeJsonAtomic(resultFile, saved);
 
-      // Убираем картинки из образов (trial — без генерации)
-      const trialLooks = looks.slice(0, 1).map((look: any) => {
-        const { image: _img, imageUrl: _imgUrl, editPrompt: _ep, ...lookWithoutImage } = look;
-        const items = (look.items || []).map((item: any) => {
-          const { imageUrl: _iu, productUrl: _pu, ...itemWithoutImage } = item;
-          return {
-            ...itemWithoutImage,
-            wbUrl: item.wbUrl || `https://www.wildberries.ru/catalog/0/search.aspx?search=${encodeURIComponent(item.searchQuery || item.name || "")}`,
-            ozonUrl: item.ozonUrl || `https://www.ozon.ru/search/?text=${encodeURIComponent(item.searchQuery || item.name || "")}`,
-            ymUrl: item.ymUrl || `https://market.yandex.ru/search?text=${encodeURIComponent(item.searchQuery || item.name || "")}`,
-          };
-        });
-        return { ...lookWithoutImage, image: null, items };
+      const completedLooks = saved.looks.filter((look: any) => !!look.image).length;
+      const isComplete = completedLooks === saved.looks.length;
+      const ttlUser = String(input.userName || "").trim();
+      updateOrder(paymentId, {
+        status: isComplete ? "ready" : "partial",
+        completedLooks,
+        completedAt: isComplete ? new Date().toISOString() : order.completedAt,
+        resultExpiresAt: isComplete
+          ? paidResultExpiresAtIso(resultsTtlForUser(ttlUser, { paid: true, visitorId: order.visitorId }))
+          : order.resultExpiresAt,
+        unfinishedExpiresAt: isComplete ? undefined : new Date(Date.now() + UNFINISHED_ORDER_TTL_MS).toISOString(),
+        error: isComplete ? null : "Остались изображения, которые нужно повторить.",
       });
 
-      res.write(JSON.stringify({ type: "result", greetingAndAnalysis, looks: trialLooks }) + "\n");
-      clearInterval(heartbeat);
-      res.end();
+      if (isComplete) {
+        try {
+          const inputFile = path.join(resultDir, "input.json");
+          if (fs.existsSync(inputFile)) {
+            const input = JSON.parse(fs.readFileSync(inputFile, "utf-8"));
+            const code = String(input.promoCode || "").trim().toUpperCase();
+            if (code) markPromoUsed(code);
+          }
+        } catch {}
+      }
 
-    } catch (error) {
-      clearInterval(heartbeat);
-      console.error("Error in /api/stylize-trial:", error);
-      res.write(JSON.stringify({ type: "error", error: (error as Error).message }) + "\n");
-      res.end();
+      res.json({ image: imageRef, completed: isComplete });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    } finally {
+      if (retryKey) activeRetryKeys.delete(retryKey);
     }
   });
 
-  // --- /api/trial — бесплатный анализ стиля с оценкой по 10 баллам ---
-  app.post("/api/trial", upload.array("photos", 2), async (req: Request, res: Response) => {
+  // Подбор причёски: free = 1 крупный план; paid = 3 крупных плана + уход. Стрим NDJSON как /api/stylize.
+  app.post("/api/grooming", upload.array("photos", 1), async (req: Request, res: Response) => {
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("X-Accel-Buffering", "no");
+    const safeWrite = (data: string) => {
+      try { if (!res.writableEnded) res.write(data); } catch {}
+    };
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let jobId = "";
+    let groomingMode: "free" | "paid" = "free";
+    let groomingVisitorId = "";
+    let groomingUserName = "";
+    let groomingPaymentId = "";
     try {
       const files = req.files as MulterFile[];
-      if (!files || files.length === 0) return res.status(400).json({ error: "Нужно загрузить фото" });
+      const mode = ((req.body.mode || "free") as string).toLowerCase() === "paid" ? "paid" : "free";
+      groomingMode = mode;
+      const height = (req.body.height || "").toString().trim();
+      const weight = (req.body.weight || "").toString().trim();
+      const paymentId = sanitizeOrderId(req.body.paymentId);
+      groomingPaymentId = paymentId;
+      const promoCode = (req.body.promoCode || "").toString().trim().toUpperCase();
+      const groomVisitorId = sanitizeVisitorId(req.body.visitorId);
+      const groomUserName = String(req.body.userName || "").trim().slice(0, 80);
+      groomingVisitorId = groomVisitorId;
+      groomingUserName = groomUserName;
+      if (groomVisitorId) ensureUserProfile(groomVisitorId, groomUserName);
+      jobId = sanitizeOrderId(req.body.jobId)
+        || paymentId
+        || `groom_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
-      const height = req.body.height || "не указан";
-      const weight = req.body.weight || "не указан";
+      const linkPaidCabinet = (status: OrderStatus, extra?: {
+        error?: string | null;
+        started?: boolean;
+        completed?: boolean;
+        completedLooks?: number;
+      }) => {
+        if (mode !== "paid") return;
+        const id = sanitizeOrderId(paymentId || jobId);
+        if (!id) return;
+        persistCabinetOrder({
+          paymentId: id,
+          tier: "grooming",
+          status,
+          visitorId: groomVisitorId,
+          userName: groomUserName,
+          expectedLooks: 3,
+          completedLooks: extra?.completedLooks,
+          error: extra?.error,
+          startedAt: extra?.started ? new Date().toISOString() : undefined,
+          completedAt: extra?.completed ? new Date().toISOString() : undefined,
+          resultExpiresAt: (status === "ready" || status === "partial") ? paidResultExpiresAtIso() : undefined,
+        });
+      };
 
-      const imageContent: any[] = files.map(f => ({
+      const fail = (msg: string, status = 400) => {
+        if (jobId) {
+          saveGroomingResult(jobId, { status: "failed", error: msg, mode });
+        }
+        if (mode === "paid" && status >= 500) {
+          linkPaidCabinet("failed", { error: msg });
+        }
+        res.statusCode = status;
+        safeWrite(JSON.stringify({ type: "error", error: msg, jobId: jobId || undefined }) + "\n");
+        clearInterval(heartbeat);
+        return res.end();
+      };
+
+      if (!files || files.length === 0) return fail("Нужно загрузить фото лица");
+      if (!height || !weight) return fail("Укажите рост и вес");
+      if (!groomingSystemPromptTemplate) return fail("База причёсок временно недоступна", 503);
+
+      if (mode === "free" && !isOwnerRequest(req)) {
+        if (!groomVisitorId) return fail("Обновите страницу и попробуйте снова", 400);
+        if (hasUsedFreeGrooming(groomVisitorId)) {
+          return fail("Бесплатная причёска уже использована. Полный пакет — 100 ₽ или промокод «Причёска и уход».", 402);
+        }
+      }
+
+      let accessViaPromo = false;
+      if (mode === "paid") {
+        if (isOwnerRequest(req) || paymentId.startsWith("owner_")) {
+          accessViaPromo = true;
+        } else {
+        syncPromosFromDisk();
+        if (promoCode) {
+          const entry = promos[promoCode];
+          if (!entry) return fail("Промокод не найден. Проверьте, что скопировали полностью.", 402);
+          if (entry.tier !== "grooming") {
+            return fail(
+              entry.tier === "standard" || entry.tier === "premium"
+                ? "Этот промокод для образов («Начать преображение»), а не для причёсок. В админке создайте код типа «Причёска и уход»."
+                : "Промокод недействителен для причёсок",
+              402
+            );
+          }
+          if (entry.used) return fail("Этот промокод уже использован", 402);
+          accessViaPromo = true;
+        } else if (paymentId) {
+          try {
+            const payment = await yooKassa.getPayment(paymentId);
+            if (payment.status !== "succeeded" || payment.metadata?.tier !== "grooming") {
+              return fail("Оплата не подтверждена", 402);
+            }
+          } catch {
+            return fail("Не удалось проверить оплату", 402);
+          }
+        } else {
+          return fail("Нужна оплата 100 ₽ или промокод «Причёска и уход»", 402);
+        }
+        }
+      }
+
+      if (mode === "paid") {
+        linkPaidCabinet("processing", { started: true, error: null, completedLooks: 0 });
+      }
+
+      saveGroomingResult(jobId, {
+        status: "processing",
+        mode,
+        progressText: "Анализ лица…",
+        looksDone: 0,
+        looksTotal: mode === "paid" ? 3 : 1,
+      });
+
+      heartbeat = setInterval(() => safeWrite(JSON.stringify({ type: "heartbeat", jobId }) + "\n"), 10000);
+      safeWrite(JSON.stringify({
+        type: "progress",
+        jobId,
+        step: 0.5,
+        text: mode === "paid"
+          ? "Фото получено. Анализируем лицо, цвет и форму…"
+          : "Фото получено. Ищем лучшую причёску под вас…",
+      }) + "\n");
+
+      const file = files[0];
+      const mimeType = file.mimetype || "image/jpeg";
+      const referenceImageBase64 = file.buffer.toString("base64");
+      const imageContent = [{
         type: "image_url",
-        image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString("base64")}` },
-      }));
+        image_url: { url: `data:${mimeType};base64,${referenceImageBase64}` },
+      }];
 
-      // Два запроса: сначала оценка числом, потом анализ
-      const scorePrompt = `Оцени стиль человека на фото по шкале от 1 до 10. Рост: ${height} см, вес: ${weight} кг.
-Ответь ТОЛЬКО одним числом от 1 до 10. Ничего больше.`;
+      const userText = `Режим: ${mode}. Рост: ${height} см. Вес: ${weight} кг.
+Проанализируй лицо: пол, возраст, ageBand (teen / under25 / 25to34 / 35plus / 60plus), овал, цветотип, состояние волос. Верни JSON для режима ${mode}.
+«После»: ТО ЖЕ лицо, тот же взгляд, то же положение головы, та же улыбка если она есть на фото. Не добавлять улыбку, если её нет.
+Кожа — как после визажиста: чуть убрать мешки под глазами если есть, чуть смягчить морщинки на лбу если есть, ровный тон и лёгкое сияние. Не другое лицо, не уже челюсть, не другой нос, не новый возраст.
+В editPromptAfter ПИШИ: same gaze, same head position, same smile as Image 1; visagiste skin (slight bags/forehead only). НЕ ПИСАТЬ: younger face / tighter jaw / slimmer face / years younger / new skull.
+Причёска — ИМЯ из каталога (Italian bob, butterfly, hush, octopus, collarbone, 90s blowout, glass lob…). Не «чуть свои волосы».
+Paid — три кадра, которые нельзя перепутать в крупном плане:
+1) короткое до подбородка (уши видны);
+2) другая форма до ключиц — не второе каре/bob/lob;
+3) длинные слои ниже плеч.
+Цвет: не два тёмных каштана (mocha и cherry cola без красного блика = одно и то же). Один тёмный, один светлый акцент у лица, третий — медь/вишня или явный блонд-блик.
+Помада: женщинам — имя тона из каталога part5 в lipColor, под НОВЫЕ волосы этого look и подтон кожи. Не копировать цвет губ с фото. Paid — три разные семьи (rosewood/ягода, peach-nude, terracotta/brick). Teen — только sheer balm. Мужчинам lipColor пустой.
+В editPromptAfter для губ пиши конкретный lipstick shade из part5; форму губ сохрани.
+Укладка blowout или glass или soft waves. Только close-up.`;
 
-      const analysisPrompt = `Ты — профессиональный стилист. Рост: ${height} см, вес: ${weight} кг.
-Дай детальный анализ стиля на русском языке в таком порядке:
-1. ✅ Что гармонично в образе (конкретные вещи с фото)
-2. 🔄 Что стоит сменить (конкретные предметы гардероба)
-3. 💡 Рекомендации по цветам, силуэту, материалам`;
+      const analysisRaw = await callAnalysisChat({
+        model: ANALYSIS_MODEL,
+        systemPrompt: buildGroomingSystemPrompt(mode),
+        messages: [{
+          role: "user",
+          content: [{ type: "text", text: userText }, ...imageContent],
+        }],
+        temperature: 0.55,
+        maxTokens: mode === "paid" ? 12288 : 3500,
+        timeoutMs: mode === "paid" ? 150000 : 90000,
+        onRetry: () => {
+          safeWrite(JSON.stringify({
+            type: "progress",
+            jobId,
+            step: 0.8,
+            text: "Стилист задумался — пробуем ещё раз…",
+          }) + "\n");
+        },
+      });
 
-      const [scoreRaw, analysisRaw] = await Promise.all([
-        callPolzaChat({
-          model: ANALYSIS_MODEL,
-          systemPrompt: "Отвечай только числом.",
-          messages: [{ role: "user", content: [{ type: "text", text: scorePrompt }, ...imageContent] }],
-          temperature: 0.1, maxTokens: 10, useJsonFormat: false,
+      let parsed: any;
+      try {
+        const raw = typeof analysisRaw === "string" ? analysisRaw : JSON.stringify(analysisRaw);
+        parsed = safeJsonParse(raw);
+      } catch {
+        return fail("Не удалось разобрать ответ стилиста. Попробуйте ещё раз.", 502);
+      }
+
+      parsed = applyGroomingGenderWipe(parsed);
+
+      if (mode === "paid") {
+        let gaps = paidGroomingGaps(parsed);
+        if (gaps.length) {
+          console.warn("[Grooming] incomplete paid JSON, repairing:", gaps.join("; "));
+          safeWrite(JSON.stringify({
+            type: "progress",
+            jobId,
+            step: 1.1,
+            text: "Дособираем уход и недостающие причёски…",
+          }) + "\n");
+          try {
+            const repairRaw = await callAnalysisChat({
+              model: ANALYSIS_MODEL,
+              systemPrompt: buildGroomingSystemPrompt("paid"),
+              messages: [{
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: `JSON неполный. Не хватает: ${gaps.join("; ")}.
+Верни ПОЛНЫЙ paid JSON: 3 разных looks (короткое / ключицы / длинные) + skincare (4–6 средств с howTo) + makeup + faceAnalysis.
+Сохрани уже хорошие looks. Только JSON, без markdown.
+ТЕКУЩИЙ JSON:\n${JSON.stringify(parsed).slice(0, 7000)}`,
+                  },
+                  ...imageContent,
+                ],
+              }],
+              temperature: 0.35,
+              maxTokens: 12288,
+              timeoutMs: 150000,
+            });
+            const repaired = safeJsonParse(typeof repairRaw === "string" ? repairRaw : JSON.stringify(repairRaw));
+            parsed = applyGroomingGenderWipe(mergePaidGroomingJson(parsed, repaired));
+          } catch (repairErr) {
+            console.error("[Grooming] repair failed:", (repairErr as Error).message);
+          }
+          gaps = paidGroomingGaps(parsed);
+          if (gaps.length) {
+            console.error("[Grooming] still incomplete after repair:", gaps.join("; "));
+            return fail("Стилист вернул неполный пакет (нет всех причёсок или ухода). Нажмите генерацию ещё раз — фото уже на месте.", 502);
+          }
+        }
+        parsed.looks = enforceGroomingLookDiversity(parsed.looks, groomingAgePolicy(parsed));
+      }
+      if (mode === "free" && parsed.bestLook && !String(parsed.bestLook.lipColor || "").trim()) {
+        parsed.bestLook.lipColor = groomingLipFallback(0, parsed.bestLook.hairColor || "", groomingAgePolicy(parsed));
+      }
+
+      saveGroomingResult(jobId, {
+        status: "processing",
+        mode,
+        progressText: "Подбор готов, рисуем фото…",
+        analysis: {
+          estimatedAge: parsed.estimatedAge,
+          ageBand: parsed.ageBand,
+          faceShape: parsed.faceShape,
+          colorType: parsed.colorType,
+          hairStatus: parsed.hairStatus,
+          coachNote: parsed.coachNote,
+          faceAnalysis: parsed.faceAnalysis,
+          skincare: parsed.skincare,
+          makeup: parsed.makeup,
+          upsellTeaser: parsed.upsellTeaser,
+        },
+        looksDone: 0,
+        looksTotal: mode === "paid" ? 3 : 1,
+      });
+
+      safeWrite(JSON.stringify({
+        type: "progress",
+        jobId,
+        step: 1.5,
+        text: mode === "paid"
+          ? "Подбор готов. Слева — ваше фото, справа рисуем преображение…"
+          : "Подбор готов. Слева — ваше фото, справа рисуем «после»…",
+      }) + "\n");
+
+      // «До» = исходное фото пользователя (одна копия на весь заказ)
+      const beforeFolderId = `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      let imageBeforeUrl = await persistGroomingImage(
+        beforeFolderId,
+        "before",
+        `data:${mimeType};base64,${referenceImageBase64}`
+      );
+      if (!imageBeforeUrl) {
+        try {
+          const dir = path.join(GROOMING_IMG_DIR, beforeFolderId);
+          fs.mkdirSync(dir, { recursive: true });
+          const ext = mimeType.includes("png") ? "png" : mimeType.includes("webp") ? "webp" : "jpg";
+          fs.writeFileSync(path.join(dir, `before.${ext}`), file.buffer);
+          imageBeforeUrl = `/api/grooming-image/${beforeFolderId}/before.${ext}`;
+        } catch (e) {
+          console.error("[Grooming] before fallback write failed:", (e as Error).message);
+        }
+      }
+
+      // Вау-кадр: новая причёска и одежда. Лицо — то же; кожа чуть свежее.
+      const agePolicy = groomingAgePolicy(parsed);
+
+      const generateLookPair = async (
+        look: any,
+        opts: {
+          stepAfter: number;
+          textAfter: string;
+          lookIndex: number;
+          looksTotal: number;
+          draftLooks: any[];
+          skipStartProgress?: boolean;
+        }
+      ) => {
+        const afterSrc = look.editPromptAfter || look.editPromptClose || look.editPrompt || "";
+        const lookName = look.name || "Причёска";
+        const hairColor = look.hairColor || "";
+        let imageClose: string | null = imageBeforeUrl;
+        let imageAfter: string | null = null;
+        let imageError: string | null = null;
+        const folderId = `g${Date.now().toString(36)}${opts.lookIndex}${Math.random().toString(36).slice(2, 8)}`;
+        try {
+          if (!opts.skipStartProgress) {
+            safeWrite(JSON.stringify({ type: "progress", jobId, step: opts.stepAfter, text: opts.textAfter }) + "\n");
+          }
+          let a: string | null = null;
+          for (let attempt = 0; attempt < 3 && !a; attempt++) {
+            try {
+              const prompt = buildGroomingAfterPrompt({
+                lookName,
+                hairColor,
+                lipColor: look.lipColor,
+                outfitNote: look.outfitNote,
+                editPrompt: afterSrc,
+                agePolicy,
+                compact: attempt >= 1,
+                lengthSlot: opts.lookIndex === 0 ? "short" : opts.lookIndex === 2 ? "long" : "mid",
+              });
+              a = await generateImageWithFlux(prompt, referenceImageBase64, mimeType, { quality: "high" });
+            } catch (genErr: any) {
+              console.error("[Grooming] after image attempt", attempt + 1, genErr?.message);
+              if (attempt < 2) await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+            }
+          }
+          imageAfter = await persistGroomingImage(folderId, "after", a);
+          if (!imageAfter && a && (/^https?:\/\//i.test(a) || a.startsWith("data:"))) imageAfter = a;
+          if (!imageAfter) imageError = "Не удалось создать фото «после»";
+        } catch (e: any) {
+          imageError = e.message || "Ошибка генерации";
+        }
+        const pair = {
+          ...groomingLookFromParsed(look, agePolicy),
+          name: lookName,
+          hairColor,
+          lipColor: look.lipColor || "",
+          imageClose,
+          imageAfter,
+          imageFull: null,
+          imageError,
+        };
+        opts.draftLooks[opts.lookIndex] = pair;
+        saveGroomingResult(jobId, {
+          status: "processing",
+          mode,
+          progressText: opts.textAfter,
+          looksDone: opts.draftLooks.filter((l) => groomingHasAfterPhoto(l)).length,
+          looksTotal: opts.looksTotal,
+          draftLooks: opts.draftLooks,
+          sourceImage: imageBeforeUrl,
+          referenceMime: mimeType,
+        });
+        return pair;
+      };
+
+      if (mode === "free") {
+        const draftLooks: any[] = [groomingLookFromParsed(parsed.bestLook || {}, agePolicy)];
+        draftLooks[0].imageClose = imageBeforeUrl;
+        saveGroomingResult(jobId, {
+          status: "processing",
+          mode,
+          analysis: parsed,
+          draftLooks,
+          sourceImage: imageBeforeUrl,
+          referenceMime: mimeType,
+          looksDone: 0,
+          looksTotal: 1,
+        });
+        const look = await generateLookPair(parsed.bestLook || {}, {
+          stepAfter: 3.0,
+          textAfter: "Рисуем «после»: причёска, лучшая одежда и свежее лицо…",
+          lookIndex: 0,
+          looksTotal: 1,
+          draftLooks,
+        });
+        const freeResult = {
+          type: "result" as const,
+          mode: "free" as const,
+          faceShape: parsed.faceShape || "",
+          colorType: parsed.colorType || "",
+          hairStatus: parsed.hairStatus || "",
+          coachNote: parsed.coachNote || "",
+          bestLook: look,
+          upsellTeaser: parsed.upsellTeaser
+            || "Вы уже видите себя «до» и «после». В полном пакете — ещё два таких сравнения, уход и свежий образ лица.",
+          groomingPrice: GROOMING_PRICE,
+          jobId,
+        };
+        saveGroomingResult(jobId, { status: "ready", mode, result: freeResult, draftLooks, looksDone: 1, looksTotal: 1 });
+        if (!isOwnerRequest(req) && (look.imageClose || look.imageAfter)) {
+          markFreeGroomingUsed(groomVisitorId);
+        }
+        safeWrite(JSON.stringify({ type: "progress", jobId, step: 5.0, text: "Готово! Сравните «до» и «после»." }) + "\n");
+        safeWrite(JSON.stringify(freeResult) + "\n");
+        clearInterval(heartbeat);
+        return res.end();
+      }
+
+      const looksIn = Array.isArray(parsed.looks) ? parsed.looks.filter(Boolean).slice(0, 3) : [];
+      if (looksIn.length < 3) {
+        return fail("Стилист вернул меньше трёх причёсок. Нажмите генерацию ещё раз — фото уже на месте.", 502);
+      }
+      const draftLooks = looksIn.map((l: any) => {
+        const t = groomingLookFromParsed(l, agePolicy);
+        t.imageClose = imageBeforeUrl;
+        return t;
+      });
+      saveGroomingResult(jobId, {
+        status: "processing",
+        mode,
+        progressText: "Текст причёсок и уход сохранены, рисуем фото…",
+        analysis: {
+          estimatedAge: parsed.estimatedAge,
+          ageBand: parsed.ageBand,
+          faceShape: parsed.faceShape,
+          colorType: parsed.colorType,
+          hairStatus: parsed.hairStatus,
+          coachNote: parsed.coachNote,
+          faceAnalysis: parsed.faceAnalysis,
+          skincare: parsed.skincare,
+          makeup: parsed.makeup,
+          upsellTeaser: parsed.upsellTeaser,
+        },
+        draftLooks,
+        sourceImage: imageBeforeUrl,
+        referenceMime: mimeType,
+        looksDone: 0,
+        looksTotal: looksIn.length,
+      });
+      const productsRaw = mapGroomingShopProducts(parsed.skincare?.products, "dosage");
+      const makeupProductsRaw = mapGroomingShopProducts(parsed.makeup?.products, "howTo");
+      const thumbsPromise = Promise.all([
+        enrichShopProductsWithThumbs(productsRaw).catch((e) => {
+          console.error("[Grooming] shop thumbs failed:", (e as Error).message);
+          return productsRaw;
         }),
-        callPolzaChat({
-          model: ANALYSIS_MODEL,
-          systemPrompt: systemPrompt,
-          messages: [{ role: "user", content: [{ type: "text", text: analysisPrompt }, ...imageContent] }],
-          temperature: 0.7, maxTokens: 1200, useJsonFormat: false,
+        enrichShopProductsWithThumbs(makeupProductsRaw).catch((e) => {
+          console.error("[Grooming] makeup thumbs failed:", (e as Error).message);
+          return makeupProductsRaw;
         }),
       ]);
 
-      const scoreStr = typeof scoreRaw === "string" ? scoreRaw : JSON.stringify(scoreRaw);
-      const scoreNum = parseInt(scoreStr.replace(/\D/g, "").slice(0, 2));
-      const score = isNaN(scoreNum) || scoreNum < 1 || scoreNum > 10 ? null : scoreNum;
-      const scoreLabels = ["","Начинающий","Базовый","Базовый","Хороший","Хороший","Уверенный","Уверенный","Отличный","Безупречный","Безупречный"];
-      const scoreLabel = score ? scoreLabels[score] : null;
+      safeWrite(JSON.stringify({
+        type: "progress",
+        jobId,
+        step: 2.4,
+        text: "Рисуем 3 фото сразу — обычно около минуты…",
+      }) + "\n");
 
-      const analysis = typeof analysisRaw === "string" ? analysisRaw : JSON.stringify(analysisRaw);
-      const result = { score, scoreLabel, greetingAndAnalysis: analysis.replace(/```json?|```/g, "").trim() };
+      let finished = 0;
+      const looks = await Promise.all(looksIn.map((look: any, i: number) =>
+        generateLookPair(look, {
+          stepAfter: 2.4,
+          textAfter: "Рисуем 3 фото сразу…",
+          lookIndex: i,
+          looksTotal: looksIn.length,
+          draftLooks,
+          skipStartProgress: true,
+        }).then((pair) => {
+          finished += 1;
+          safeWrite(JSON.stringify({
+            type: "progress",
+            jobId,
+            step: 2.4 + finished * 0.7,
+            text: `Готово ${finished} из ${looksIn.length} фото «после»…`,
+          }) + "\n");
+          return pair;
+        })
+      ));
 
-      res.json(result);
+      safeWrite(JSON.stringify({ type: "progress", jobId, step: 4.8, text: "Подбираем фото товаров для ухода…" }) + "\n");
+      const [products, makeupProducts] = await thumbsPromise;
+
+      const paidResult = hydrateGroomingCare({
+        type: "result" as const,
+        mode: "paid" as const,
+        coachNote: parsed.coachNote || "",
+        faceAnalysis: parsed.faceAnalysis || {},
+        looks,
+        skincare: {
+          summary: parsed.skincare?.summary || "",
+          amRoutine: parsed.skincare?.amRoutine || "",
+          pmRoutine: parsed.skincare?.pmRoutine || "",
+          homeHowTo: parsed.skincare?.homeHowTo || "",
+          products,
+        },
+        makeup: parsed.makeup ? {
+          summary: parsed.makeup.summary || "",
+          dayLook: parsed.makeup.dayLook || "",
+          eveningLook: parsed.makeup.eveningLook || "",
+          placement: parsed.makeup.placement || "",
+          products: makeupProducts,
+        } : undefined,
+        groomingPrice: GROOMING_PRICE,
+        jobId,
+      }, parsed);
+
+      const afterCount = groomingAfterPhotoCount(looks);
+      const allFailed = looks.length > 0 && looks.every((look: any) => !groomingHasAfterPhoto(look) && look?.imageError);
+      saveGroomingResult(jobId, {
+        status: afterCount >= looksIn.length || allFailed ? "ready" : "processing",
+        mode,
+        result: paidResult,
+        draftLooks: looks,
+        looksDone: afterCount,
+        looksTotal: looksIn.length,
+      });
+      if (mode === "paid") {
+        const cabinetStatus: OrderStatus = afterCount >= looksIn.length
+          ? "ready"
+          : afterCount
+            ? "partial"
+            : "failed";
+        linkPaidCabinet(cabinetStatus, {
+          completed: cabinetStatus === "ready",
+          completedLooks: afterCount,
+          error: cabinetStatus === "ready" ? null : "Генерация прервалась. Можно продолжить без новой оплаты.",
+        });
+      }
+
+      if (accessViaPromo && promoCode && !isOwnerRequest(req)) {
+        try { markPromoUsed(promoCode); } catch (e) { console.error("[Promo] markPromoUsed grooming failed:", e); }
+      }
+
+      safeWrite(JSON.stringify({ type: "progress", jobId, step: 5.0, text: "Готово: 3 причёски и уход!" }) + "\n");
+      safeWrite(JSON.stringify(paidResult) + "\n");
+      clearInterval(heartbeat);
+      return res.end();
     } catch (error) {
-      console.error("Error in /api/trial:", error);
-      res.status(500).json({ error: (error as Error).message });
+      console.error("Error in /api/grooming:", error);
+      if (jobId) {
+        const prev = readGroomingResult(jobId);
+        const hasLooks = (Array.isArray(prev?.draftLooks) && prev.draftLooks.length > 0) || prev?.result;
+        if (hasLooks) {
+          const recovered = buildGroomingClientResult(prev, jobId);
+          const looksArr = prev?.mode === "free"
+            ? [recovered?.bestLook].filter(Boolean)
+            : (Array.isArray(recovered?.looks) ? recovered.looks : []);
+          const afterCount = groomingAfterPhotoCount(looksArr);
+          const looksTotal = Number(prev?.looksTotal) || (prev?.mode === "free" ? 1 : 3);
+          const photosDone = afterCount >= looksTotal || looksArr.every((look: any) => look?.imageError);
+          saveGroomingResult(jobId, {
+            status: photosDone ? "ready" : "processing",
+            result: recovered,
+            error: (error as Error).message || "Часть фото не создалась",
+            looksDone: afterCount,
+            looksTotal,
+          });
+          if (prev?.mode === "paid" || groomingMode === "paid") {
+            syncGroomingCabinetOrder({
+              paymentId: groomingPaymentId || jobId,
+              jobId,
+              visitorId: groomingVisitorId,
+              userName: groomingUserName,
+              status: photosDone && afterCount >= looksTotal ? "ready" : (afterCount ? "partial" : "failed"),
+              completed: photosDone && afterCount >= looksTotal,
+              error: photosDone ? null : "Генерация прервалась. Можно продолжить без новой оплаты.",
+            });
+          }
+          if (photosDone) {
+            safeWrite(JSON.stringify({ type: "progress", jobId, step: 5.0, text: "Сохранили причёски и уход, даже если фото не все." }) + "\n");
+            safeWrite(JSON.stringify(recovered) + "\n");
+            clearInterval(heartbeat);
+            return res.end();
+          }
+          safeWrite(JSON.stringify({
+            type: "progress",
+            jobId,
+            step: 4.5,
+            text: `Сохранили текст, фото ещё рисуются (${afterCount} из ${looksTotal})…`,
+          }) + "\n");
+          clearInterval(heartbeat);
+          return res.end();
+        }
+        saveGroomingResult(jobId, {
+          status: "failed",
+          error: (error as Error).message || "Ошибка подбора причёски",
+        });
+        if (groomingMode === "paid") {
+          syncGroomingCabinetOrder({
+            paymentId: groomingPaymentId || jobId,
+            jobId,
+            visitorId: groomingVisitorId,
+            userName: groomingUserName,
+            status: "failed",
+            error: (error as Error).message || "Ошибка подбора причёски",
+          });
+        }
+      }
+      clearInterval(heartbeat);
+      const rawErr = (error as Error).message || "Ошибка подбора причёски";
+      safeWrite(JSON.stringify({
+        type: "error",
+        error: userFacingAnalysisError(rawErr),
+        jobId: jobId || undefined,
+      }) + "\n");
+      return res.end();
+    }
+  });
+
+
+  // Бесплатный текстовый чат со стилистом (гардероб / маникюр / аксессуары / причёска)
+  const stylistChatHits = new Map<string, { n: number; t: number }>();
+  app.post("/api/stylist-chat", upload.array("photos", 4), async (req: Request, res: Response) => {
+    try {
+      if (!POLZA_API_KEY) {
+        return res.status(500).json({ error: "API ключ не настроен" });
+      }
+
+      const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "local").split(",")[0].trim();
+      const now = Date.now();
+      const hit = stylistChatHits.get(ip) || { n: 0, t: now };
+      if (now - hit.t > 60 * 60 * 1000) { hit.n = 0; hit.t = now; }
+      hit.n += 1;
+      stylistChatHits.set(ip, hit);
+      if (hit.n > 25) {
+        return res.status(429).json({ error: "Слишком много сообщений. Подождите немного или оформите тариф." });
+      }
+
+      const rawMessage = sanitizeWishes(String(req.body?.message || "").trim().slice(0, 800));
+      const files = (req.files as MulterFile[] | undefined) || [];
+      if (!rawMessage && files.length === 0) {
+        return res.status(400).json({ error: "Напишите вопрос или прикрепите фото гардероба" });
+      }
+
+      let history: Array<{ role: string; content: string }> = [];
+      try {
+        const parsed = JSON.parse(String(req.body?.history || "[]"));
+        if (Array.isArray(parsed)) {
+          history = parsed
+            .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+            .slice(-8)
+            .map((m) => ({
+              role: m.role,
+              content: sanitizeWishes(String(m.content).slice(0, 1200)),
+            }));
+        }
+      } catch { /* ignore bad history */ }
+
+      const userText = rawMessage || "Посмотрите фото гардероба и дайте текстовый совет: что с чем сочетать и что докупить.";
+      const contentParts: any[] = [{ type: "text", text: userText }];
+      for (const file of files.slice(0, 4)) {
+        if (!file?.buffer) continue;
+        const mime = file.mimetype || "image/jpeg";
+        if (!/^image\/(jpeg|png|webp)$/i.test(mime)) continue;
+        contentParts.push({
+          type: "image_url",
+          image_url: { url: `data:${mime};base64,${file.buffer.toString("base64")}` },
+        });
+      }
+
+      const messages: any[] = [
+        ...history.map((m) => ({ role: m.role, content: m.content })),
+        { role: "user", content: contentParts.length > 1 ? contentParts : userText },
+      ];
+
+      const reply = await callAnalysisChat({
+        model: ANALYSIS_MODEL,
+        systemPrompt: buildStylistChatPrompt(),
+        messages,
+        temperature: 0.75,
+        maxTokens: 2200,
+        useJsonFormat: false,
+      });
+
+      const text = String(reply || "").trim();
+      if (!text) {
+        return res.status(502).json({ error: "Пустой ответ стилиста. Попробуйте ещё раз." });
+      }
+      res.json({ ok: true, reply: text });
+    } catch (error) {
+      console.error("Error in /api/stylist-chat:", error);
+      res.status(500).json({ error: (error as Error).message || "Ошибка чата со стилистом" });
     }
   });
 
@@ -1291,18 +6130,36 @@ ${birthRegion && birthCity && birthTime ? "✅ Все данные для точ
   const distIndexPath = path.join(__dirname, "dist", "index.html");
   if (fs.existsSync(distIndexPath)) {
     const distPath = path.join(__dirname, "dist");
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        const normalizedPath = filePath.replace(/\\/g, "/");
+        if (normalizedPath.endsWith("/index.html")) {
+          res.setHeader("Cache-Control", "no-cache");
+        } else if (normalizedPath.includes("/assets/")) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        } else if (/\.(?:avif|webp|png|jpe?g|gif|svg|woff2?)$/i.test(normalizedPath)) {
+          res.setHeader("Cache-Control", "public, max-age=2592000");
+        }
+      },
+    }));
     // SPA fallback: any non-API request gets index.html.
     // Using middleware (not "*" route) to be compatible with Express 5 / path-to-regexp v8.
     app.use((req: Request, res: Response, next: NextFunction) => {
-      if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.startsWith("/admin-panel") || req.path === "/rekvizity" || req.path === "/oferta") return next();
+      if (req.method !== "GET" || req.path.startsWith("/api/") || req.path.startsWith("/admin-panel")) return next();
+      // Missing static assets (images/json/etc.) must not fall back to the SPA HTML.
+      if (path.extname(req.path)) return res.status(404).end();
+      // Посещения считаются через /api/track с фронта (уникальные + разделы)
+      res.setHeader("Cache-Control", "no-cache");
       res.sendFile(path.join(distPath, "index.html"));
     });
   } else {
     // Development mode — use Vite middleware
     const vite = await createViteServer({
       root: PROJECT_ROOT,
-      server: { middlewareMode: true as any },
+      server: {
+        middlewareMode: true as any,
+        allowedHosts: ['.stilist-ai.ru', 'stilist-ai.ru'],
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -1314,3 +6171,4 @@ ${birthRegion && birthCity && birthTime ? "✅ Все данные для точ
 }
 
 startServer();
+
