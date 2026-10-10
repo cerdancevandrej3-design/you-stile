@@ -8,3 +8,9 @@ coverage/
 !.env.example
 used-promo-codes.json
 promo-codes.json
+evg
+server_prod.ts
+deploy.py
+.claude/settings.local.json
+_bak-before-restore-*/
+_RESTORE-POINTS/
