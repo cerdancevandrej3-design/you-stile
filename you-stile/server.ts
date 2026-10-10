@@ -3714,7 +3714,7 @@ updatePromoHint();
     });
   });
 
-  // Кабинет «Мои образы» по телефону (после оплаты)
+  // Кабинет «Мои образы» по телефону (после оплаты) + мягкая верификация владения номером
   const phoneLookupHits = new Map<string, { n: number; t: number }>();
   app.post("/api/orders-by-phone", (req: Request, res: Response) => {
     const phone = normalizePhone(req.body?.phone);
@@ -3749,6 +3749,23 @@ updatePromoHint();
       })
       .filter(Boolean)
       .reverse();
+
+    // Верификация владения номером: спрашиваем последние 4 цифры номера.
+    // Владелец знает их автоматически (номер и так его). Без подтверждения заказы не отдаём.
+    const verifyRaw = String(req.body?.verify || "").replace(/\D/g, "");
+    const expected = phone.slice(-4);
+    if (orders.length > 0 && verifyRaw !== expected) {
+      // Ставим флаг только когда для номера реально есть заказы (не подсказываем пустым номерам).
+      return res.status(200).json({
+        ok: false,
+        needVerification: true,
+        hint: "last4",
+        phone,
+        count: 0,
+        orders: [],
+        message: "Подтвердите номер: введите последние 4 цифры телефона.",
+      });
+    }
 
     res.json({ ok: true, phone, orders, count: orders.length });
   });

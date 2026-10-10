@@ -392,18 +392,25 @@ async function restoreOrdersByCode(codeRaw: string): Promise<{ ok: boolean; coun
     return { ok: false, count: 0, error: "Ошибка соединения" };
   }
 }
-/** Старые заказы, где ключом был телефон. */
-async function restoreOrdersByPhone(phoneRaw: string): Promise<{ ok: boolean; count: number; error?: string }> {
+/** Заказы по телефону. При needVerification нужен verify (последние 4 цифры номера). */
+async function restoreOrdersByPhone(
+  phoneRaw: string,
+  verifyRaw?: string
+): Promise<{ ok: boolean; count: number; error?: string; needVerification?: boolean }> {
   const phone = normalizePhoneClient(phoneRaw);
-  if (!phone) return { ok: false, count: 0, error: "Укажите старый номер в формате +7 XXX XXX-XX-XX" };
+  if (!phone) return { ok: false, count: 0, error: "Укажите номер в формате +7 XXX XXX-XX-XX" };
+  const verify = String(verifyRaw || "").replace(/\D/g, "").slice(-4);
   try {
     const r = await fetch("/api/orders-by-phone", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone }),
+      body: JSON.stringify({ phone, ...(verify ? { verify } : {}) }),
     });
     const data = await r.json();
     if (!r.ok) return { ok: false, count: 0, error: data.error || "Не удалось найти заказы" };
+    if (data.needVerification) {
+      return { ok: false, count: 0, needVerification: true, error: data.message || "Подтвердите номер: последние 4 цифры телефона." };
+    }
     savePhone(phone);
     const list = Array.isArray(data.orders) ? data.orders : [];
     for (const o of list) {
@@ -688,6 +695,8 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
   const [promoStatus, setPromoStatus] = useState<"idle" | "checking" | "valid" | "invalid" | "used">("idle");
   const [isProcessing, setIsProcessing] = useState(false);
   const [showPromo, setShowPromo] = useState(false);
+  // Необязательный телефон: по нему всегда можно найти заказ с любого устройства.
+  const [phoneInput, setPhoneInput] = useState(() => formatPhoneInput(getSavedPhone()));
 
   useEffect(() => {
     if (isOpen) {
@@ -696,6 +705,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
       setSelectedTier(initialTier === "premium" ? "premium" : "standard");
       setIsProcessing(false);
       setShowPromo(false);
+      setPhoneInput(formatPhoneInput(getSavedPhone()));
     }
   }, [isOpen, initialTier]);
 
@@ -749,6 +759,9 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
       const tier: Tier = data.tier === "premium" ? "premium" : "standard";
       setTimeout(async () => {
         try {
+          // Необязательный телефон оставляем и для промо-заказа — привязка к номеру.
+          const promoPhone = normalizePhoneClient(phoneInput);
+          if (promoPhone) savePhone(promoPhone);
           const rd = await fetch("/api/redeem-promo", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -777,6 +790,9 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
     setIsProcessing(true);
     try {
       const outfitTier: Tier = selectedTier === "premium" ? "premium" : "standard";
+      // Необязательный телефон: сохраняем локально и привязываем к заказу на сервере.
+      const phone = normalizePhoneClient(phoneInput);
+      if (phone) savePhone(phone);
       const res = await fetch("/api/create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -784,6 +800,7 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
           tier: outfitTier,
           visitorId: getOrCreateVisitorId(),
           userName: userName || getSavedName() || "",
+          ...(phone ? { phone } : {}),
         }),
       });
       const data = await res.json();
@@ -894,11 +911,22 @@ const PricingModal = ({ isOpen, onClose, onPaid, onNailsUnlocked, userName, init
 
             {!ownerFree && (
             <div className="mb-4 max-w-md mx-auto rounded-2xl border border-charcoal/10 bg-white/70 px-4 py-3">
-              <p className="text-sm font-medium text-charcoal text-center mb-1">Номер не берём — и в базу не кладём</p>
-              <p className="text-charcoal/55 text-xs text-center leading-relaxed">
-                Личное пространство и так уже тесное. После оплаты будет код, например <span className="font-medium text-charcoal">СТИЛЬ-K7M2QX</span>.
-                По нему откроете образы, если страница закроется. Без рассылок, звонков и чужих баз.
+              <p className="text-sm font-medium text-charcoal text-center mb-1">Телефон — по желанию</p>
+              <p className="text-charcoal/55 text-xs text-center leading-relaxed mb-3">
+                Оставьте номер — по нему найдёте свои образы с любого устройства, даже если почистите браузер.
+                Никаких рассылок и звонков, в чужие базы не передаём. Можно пропустить: тогда после оплаты будет
+                код, например <span className="font-medium text-charcoal">СТИЛЬ-K7M2QX</span>.
               </p>
+              <input
+                id="pay-phone-input"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={phoneInput}
+                onChange={(e) => setPhoneInput(formatPhoneInput(e.target.value))}
+                placeholder="+7 999 123-45-67"
+                className="w-full px-4 py-3 rounded-xl border border-charcoal/20 bg-white text-sm text-center font-medium focus:border-gold focus:outline-none"
+              />
             </div>
             )}
 
@@ -2382,6 +2410,8 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
     return saved ? displayPickupCode(saved) : "";
   });
   const [phoneInput, setPhoneInput] = useState("");
+  const [phoneVerify, setPhoneVerify] = useState("");
+  const [phoneNeedsVerify, setPhoneNeedsVerify] = useState(false);
   const [showOldPhone, setShowOldPhone] = useState(false);
   const [restoreMsg, setRestoreMsg] = useState("");
   const [restoring, setRestoring] = useState(false);
@@ -2415,6 +2445,9 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
     setLinkedCode(savedCode);
     setCodeInput(savedCode ? displayPickupCode(savedCode) : "");
     setRestoreMsg("");
+    // Телефон, оставленный при оплате — сразу подставляем в поиск.
+    const savedPhone = getSavedPhone();
+    setPhoneInput(savedPhone ? formatPhoneInput(savedPhone) : "");
     const fresh = getMyOrders();
     setOrders(fresh);
     setStatuses({});
@@ -2426,6 +2459,16 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
           setOrders(next);
           refreshOrdersMeta(next);
           if (r.count > 0) setRestoreMsg(`Найдено заказов: ${r.count}`);
+        }
+      });
+    } else if (!savedCode && savedPhone && fresh.length === 0) {
+      // Ни кода, ни локального списка, но телефон сохранён — пробуем восстановить по нему.
+      restoreOrdersByPhone(savedPhone).then((r) => {
+        if (r.ok && r.count > 0) {
+          const next = getMyOrders();
+          setOrders(next);
+          refreshOrdersMeta(next);
+          setRestoreMsg(`Найдено заказов: ${r.count}`);
         }
       });
     }
@@ -2478,9 +2521,17 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
   const handleRestoreOldPhone = async () => {
     setRestoring(true);
     setRestoreMsg("");
-    const r = await restoreOrdersByPhone(phoneInput);
+    const r = await restoreOrdersByPhone(phoneInput, phoneVerify);
     setRestoring(false);
-    applyRestore(r, "По этому номеру старых заказов нет.");
+    if (r.needVerification) {
+      setPhoneNeedsVerify(true);
+      setPhoneVerify("");
+      setRestoreMsg(r.error || "Подтвердите номер: последние 4 цифры телефона.");
+      return;
+    }
+    setPhoneNeedsVerify(false);
+    setPhoneVerify("");
+    applyRestore(r, "По этому номеру заказов не найдено.");
   };
 
   const handleClearAll = () => {
@@ -2509,64 +2560,96 @@ const MyLooksModal = ({ isOpen, onClose, onOpenOrder, onClearAll, onOrderAgain }
           <div className="p-6 md:p-8">
             <h2 className="font-serif text-2xl md:text-3xl font-semibold text-charcoal mb-1">Мои образы</h2>
             <p className="text-[13px] md:text-sm text-charcoal/60 mb-4">
-              Если оплатили, а генерации нет — введите код СТИЛЬ-… и нажмите «Продолжить». Здесь и одежда, и причёска с уходом. Сохраните или скачайте результат — на сайте хранится сутки (24 часа). Номер не нужен.
+              Если оплатили, а генерации нет — введите код СТИЛЬ-… или свой телефон и нажмите «Продолжить». Здесь и одежда, и причёска с уходом. Сохраните или скачайте результат — на сайте хранится сутки (24 часа).
             </p>
 
             <div className="rounded-2xl border border-charcoal/10 bg-white/60 p-4 mb-5">
-              <p className="text-xs font-medium text-charcoal/70 mb-2">Найти заказ по коду</p>
+              <p className="text-xs font-medium text-charcoal/70 mb-2">Найти заказ по телефону</p>
               <div className="flex flex-col sm:flex-row gap-2">
                 <input
-                  type="text"
-                  autoComplete="off"
-                  value={codeInput}
-                  onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
-                  onKeyDown={(e) => e.key === "Enter" && handleRestore()}
-                  placeholder="СТИЛЬ-K7M2QX"
-                  className="flex-1 px-4 py-2.5 rounded-xl border border-charcoal/15 bg-white text-sm text-center tracking-wider focus:outline-none focus:border-gold"
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  value={phoneInput}
+                  onChange={(e) => { setPhoneInput(formatPhoneInput(e.target.value)); setPhoneNeedsVerify(false); setPhoneVerify(""); }}
+                  onKeyDown={(e) => e.key === "Enter" && handleRestoreOldPhone()}
+                  placeholder="+7 999 123-45-67"
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-charcoal/15 bg-white text-sm text-center focus:outline-none focus:border-gold"
                 />
                 <button
-                  onClick={handleRestore}
+                  onClick={handleRestoreOldPhone}
                   disabled={restoring}
                   className="px-5 py-2.5 rounded-xl bg-charcoal text-ivory text-sm font-medium hover:bg-charcoal/90 disabled:opacity-50 whitespace-nowrap"
                 >
                   {restoring ? "Ищем…" : "Найти"}
                 </button>
               </div>
-              {linkedCode && (
-                <p className="text-[11px] text-charcoal/45 mt-2 text-center">
-                  Сохранён код: {displayPickupCode(linkedCode)}
-                </p>
+              {phoneNeedsVerify && (
+                <div className="mt-2">
+                  <p className="text-[11px] text-charcoal/60 mb-2 text-center">
+                    Для защиты заказов введите <span className="font-medium text-charcoal">последние 4 цифры</span> этого номера.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={phoneVerify}
+                      onChange={(e) => setPhoneVerify(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                      onKeyDown={(e) => e.key === "Enter" && handleRestoreOldPhone()}
+                      placeholder="• • • •"
+                      maxLength={4}
+                      className="flex-1 px-4 py-2.5 rounded-xl border border-charcoal/15 bg-white text-sm text-center tracking-[0.5em] font-medium focus:outline-none focus:border-gold"
+                    />
+                    <button
+                      onClick={handleRestoreOldPhone}
+                      disabled={restoring || phoneVerify.length < 4}
+                      className="px-5 py-2.5 rounded-xl border border-charcoal/15 text-charcoal text-sm font-medium hover:bg-white disabled:opacity-50 whitespace-nowrap"
+                    >
+                      Подтвердить
+                    </button>
+                  </div>
+                </div>
               )}
-              {restoreMsg && (
-                <p className="text-xs text-center mt-2 text-charcoal/70">{restoreMsg}</p>
-              )}
+              <p className="text-[11px] text-charcoal/45 mt-2 text-center">
+                Телефон, оставленный при оплате. Сам код заказа ищите ниже.
+              </p>
+
               <button
                 type="button"
                 onClick={() => setShowOldPhone((v) => !v)}
                 className="block mx-auto mt-3 text-[11px] text-charcoal/45 underline underline-offset-2"
               >
-                {showOldPhone ? "Скрыть старый номер" : "Заказ был раньше, до кода? Найти по старому номеру"}
+                {showOldPhone ? "Скрыть поиск по коду" : "Найти заказ по коду СТИЛЬ-…"}
               </button>
-              {showOldPhone && (
-                <div className="flex flex-col sm:flex-row gap-2 mt-3">
+              <div className={`${showOldPhone ? "" : "hidden"} mt-2`}>
+                <p className="text-xs font-medium text-charcoal/70 mb-2">Найти заказ по коду</p>
+                <div className="flex flex-col sm:flex-row gap-2">
                   <input
-                    type="tel"
-                    inputMode="tel"
-                    autoComplete="tel"
-                    value={phoneInput}
-                    onChange={(e) => setPhoneInput(formatPhoneInput(e.target.value))}
-                    onKeyDown={(e) => e.key === "Enter" && handleRestoreOldPhone()}
-                    placeholder="+7 999 123-45-67"
-                    className="flex-1 px-4 py-2.5 rounded-xl border border-charcoal/15 bg-white text-sm text-center focus:outline-none focus:border-gold"
+                    type="text"
+                    autoComplete="off"
+                    value={codeInput}
+                    onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+                    onKeyDown={(e) => e.key === "Enter" && handleRestore()}
+                    placeholder="СТИЛЬ-K7M2QX"
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-charcoal/15 bg-white text-sm text-center tracking-wider focus:outline-none focus:border-gold"
                   />
                   <button
-                    onClick={handleRestoreOldPhone}
+                    onClick={handleRestore}
                     disabled={restoring}
                     className="px-5 py-2.5 rounded-xl border border-charcoal/15 text-charcoal text-sm font-medium hover:bg-white disabled:opacity-50 whitespace-nowrap"
                   >
-                    Найти старый
+                    {restoring ? "Ищем…" : "Найти"}
                   </button>
                 </div>
+                {linkedCode && (
+                  <p className="text-[11px] text-charcoal/45 mt-2 text-center">
+                    Сохранён код: {displayPickupCode(linkedCode)}
+                  </p>
+                )}
+              </div>
+              {restoreMsg && (
+                <p className="text-xs text-center mt-2 text-charcoal/70">{restoreMsg}</p>
               )}
             </div>
 
@@ -3281,7 +3364,7 @@ const StylizeModal = ({ isOpen, onClose, userName, tier, orderPaymentId, onToast
             {getSavedPickupCode() && (
               <div className="mb-4 max-w-xl rounded-2xl border border-gold/30 bg-gold/10 px-4 py-3">
                 <p className="text-sm font-medium text-charcoal">Код заказа: {displayPickupCode(getSavedPickupCode())}</p>
-                <p className="text-xs text-charcoal/60 mt-1 leading-relaxed">Запишите его. Если страница закроется или генерации не будет — откройте «Мои образы» по этому коду и нажмите «Продолжить». {STORAGE_HINT} Телефон не нужен.</p>
+                <p className="text-xs text-charcoal/60 mt-1 leading-relaxed">Запишите его. Если страница закроется или генерации не будет — откройте «Мои образы» по этому коду (или по телефону, если оставили номер) и нажмите «Продолжить». {STORAGE_HINT}</p>
               </div>
             )}
 
@@ -4032,11 +4115,11 @@ const HOME_FAQ: { q: string; a: string }[] = [
   },
   {
     q: "Как потом найти заказ, если закрылась страница?",
-    a: "Свой телефон оставлять не нужно — и в контактные базы мы его не заносим. Личное пространство остаётся вашим.\n\nПосле оплаты вы получаете код заказа, например СТИЛЬ-K7M2QX — как номер гардероба в театре. Запишите его. По нему в «Мои образы» открываются и одежда, и причёска с уходом. Если картинок ещё нет — нажмите «Продолжить», платить снова не нужно. Это не регистрация. Звонков, смс и рекламы нет.",
+    a: "Телефон оставлять не обязательно — и в контактные базы мы его не заносим. Личное пространство остаётся вашим.\n\nЕсли оставите номер при оплате — по нему всегда найдёте свои образы с любого устройства, даже если почистите браузер. Если не оставите — после оплаты будет код заказа, например СТИЛЬ-K7M2QX, как номер гардероба в театре. Запишите его. По коду или номеру в «Мои образы» открываются и одежда, и причёска с уходом. Если картинок ещё нет — нажмите «Продолжить», платить снова не нужно. Это не регистрация. Звонков, смс и рекламы нет.",
   },
   {
     q: "Вы занесёте меня в базу и будете писать?",
-    a: "Нет. Номер мы даже не спрашиваем — значит, некуда его «добавить» и некому потом звонить. Рассылок нет. Наш телефон внизу сайта — это поддержка, если нужно написать нам, а не сбор ваших контактов.",
+    a: "Нет. Телефон мы спрашиваем по желанию и только чтобы вы могли найти заказ, — никаких рассылок. Не оставите номер — некуда его «добавить» и некому потом звонить. Рассылок нет. Наш телефон внизу сайта — это поддержка, если нужно написать нам, а не сбор ваших контактов.",
   },
   {
     q: "Что делать, если пропал интернет или я случайно вышел с сайта?",
@@ -4056,11 +4139,11 @@ const HOME_FAQ: { q: string; a: string }[] = [
   },
   {
     q: "Что я получаю на тарифе Стандарт (100 ₽)? Как заказать?",
-    a: "За 100 ₽ вы видите себя в трёх образах, которых нет у всех в ленте. Стилист не копирует тренд «как у всех» — собирает лук под вашу внешность, цвет и фигуру. Поводы не выбираете: три свободных образа решает стилист. Сезон указываете сами — на каждый образ свой, например два лета и одна осень.\n\nВ каждом образе — ваше лицо, список вещей со ссылками на маркетплейсы (такие же или очень похожие) и советы по грумингу. Одно фото. Сутки в «Мои образы».\n\nКак заказать:\nШаг 1. «Начать преображение» или тариф Стандарт.\nШаг 2. Оплатить 100 ₽ — телефон не спрашиваем.\nШаг 3. Запишите код заказа СТИЛЬ-…, затем фото лица анфас, рост, вес и сезон на каждый из трёх образов.\nШаг 4. Обычно 2–4 минуты: три образа рисуются сразу.\nШаг 5. Смотрите, скачивайте, отправляйте. Закрыли сайт — «Мои образы» и тот же код.",
+    a: "За 100 ₽ вы видите себя в трёх образах, которых нет у всех в ленте. Стилист не копирует тренд «как у всех» — собирает лук под вашу внешность, цвет и фигуру. Поводы не выбираете: три свободных образа решает стилист. Сезон указываете сами — на каждый образ свой, например два лета и одна осень.\n\nВ каждом образе — ваше лицо, список вещей со ссылками на маркетплейсы (такие же или очень похожие) и советы по грумингу. Одно фото. Сутки в «Мои образы».\n\nКак заказать:\nШаг 1. «Начать преображение» или тариф Стандарт.\nШаг 2. Оплатить 100 ₽ — телефон можно указать по желанию (чтобы найти заказ с любого устройства) или пропустить и сохранить код.\nШаг 3. Запишите код заказа СТИЛЬ-…, затем фото лица анфас, рост, вес и сезон на каждый из трёх образов.\nШаг 4. Обычно 2–4 минуты: три образа рисуются сразу.\nШаг 5. Смотрите, скачивайте, отправляйте. Закрыли сайт — «Мои образы» и тот же код.",
   },
   {
     q: "Что я получаю на тарифе Премиум (200 ₽)? Как заказать?",
-    a: "Премиум — чтобы на свидании, в клубе или на фотосессии вас не спутали ни с кем. До пяти образов на вашем лице и 22 повода: отдых и пляж, фотосессия, клуб, ресторан, свидание, свадьба, офис, вечеринка, путешествие, театр, выпускной, корпоратив, романтический ужин… У каждого выбранного повода — счётчик, сколько луков на него. Всего не больше пяти. Можно смешать: два на свидание, один в клуб, два на отдых.\n\nПишете бюджет, например 5 000 ₽ — стилист собирает лук в этих деньгах и даёт ссылки на маркетплейсы. Не «как у всех в этом сезоне», а ваш. Дата рождения — по желанию, для астро-разбора. До трёх фото — чтобы посадка была вашей, не шаблонной. Сезон можно разный на каждый образ. Сутки в «Мои образы».\n\nКак заказать:\nШаг 1. Тариф Премиум.\nШаг 2. Оплатить 200 ₽ — телефон не спрашиваем.\nШаг 3. Запишите код СТИЛЬ-…, затем до трёх фото, рост, вес, сезон, поводы и бюджет.\nШаг 4. Обычно 4–7 минут: выбранные образы рисуются сразу.\nШаг 5. Фото + покупки — на экране и в «Мои образы».",
+    a: "Премиум — чтобы на свидании, в клубе или на фотосессии вас не спутали ни с кем. До пяти образов на вашем лице и 22 повода: отдых и пляж, фотосессия, клуб, ресторан, свидание, свадьба, офис, вечеринка, путешествие, театр, выпускной, корпоратив, романтический ужин… У каждого выбранного повода — счётчик, сколько луков на него. Всего не больше пяти. Можно смешать: два на свидание, один в клуб, два на отдых.\n\nПишете бюджет, например 5 000 ₽ — стилист собирает лук в этих деньгах и даёт ссылки на маркетплейсы. Не «как у всех в этом сезоне», а ваш. Дата рождения — по желанию, для астро-разбора. До трёх фото — чтобы посадка была вашей, не шаблонной. Сезон можно разный на каждый образ. Сутки в «Мои образы».\n\nКак заказать:\nШаг 1. Тариф Премиум.\nШаг 2. Оплатить 200 ₽ — телефон можно указать по желанию (чтобы найти заказ с любого устройства) или пропустить и сохранить код.\nШаг 3. Запишите код СТИЛЬ-…, затем до трёх фото, рост, вес, сезон, поводы и бюджет.\nШаг 4. Обычно 4–7 минут: выбранные образы рисуются сразу.\nШаг 5. Фото + покупки — на экране и в «Мои образы».",
   },
   {
     q: "Что я получаю в «Причёска и уход» (100 ₽)? Как купить?",
@@ -4978,7 +5061,7 @@ export default function App() {
 
             <p className="text-xs sm:text-sm text-ivory/45 mt-4 text-center font-light">Если включён VPN — лучше выключить: так результат дойдёт спокойнее</p>
             <a href="#faq" className="inline-block mt-3 text-xs sm:text-sm text-gold/90 hover:text-gold underline underline-offset-4">
-              Номер не берём, как найти заказ по коду и что делать, если генерации нет — ответы здесь
+              Телефон — по желанию (найти заказ с любого устройства), либо сохраните код СТИЛЬ-…. Как найти заказ и что делать, если генерации нет — ответы в разделе вопросов ниже
             </a>
           </motion.div>
         </div>
@@ -5156,7 +5239,7 @@ export default function App() {
               Бесплатно: чат со стилистом, 1 сравнение причёски, квиз ногтей
             </p>
             <p className="text-ivory/45 text-sm max-w-xl mx-auto mt-3 font-light">
-              Номер не спрашиваем. После оплаты будет код СТИЛЬ-…. Если генерации нет — «Мои образы» и «Продолжить».
+              Телефон — по желанию: по нему найдёте заказ с любого устройства. После оплаты будет код СТИЛЬ-…. Если генерации нет — «Мои образы» и «Продолжить».
             </p>
           </motion.div>
 
